@@ -10,6 +10,69 @@
 <meta name="theme-color" content="#f8f5f0">
 <link rel="manifest" href="manifest.json">
 <title>穂乃味 タイムカード</title>
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+<script>
+// Firebase設定
+var firebaseConfig = {
+  databaseURL: "https://honomi-timecard-default-rtdb.asia-southeast1.firebasedatabase.app"
+};
+firebase.initializeApp(firebaseConfig);
+var db = firebase.database();
+var COMPANY = "honomi"; // 会社識別子
+
+// Firebaseへの保存
+function saveToFirebase(key, val) {
+  db.ref(COMPANY + "/" + key).set(val).catch(function(e){console.error("FB save error:", e);});
+}
+
+// Firebaseからの読み込み（初回）
+function loadFromFirebase(callback) {
+  db.ref(COMPANY).once("value").then(function(snap) {
+    var data = snap.val() || {};
+    callback(data);
+  }).catch(function(e) {
+    console.error("FB load error:", e);
+    callback({});
+  });
+}
+
+// リアルタイム同期（変更を即反映）
+function listenFirebase() {
+  db.ref(COMPANY + "/tc5_records").on("value", function(snap) {
+    var val = snap.val();
+    if(val !== null) {
+      records = Array.isArray(val) ? val : Object.values(val);
+      localStorage.setItem("tc5_records", JSON.stringify(records));
+      if(screen==="admin") render();
+    }
+  });
+  db.ref(COMPANY + "/tc5_staff").on("value", function(snap) {
+    var val = snap.val();
+    if(val !== null) {
+      staffList = Array.isArray(val) ? val : Object.values(val);
+      localStorage.setItem("tc5_staff", JSON.stringify(staffList));
+      if(screen==="admin") render();
+    }
+  });
+  db.ref(COMPANY + "/tc5_approvals").on("value", function(snap) {
+    var val = snap.val();
+    if(val !== null) {
+      approvals = val;
+      localStorage.setItem("tc5_approvals", JSON.stringify(approvals));
+      if(screen==="admin") render();
+    }
+  });
+  db.ref(COMPANY + "/tc5_pins").on("value", function(snap) {
+    var val = snap.val();
+    if(val !== null) {
+      staffPins = val;
+      localStorage.setItem("tc5_pins", JSON.stringify(staffPins));
+    }
+  });
+}
+</script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
 body{background:#f8f5f0;color:#1a1a1a;font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
@@ -109,7 +172,11 @@ function calcMs(rs){
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
-function saveData(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
+function saveData(k,v){
+  try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
+  // Firebaseにも同期
+  saveToFirebase(k, v);
+}
 
 // ===== 状態 =====
 var screen="home",staffName=null;
@@ -279,8 +346,19 @@ function render(){
             return rec?'<span style="font-family:monospace;color:#374151;">'+rec.time+'</span>'
                       :'<span style="color:#d1d5db;font-family:monospace;">--:--</span>';
           }
-          // 未打刻でも入力欄を表示
-          return'<input type="time" class="inline-time" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate+'" value="'+(rec?rec.time:"")+'" style="width:88px;font-size:.82rem;padding:3px 6px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;">';
+          var hVal=rec?rec.time.split(":")[0]:"";
+          var mVal=rec?rec.time.split(":")[1]:"";
+          var hOpts='<option value="">--</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hVal===v?" selected":"")+'>'+v+'</option>';}).join("");
+          var mOpts='<option value="">--</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mVal===v?" selected":"")+'>'+v+'</option>';}).join("");
+          return'<span style="display:inline-flex;align-items:center;gap:2px;">'
+            +'<select class="sel-hour" data-id="'+(rec?rec.id:"")
+            +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
+            +'" style="padding:3px 2px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:.85rem;width:52px;">'+hOpts+'</select>'
+            +'<span style="font-weight:700;">:</span>'
+            +'<select class="sel-min" data-id="'+(rec?rec.id:"")
+            +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
+            +'" style="padding:3px 2px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:.85rem;width:52px;">'+mOpts+'</select>'
+            +'</span>';
         };
         return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;'+(approved?"background:#f0fdf4;border-radius:8px;padding:10px;margin-bottom:4px;":"")+'">'
           +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">'
@@ -439,30 +517,34 @@ function render(){
     var sd=document.getElementById("sel-date");
     if(sd)sd.onchange=function(){selDate=sd.value;render();};
 
-    // 時刻を変更したら即座に保存（新規追加も対応）
-    document.querySelectorAll(".inline-time").forEach(function(inp){
-      inp.onchange=function(){
-        if(!inp.value)return;
-        var id=inp.dataset.id;
-        var nm=inp.dataset.nm;
-        var type=inp.dataset.type;
-        var date=inp.dataset.date;
-        var parts=inp.value.split(":");
-        var d=new Date(date);d.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
-        if(id){
-          // 既存レコードの修正
-          var rec=records.find(function(r){return r.id===id;});
-          if(rec){
-            if(!rec.editedFrom)rec.editedFrom=rec.time;
-            rec.time=inp.value;rec.timestamp=d.toISOString();
-          }
-        } else {
-          // 新規レコードの追加（手動入力）
-          records.push({id:"m"+Date.now(),staff:nm,type:type,date:date,time:inp.value,timestamp:d.toISOString(),manualAdd:true});
-          // inputのdata-idを更新してから再利用できるよう再レンダリング
-        }
-        saveData("tc5_records",records);render();
-      };
+    // 時・分セレクトが変わったら即保存
+    function saveTimeSelect(el){
+      var id=el.dataset.id;
+      var nm=el.dataset.nm;
+      var type=el.dataset.type;
+      var date=el.dataset.date;
+      // 同じdata-id・data-typeの時・分を取得
+      var allH=document.querySelectorAll(".sel-hour[data-id='"+id+"'][data-type='"+type+"']");
+      var allM=document.querySelectorAll(".sel-min[data-id='"+id+"'][data-type='"+type+"']");
+      if(!allH.length||!allM.length)return;
+      var hv=allH[0].value,mv=allM[0].value;
+      if(!hv||!mv)return;
+      var newTime=hv+":"+mv;
+      var parts=[parseInt(hv),parseInt(mv)];
+      var d=new Date(date);d.setHours(parts[0],parts[1],0,0);
+      if(id){
+        var rec=records.find(function(r){return r.id===id;});
+        if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();}
+      } else {
+        // 既存の同日同スタッフ同種別を確認
+        var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
+        if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();}
+        else{records.push({id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
+      }
+      saveData("tc5_records",records);
+    }
+    document.querySelectorAll(".sel-hour,.sel-min").forEach(function(el){
+      el.onchange=function(){saveTimeSelect(el);};
     });
 
     // 承認
@@ -720,7 +802,16 @@ setInterval(function(){
   }
 },1000);
 
-render();
+
+// 初回Firebase読み込み → その後リアルタイム同期開始
+loadFromFirebase(function(data) {
+  if(data.tc5_records){records=Array.isArray(data.tc5_records)?data.tc5_records:Object.values(data.tc5_records);localStorage.setItem("tc5_records",JSON.stringify(records));}
+  if(data.tc5_staff){staffList=Array.isArray(data.tc5_staff)?data.tc5_staff:Object.values(data.tc5_staff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
+  if(data.tc5_approvals){approvals=data.tc5_approvals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
+  if(data.tc5_pins){staffPins=data.tc5_pins;localStorage.setItem("tc5_pins",JSON.stringify(staffPins));}
+  listenFirebase();
+  render();
+});
 </script>
 </body>
 </html>
