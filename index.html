@@ -332,32 +332,35 @@ function render(){
       var dObj=new Date(dk);
       var yobi=DAYS[dObj.getDay()];
       var isWeekend=dObj.getDay()===0||dObj.getDay()===6;
-      function tInp(rec,type){
-        if(locked2)return rec?'<span style="font-family:monospace;font-size:.85rem;">'+rec.time+'</span>':'<span style="color:#d1d5db;">--:--</span>';
+      function tInp(rec,type,dk){
+        if(locked2)return rec?'<span style="font-family:monospace;font-size:.78rem;color:#374151;">'+rec.time+'</span>':'<span style="color:#d1d5db;font-size:.78rem;">--:--</span>';
         var hv=rec?rec.time.split(":")[0]:"",mv=rec?rec.time.split(":")[1]:"";
         var hO='<option value="">-</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hv===v?" selected":"")+'>'+v+'</option>';}).join("");
         var mO='<option value="">-</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mv===v?" selected":"")+'>'+v+'</option>';}).join("");
         return'<span style="display:inline-flex;align-items:center;gap:1px;">'
-          +'<select class="sel-hour" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:2px 1px;border:1px solid #e5e7eb;border-radius:5px;background:#f9fafb;font-size:.78rem;width:46px;">'+hO+'</select>'
-          +'<span>:</span>'
-          +'<select class="sel-min" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:2px 1px;border:1px solid #e5e7eb;border-radius:5px;background:#f9fafb;font-size:.78rem;width:46px;">'+mO+'</select>'
+          +'<select class="sel-hour" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+hO+'</select>'
+          +'<span style="font-size:.72rem;">:</span>'
+          +'<select class="sel-min" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+mO+'</select>'
           +'</span>';
       }
-      return '<div style="border-bottom:1px solid #f3f4f6;padding:8px 4px;'+(approved2?"background:#f0fdf4;":"")+(isWeekend?"opacity:.6;":"")+'">'
-        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
-        +'<span style="font-size:.88rem;font-weight:700;'+(isWeekend?"color:#9ca3af;":"")+'">'+dk.slice(5)+'（'+yobi+'）</span>'
-        +'<div style="display:flex;align-items:center;gap:4px;">'
-        +(worked2?'<span style="color:#b45309;font-size:.78rem;font-weight:700;">'+worked2+'</span>':"")
+      return '<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 60px;gap:4px;align-items:center;border-bottom:1px solid #f3f4f6;padding:6px 2px;'+(approved2?"background:#f0fdf4;":"")+(isWeekend?"opacity:.55;":"")+'">'
+        // 日付
+        +'<div style="font-size:.75rem;font-weight:700;'+(isWeekend?"color:#9ca3af;":"")+'">'+dk.slice(5)+'<br><span style="font-size:.68rem;color:#9ca3af;">'+yobi+'</span>'+(worked2?'<br><span style="font-size:.65rem;color:#b45309;">'+worked2+'</span>':"")+'</div>'
+        // 出勤
+        +'<div><div style="font-size:.65rem;color:#059669;font-weight:700;margin-bottom:1px;">出勤</div>'+tInp(cin,"clockIn",dk)+'</div>'
+        // 休憩
+        +'<div><div style="font-size:.65rem;color:#d97706;font-weight:700;margin-bottom:1px;">休憩</div>'
+        +tInp(bs,"breakStart",dk)+'<span style="font-size:.65rem;">〜</span>'+tInp(be,"breakEnd",dk)+'</div>'
+        // 退勤
+        +'<div><div style="font-size:.65rem;color:#dc2626;font-weight:700;margin-bottom:1px;">退勤</div>'+tInp(cout,"clockOut",dk)+'</div>'
+        // 承認
+        +'<div style="text-align:center;">'
         +(approved2
-          ?'<span style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 6px;border-radius:5px;">✓承認</span>'
-           +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.68rem;font-weight:700;padding:2px 6px;border-radius:5px;cursor:pointer;font-family:inherit;">引き戻し</button>'
-          :(dr.length>0?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.68rem;font-weight:700;padding:3px 8px;border-radius:5px;cursor:pointer;font-family:inherit;">承認</button>':""))
-        +'</div></div>'
-        +'<div style="display:flex;gap:6px;font-size:.8rem;flex-wrap:wrap;align-items:center;">'
-        +'<span><span style="color:#059669;font-weight:700;">出</span> '+tInp(cin,"clockIn")+'</span>'
-        +'<span><span style="color:#dc2626;font-weight:700;">退</span> '+tInp(cout,"clockOut")+'</span>'
-        +(bs||!locked2?'<span><span style="color:#d97706;font-weight:700;">休</span> '+tInp(bs,"breakStart")+'〜'+tInp(be,"breakEnd")+'</span>':"")
-        +'</div></div>';
+          ?'<div style="background:#dcfce7;color:#16a34a;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;margin-bottom:2px;">✓承認</div>'
+           +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">引戻</button>'
+          :(dr.length>0?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.62rem;font-weight:700;padding:3px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">承認</button>':""))
+        +'</div>'
+        +'</div>';
     }).join("");
     app.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
       +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'admin\';render();">← 戻る</button>'
@@ -368,7 +371,15 @@ function render(){
       +'<span style="font-size:.85rem;color:#9ca3af;">出勤日数 <strong style="color:#1a1a1a;">'+totalDays+'日</strong></span>'
       +'<span style="font-size:.85rem;color:#9ca3af;">総実働 <strong style="color:#b45309;">'+(toHM(totalMs)||"0:00")+'</strong></span>'
       +'</div>'
-      +'<div class="admin-card" style="padding:8px 12px;">'+dayRows+'</div>';
+      +'<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
+      +'<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 60px;gap:4px;padding:4px 2px;border-bottom:2px solid #e5e7eb;margin-bottom:4px;">'
+      +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;">日付</div>'
+      +'<div style="font-size:.68rem;font-weight:700;color:#059669;">出勤</div>'
+      +'<div style="font-size:.68rem;font-weight:700;color:#d97706;">休憩</div>'
+      +'<div style="font-size:.68rem;font-weight:700;color:#dc2626;">退勤</div>'
+      +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-align:center;">承認</div>'
+      +'</div>'
+      +dayRows+'</div>';
     // イベント
     var dm=document.getElementById("det-month");
     if(dm)dm.onchange=function(){selMonth=dm.value;render();};
@@ -418,47 +429,56 @@ function render(){
         var locked=approved;
         var timeInput=function(rec,type){
           if(locked){
-            return rec?'<span style="font-family:monospace;color:#374151;">'+rec.time+'</span>'
-                      :'<span style="color:#d1d5db;font-family:monospace;">--:--</span>';
+            return rec?'<span style="font-family:monospace;font-size:.78rem;color:#374151;">'+rec.time+'</span>'
+                      :'<span style="color:#d1d5db;font-size:.78rem;">--:--</span>';
           }
           var hVal=rec?rec.time.split(":")[0]:"";
           var mVal=rec?rec.time.split(":")[1]:"";
-          var hOpts='<option value="">--</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hVal===v?" selected":"")+'>'+v+'</option>';}).join("");
-          var mOpts='<option value="">--</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mVal===v?" selected":"")+'>'+v+'</option>';}).join("");
-          return'<span style="display:inline-flex;align-items:center;gap:2px;">'
+          var hOpts='<option value="">-</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hVal===v?" selected":"")+'>'+v+'</option>';}).join("");
+          var mOpts='<option value="">-</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mVal===v?" selected":"")+'>'+v+'</option>';}).join("");
+          return'<span style="display:inline-flex;align-items:center;gap:1px;">'
             +'<select class="sel-hour" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="padding:3px 2px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:.85rem;width:52px;">'+hOpts+'</select>'
-            +'<span style="font-weight:700;">:</span>'
+            +'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+hOpts+'</select>'
+            +'<span style="font-size:.72rem;">:</span>'
             +'<select class="sel-min" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="padding:3px 2px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-size:.85rem;width:52px;">'+mOpts+'</select>'
+            +'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+mOpts+'</select>'
             +'</span>';
         };
-        return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;'+(approved?"background:#f0fdf4;border-radius:8px;padding:10px;margin-bottom:4px;":"")+'">'
-          +'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px;">'
-          +'<div>'
-          +'<span style="font-weight:900;font-size:1rem;color:#b45309;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\')">'+nm+'</span>'
-          +(worked?'<span style="color:#b45309;font-size:.8rem;font-weight:700;margin-left:8px;">'+worked+'</span>':"")
+        return '<div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr 64px;gap:4px;align-items:center;border-bottom:1px solid #f3f4f6;padding:6px 2px;'+(approved?"background:#f0fdf4;":"")+'">'
+          // 名前
+          +'<div style="font-weight:900;font-size:.9rem;color:#b45309;cursor:pointer;text-decoration:underline;line-height:1.2;" onclick="openStaffDetail(\''+nm+'\')">'+nm
+          +(worked?'<br><span style="font-size:.65rem;color:#b45309;text-decoration:none;">'+worked+'</span>':"")
           +'</div>'
-          +'<div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;">'
+          // 出勤
+          +'<div><div style="font-size:.62rem;color:#059669;font-weight:700;">出勤</div>'+timeInput(cin,"clockIn")+'</div>'
+          // 休憩
+          +'<div><div style="font-size:.62rem;color:#d97706;font-weight:700;">休憩</div>'
+          +timeInput(bs,"breakStart")+'<span style="font-size:.62rem;">〜</span>'+timeInput(be,"breakEnd")+'</div>'
+          // 退勤
+          +'<div><div style="font-size:.62rem;color:#dc2626;font-weight:700;">退勤</div>'+timeInput(cout,"clockOut")+'</div>'
+          // 承認
+          +'<div style="text-align:center;">'
           +(approved
-            ?'<span style="background:#dcfce7;color:#16a34a;font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:6px;">✓ 承認済</span>'
-              +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.72rem;font-weight:700;padding:3px 8px;border-radius:6px;cursor:pointer;font-family:inherit;">引き戻し</button>'
-            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:4px 10px;border-radius:6px;cursor:pointer;font-family:inherit;">承認</button>':""))
-          +'</div></div>'
-          +'<div style="display:flex;gap:8px;font-size:.82rem;flex-wrap:wrap;align-items:center;">'
-          +'<span><span style="color:#059669;font-weight:700;">出</span> '+timeInput(cin,"clockIn")+'</span>'
-          +'<span><span style="color:#dc2626;font-weight:700;">退</span> '+timeInput(cout,"clockOut")+'</span>'
-          +(bs||!locked?'<span><span style="color:#d97706;font-weight:700;">休</span> '+timeInput(bs,"breakStart")+'〜'+timeInput(be,"breakEnd")+'</span>':"")
+            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;margin-bottom:2px;">✓承認</div>'
+              +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">引戻</button>'
+            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.62rem;font-weight:700;padding:3px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">承認</button>':""))
           +'</div>'
           +'</div>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
-      tc='<div class="admin-card">'
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;align-items:center;">'
+      tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<input type="date" id="sel-date" value="'+selDate+'" style="font-size:.9rem;">'
         +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
+        +'</div>'
+        +'<div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr 64px;gap:4px;padding:4px 2px;border-bottom:2px solid #e5e7eb;margin-bottom:4px;">'
+        +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;">氏名</div>'
+        +'<div style="font-size:.68rem;font-weight:700;color:#059669;">出勤</div>'
+        +'<div style="font-size:.68rem;font-weight:700;color:#d97706;">休憩</div>'
+        +'<div style="font-size:.68rem;font-weight:700;color:#dc2626;">退勤</div>'
+        +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-align:center;">承認</div>'
         +'</div>'
         +sumRows
         +(delRecs.length?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
