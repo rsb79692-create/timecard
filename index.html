@@ -424,7 +424,9 @@ function render(){
         saveData("tc5_records",records);render();
       };
     });
-    var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    return; // staffDetail終了
+  }
+  if(screen==="admin"){
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
     var tc="";
