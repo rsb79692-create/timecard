@@ -399,13 +399,31 @@ function render(){
         saveData("tc5_approvals",approvals);render();
       };
     });
-    // 時刻セレクト
-    document.querySelectorAll(".sel-hour,.sel-min").forEach(function(el){
-      el.onchange=function(){saveTimeSelect(el);};
+    // 時刻タップで編集ポップアップ
+    document.querySelectorAll(".time-cell").forEach(function(el){
+      el.onclick=function(){
+        var id=el.dataset.id,nm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
+        var cur=el.textContent==="--:--"?"":el.textContent;
+        var val=prompt("時刻を入力（例：08:30）\n"+TYPE_LABEL[type]+" / "+nm+" / "+date,cur);
+        if(val===null)return;
+        val=val.trim();
+        if(!/^\d{1,2}:\d{2}$/.test(val)){alert("形式が違います（例：08:30）");return;}
+        var parts=val.split(":");
+        var hh=parseInt(parts[0]),mm=parseInt(parts[1]);
+        if(hh>23||mm>59){alert("時刻が正しくありません");return;}
+        var newTime=pad(hh)+":"+pad(mm);
+        var d=new Date(date);d.setHours(hh,mm,0,0);
+        if(id){
+          var rec=records.find(function(r){return r.id===id;});
+          if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();}
+        } else {
+          var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
+          if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();}
+          else{records.push({id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
+        }
+        saveData("tc5_records",records);render();
+      };
     });
-    return;
-  }
-  if(screen==="admin"){
     var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
@@ -427,60 +445,52 @@ function render(){
         var approved=approvals[selDate+"__"+nm];
         var hasPunch=sr.length>0;
         var locked=approved;
-        var timeInput=function(rec,type){
-          if(locked){
-            return rec?'<span style="font-family:monospace;font-size:.78rem;color:#374151;">'+rec.time+'</span>'
-                      :'<span style="color:#d1d5db;font-size:.78rem;">--:--</span>';
-          }
-          var hVal=rec?rec.time.split(":")[0]:"";
-          var mVal=rec?rec.time.split(":")[1]:"";
-          var hOpts='<option value="">-</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hVal===v?" selected":"")+'>'+v+'</option>';}).join("");
-          var mOpts='<option value="">-</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mVal===v?" selected":"")+'>'+v+'</option>';}).join("");
-          return'<span style="display:inline-flex;align-items:center;gap:1px;">'
-            +'<select class="sel-hour" data-id="'+(rec?rec.id:"")
+        function tCell(rec,type,label,color){
+          var t=rec?rec.time:"--:--";
+          if(locked)return'<td style="padding:6px 4px;font-family:monospace;font-size:.85rem;text-align:center;color:'+(rec?"#374151":"#d1d5db")+';">'+t+'</td>';
+          return'<td style="padding:6px 4px;text-align:center;">'
+            +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+hOpts+'</select>'
-            +'<span style="font-size:.72rem;">:</span>'
-            +'<select class="sel-min" data-id="'+(rec?rec.id:"")
-            +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+mOpts+'</select>'
-            +'</span>';
-        };
-        return '<div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr 64px;gap:4px;align-items:center;border-bottom:1px solid #f3f4f6;padding:6px 2px;'+(approved?"background:#f0fdf4;":"")+'">'
-          // 名前
-          +'<div style="font-weight:900;font-size:.9rem;color:#b45309;cursor:pointer;text-decoration:underline;line-height:1.2;" onclick="openStaffDetail(\''+nm+'\')">'+nm
-          +(worked?'<br><span style="font-size:.65rem;color:#b45309;text-decoration:none;">'+worked+'</span>':"")
-          +'</div>'
-          // 出勤
-          +'<div><div style="font-size:.62rem;color:#059669;font-weight:700;">出勤</div>'+timeInput(cin,"clockIn")+'</div>'
-          // 休憩
-          +'<div><div style="font-size:.62rem;color:#d97706;font-weight:700;">休憩</div>'
-          +timeInput(bs,"breakStart")+'<span style="font-size:.62rem;">〜</span>'+timeInput(be,"breakEnd")+'</div>'
-          // 退勤
-          +'<div><div style="font-size:.62rem;color:#dc2626;font-weight:700;">退勤</div>'+timeInput(cout,"clockOut")+'</div>'
-          // 承認
-          +'<div style="text-align:center;">'
+            +'" style="font-family:monospace;font-size:.85rem;color:'+(rec?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px dashed #e5e7eb;padding-bottom:1px;">'+t+'</span>'
+            +'</td>';
+        }
+        return '<tr style="border-bottom:1px solid #f3f4f6;'+(approved?"background:#f0fdf4;":"")+'">'
+          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;">'
+          +'<span style="color:#b45309;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\')">'+nm+'</span>'
+          +(worked?'<br><span style="font-size:.65rem;color:#b45309;">'+worked+'</span>':"")
+          +'</td>'
+          +tCell(cin,"clockIn","出","#059669")
+          +'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
+          +(locked
+            ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'
+            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="color:'+(bs?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px dashed #e5e7eb;">'+(bs?bs.time:"--:--")+'</span>'
+            +'<span style="font-size:.75rem;">〜</span>'
+            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="color:'+(be?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px dashed #e5e7eb;">'+(be?be.time:"--:--")+'</span>')
+          +'</td>'
+          +tCell(cout,"clockOut","退","#dc2626")
+          +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
-            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;margin-bottom:2px;">✓承認</div>'
-              +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">引戻</button>'
-            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.62rem;font-weight:700;padding:3px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">承認</button>':""))
-          +'</div>'
-          +'</div>';
+            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:4px;white-space:nowrap;">✓承認</div>'
+             +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:4px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
+            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:4px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
+          +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
       tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<input type="date" id="sel-date" value="'+selDate+'" style="font-size:.9rem;">'
         +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
+        +'<span style="color:#9ca3af;font-size:.72rem;">※時刻をタップで編集</span>'
         +'</div>'
-        +'<div style="display:grid;grid-template-columns:70px 1fr 1fr 1fr 64px;gap:4px;padding:4px 2px;border-bottom:2px solid #e5e7eb;margin-bottom:4px;">'
-        +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;">氏名</div>'
-        +'<div style="font-size:.68rem;font-weight:700;color:#059669;">出勤</div>'
-        +'<div style="font-size:.68rem;font-weight:700;color:#d97706;">休憩</div>'
-        +'<div style="font-size:.68rem;font-weight:700;color:#dc2626;">退勤</div>'
-        +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-align:center;">承認</div>'
-        +'</div>'
-        +sumRows
+        +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
+        +'<thead><tr style="border-bottom:2px solid #e5e7eb;">'
+        +'<th style="text-align:left;font-size:.72rem;color:#9ca3af;padding:4px;font-weight:700;">氏名</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#059669;padding:4px;font-weight:700;">出勤</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#d97706;padding:4px;font-weight:700;">休憩</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#9ca3af;padding:4px;font-weight:700;">承認</th>'
+        +'</tr></thead>'
+        +'<tbody>'+sumRows+'</tbody></table>'
         +(delRecs.length?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
           +'<div style="font-size:.72rem;color:#9ca3af;margin-bottom:4px;">削除済み</div>'
           +delRecs.map(function(r){return '<div style="opacity:.4;font-size:.78rem;text-decoration:line-through;">'+r.staff+' '+TYPE_LABEL[r.type]+' '+r.time+'</div>';}).join("")
