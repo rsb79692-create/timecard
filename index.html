@@ -28,7 +28,6 @@ function loadFromFirebase(callback) {
     .then(function(data){callback(data||{});})
     .catch(function(e){console.error("FB load error:", e);callback({});});
 }
-
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
   setInterval(function(){
@@ -911,7 +910,10 @@ setInterval(function(){
 },1000);
 
 
-// 初回Firebase読み込み → その後リアルタイム同期開始
+// まず即座にレンダリング（Firebaseを待たない）
+render();
+
+// その後Firebaseからデータを取得して再レンダリング
 loadFromFirebase(function(data) {
   if(data.tc5_records){records=Array.isArray(data.tc5_records)?data.tc5_records:Object.values(data.tc5_records);localStorage.setItem("tc5_records",JSON.stringify(records));}
   if(data.tc5_staff){staffList=Array.isArray(data.tc5_staff)?data.tc5_staff:Object.values(data.tc5_staff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
