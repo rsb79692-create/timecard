@@ -122,7 +122,7 @@ input:focus{border-color:#b45309;}
 <script>
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
-const ADMIN_PIN="1234";
+var ADMIN_PIN=localStorage.getItem("tc_admin_pin")||""; // Firebaseのconfig/adminPinから読み込む
 const YOMI_ROWS=[
   {label:"すべて",r:null},
   {label:"ア",r:["ぁ","お"]},{label:"カ",r:["か","ご"]},{label:"サ",r:["さ","ぞ"]},
@@ -318,7 +318,7 @@ function render(){
       +'<div style="color:#9ca3af;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
-      +(pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
+      +(!ADMIN_PIN?'<div style="color:#d97706;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
       +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">C</button>'
@@ -860,6 +860,13 @@ function render(){
         +'<div style="display:flex;gap:8px;margin-top:12px;">'
         +'<input id="new-loc" type="text" placeholder="拠点名を入力" style="flex:1;">'
         +'<button id="btn-add-loc" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
+        +'</div></div>'
+        +'<div class="admin-card">'
+        +'<div class="admin-title">管理者PIN設定</div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:12px;">状態: <strong style="color:'+(ADMIN_PIN?"#059669":"#dc2626")+';">'+(ADMIN_PIN?"設定済み":"未設定（ログイン不可）")+'</strong></div>'
+        +'<div style="display:flex;gap:8px;">'
+        +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字4桁）" maxlength="4" style="flex:1;">'
+        +'<button id="btn-change-pin" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>';
     }
 
@@ -1089,6 +1096,22 @@ function render(){
         saveData("tc_master_locs",masterLocs);render();
       };
     });
+    // 管理者PIN変更
+    var changePinBtn=document.getElementById("btn-change-pin");
+    if(changePinBtn)changePinBtn.onclick=function(){
+      var v=(document.getElementById("new-admin-pin")?.value||"").trim();
+      if(!/^\d{4}$/.test(v)){alert("PINは数字4桁で入力してください");return;}
+      ADMIN_PIN=v;
+      localStorage.setItem("tc_admin_pin",v);
+      fetch(FB_URL+"/config/adminPin.json",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(v)
+      }).then(function(){alert("PINを変更しました");})
+        .catch(function(){alert("Firebase保存に失敗しました");});
+      document.getElementById("new-admin-pin").value="";
+      render();
+    };
     return;
   }
 }
@@ -1225,6 +1248,7 @@ function pinTap(v){
   if(pinInput.length===4){setTimeout(pinOk,150);}
 }
 function pinOk(){
+  if(!ADMIN_PIN){pinInput="";render();return;}
   if(pinInput===ADMIN_PIN){screen="admin";adminTab="records";pinInput="";pinError=false;render();}
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
 }
@@ -1257,6 +1281,7 @@ loadFromFirebase(function(data) {
   if(data.tc5_pins){staffPins=data.tc5_pins;localStorage.setItem("tc5_pins",JSON.stringify(staffPins));}
   if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
   if(data.tc_master_locs){masterLocs=Array.isArray(data.tc_master_locs)?data.tc_master_locs:Object.values(data.tc_master_locs);localStorage.setItem("tc_master_locs",JSON.stringify(masterLocs));}
+  if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;localStorage.setItem("tc_admin_pin",ADMIN_PIN);}
   listenFirebase();
   render();
 });
