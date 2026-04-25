@@ -818,7 +818,7 @@ function render(){
 // ===== アクション =====
 function openStaffDetail(nm){selStaffDetail=nm;screen="staffDetail";render();}
 function goHome(){staffName=null;screen="home";render();}
-function goPin(){screen="pin";render();}
+function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){adminTab=v;render();}
 function selStaff(s){
@@ -885,8 +885,9 @@ function sNewOk(){
 }
 function pinTap(v){
   if(v==="C"){pinInput="";}
-  else if(pinInput.length<4){pinInput+=v;}
+  else if(pinInput.length<4){pinInput+=String(v);}
   render();
+  if(pinInput.length===4){setTimeout(pinOk,150);}
 }
 function pinOk(){
   if(pinInput===ADMIN_PIN){screen="admin";adminTab="records";pinInput="";pinError=false;render();}
