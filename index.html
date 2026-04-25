@@ -111,6 +111,9 @@ input:focus{border-color:#b45309;}
 .btn-del{background:transparent;color:#d1d5db;font-size:.75rem;border-radius:6px;padding:3px 8px;}
 .empty{color:#d1d5db;font-size:.85rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
+/* 管理者画面PC全画面対応 */
+.admin-mode{max-width:none!important;}
+.admin-sticky-bar{position:sticky;top:0;z-index:20;background:#f8f5f0;padding-bottom:10px;border-bottom:2px solid #e5e7eb;margin-bottom:16px;}
 </style>
 </head>
 <body>
@@ -140,6 +143,15 @@ function fmtTime(d){return pad(d.getHours())+":"+pad(d.getMinutes());}
 function fmtTimeSec(d){return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());}
 function monthKey(iso){return iso.substring(0,7);}
 function toHM(ms){if(ms<=0)return"";return Math.floor(ms/3600000)+":"+pad(Math.floor((ms%3600000)/60000));}
+function calcTenure(hireDateStr){
+  if(!hireDateStr)return"";
+  var h=new Date(hireDateStr),n=new Date();
+  var y=n.getFullYear()-h.getFullYear(),m=n.getMonth()-h.getMonth();
+  if(m<0){y--;m+=12;}
+  if(y<0)return"入社前";
+  if(y===0)return m+"ヶ月";
+  return y+"年"+(m>0?m+"ヶ月":"");
+}
 function calcMs(rs){
   var s=rs.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
   var tot=0,brk=0,cin=null,bsin=null;
@@ -174,7 +186,7 @@ var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
 var approvals=loadData("tc5_approvals",{});
-var newName="",newYomi="";
+var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
 var selStaffDetail=null; // スタッフ詳細表示用
 
 function filteredStaff(){
@@ -190,6 +202,7 @@ function filteredStaff(){
 function render(){
   var now=new Date();
   var app=document.getElementById("app");
+  app.className=screen==="admin"?"wrap admin-mode":"wrap";
 
   // ── ホーム ──
   if(screen==="home"){
@@ -457,7 +470,7 @@ function render(){
             +'</td>';
         }
         return '<tr style="border-bottom:1px solid #f3f4f6;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;">'
+          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';box-shadow:2px 0 4px rgba(0,0,0,.04);">'
           +'<span style="color:#b45309;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\')">'+nm+'</span>'
           +(worked?'<br><span style="font-size:.65rem;color:#b45309;">'+worked+'</span>':"")
           +'</td>'
@@ -486,7 +499,7 @@ function render(){
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #e5e7eb;">'
-        +'<th style="text-align:left;font-size:.72rem;color:#9ca3af;padding:4px;font-weight:700;">氏名</th>'
+        +'<th style="text-align:left;font-size:.72rem;color:#9ca3af;padding:4px;font-weight:700;position:sticky;left:0;background:#fff;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.06);">氏名</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#059669;padding:4px;font-weight:700;">出勤</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#d97706;padding:4px;font-weight:700;">休憩</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
@@ -510,16 +523,21 @@ function render(){
         var sr=mRecsClean.filter(function(r){return r.staff===nm;});
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
-        return'<div class="sum-row"><span style="font-weight:700;">'+nm+'</span><span style="color:#9ca3af;font-size:.78rem;">'+days.length+'日</span><span style="color:#b45309;font-family:monospace;">'+(toHM(ms)||"0:00")+'</span></div>';
+        return'<div class="sum-row"><span style="font-weight:700;flex:1;">'+nm+'</span><span style="color:#6b7280;font-size:.78rem;width:48px;text-align:center;">'+days.length+'日</span><span style="color:#b45309;font-family:monospace;width:60px;text-align:right;">'+(toHM(ms)||"0:00")+'</span></div>';
       }).join(""):'<div class="empty">データがありません</div>';
       var monOpts=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var sumHeader='<div style="display:flex;justify-content:space-between;padding:6px 4px;border-bottom:2px solid #e5e7eb;margin-bottom:4px;">'
+        +'<span style="font-size:.72rem;font-weight:700;color:#9ca3af;flex:1;">名簿</span>'
+        +'<span style="font-size:.72rem;font-weight:700;color:#6b7280;width:48px;text-align:center;">勤務日数</span>'
+        +'<span style="font-size:.72rem;font-weight:700;color:#b45309;width:60px;text-align:right;">総実働時間</span>'
+        +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">CSV エクスポート</div>'
         +'<select id="sel-month" style="width:100%;margin-bottom:10px;">'+monOpts+'</select>'
         +'<button class="btn-export" id="btn-csv-daily" style="margin-bottom:8px;">📥 日次CSV（1人1日1行）</button>'
         +'<button class="btn-export" id="btn-csv-monthly">📥 月次CSV（1人1行）</button>'
         +'</div>'
-        +'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHTML+'</div>';
+        +'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHeader+sumHTML+'</div>';
     }
 
     if(adminTab==="edit"){
@@ -565,59 +583,81 @@ function render(){
       var active=sorted.filter(function(s){return !s.status||s.status==="在籍";});
       var leave=sorted.filter(function(s){return s.status==="休職";});
       var retired=sorted.filter(function(s){return s.status==="退職";});
-      function staffCard(s){
+      var staffTableHead='<table style="width:100%;border-collapse:collapse;">'
+        +'<thead><tr style="border-bottom:2px solid #e5e7eb;">'
+        +'<th style="text-align:left;font-size:.68rem;color:#9ca3af;padding:4px;font-weight:700;">姓 / 名 / よみがな</th>'
+        +'<th style="font-size:.68rem;color:#9ca3af;padding:4px 2px;font-weight:700;text-align:center;">状態</th>'
+        +'<th style="font-size:.68rem;color:#9ca3af;padding:4px 2px;font-weight:700;text-align:center;">PIN</th>'
+        +'<th style="font-size:.68rem;color:#9ca3af;padding:4px;font-weight:700;text-align:center;">操作</th>'
+        +'</tr></thead><tbody>';
+      var staffTableFoot='</tbody></table>';
+      function staffRow(s){
         var statusColor=s.status==="退職"?"#dc2626":s.status==="休職"?"#d97706":"#059669";
         var statusLabel=s.status||"在籍";
-        return '<div style="border:1px solid #f3f4f6;border-radius:12px;padding:12px;margin-bottom:8px;background:#fff;">'
-          // 氏名・よみがな・状態バッジ
-          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">'
-          +'<div>'
-          +'<span style="font-weight:900;">'+s.name+'</span>'
-          +'<span style="color:#9ca3af;font-size:.78rem;margin-left:6px;">'+s.yomi+'</span>'
+        var actionBtns='<button class="btn-edit-save" data-orig="'+s.name+'" style="background:#b45309;color:#fff;border:none;padding:4px 0;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;display:block;width:100%;margin-bottom:3px;">保存</button>';
+        if(s.status==="休職"||s.status==="退職"){
+          actionBtns+='<button class="btn-status" data-orig="'+s.name+'" data-st="在籍" style="background:#dcfce7;color:#16a34a;border:none;padding:4px 0;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;display:block;width:100%;">復職</button>';
+        } else {
+          actionBtns+='<button class="btn-status" data-orig="'+s.name+'" data-st="休職" style="background:#fef9c3;color:#d97706;border:none;padding:4px 0;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;display:block;width:100%;margin-bottom:3px;">休職</button>'
+            +'<button class="btn-status" data-orig="'+s.name+'" data-st="退職" style="background:#fee2e2;color:#dc2626;border:none;padding:4px 0;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;display:block;width:100%;">退職</button>';
+        }
+        var ln=s.lastName||s.name;var fn=s.firstName||"";
+        return '<tr style="border-bottom:1px solid #f3f4f6;">'
+          +'<td style="padding:6px 4px;">'
+          +'<div style="display:flex;gap:3px;margin-bottom:3px;">'
+          +'<input type="text" class="edit-slname" data-orig="'+s.name+'" value="'+ln+'" placeholder="姓" style="width:50%;font-size:.82rem;background:#f3f4f6;color:#1a1a1a;border:1px solid #e5e7eb;border-radius:6px;padding:4px 6px;font-family:inherit;">'
+          +'<input type="text" class="edit-sfname" data-orig="'+s.name+'" value="'+fn+'" placeholder="名" style="width:50%;font-size:.82rem;background:#f3f4f6;color:#1a1a1a;border:1px solid #e5e7eb;border-radius:6px;padding:4px 6px;font-family:inherit;">'
           +'</div>'
-          +'<span style="background:'+statusColor+'20;color:'+statusColor+';font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:6px;">'+statusLabel+'</span>'
+          +'<div style="display:flex;gap:3px;margin-bottom:3px;">'
+          +'<input type="text" class="edit-slyomi" data-orig="'+s.name+'" value="'+(s.yomiLast!==undefined?s.yomiLast:s.yomi)+'" placeholder="姓よみ" style="width:50%;font-size:.7rem;background:#f3f4f6;color:#9ca3af;border:1px solid #e5e7eb;border-radius:6px;padding:3px 6px;font-family:inherit;">'
+          +'<input type="text" class="edit-sfyomi" data-orig="'+s.name+'" value="'+(s.yomiFirst||"")+'" placeholder="名よみ" style="width:50%;font-size:.7rem;background:#f3f4f6;color:#9ca3af;border:1px solid #e5e7eb;border-radius:6px;padding:3px 6px;font-family:inherit;">'
           +'</div>'
-          +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:6px;">'
-          +'<span style="font-size:.78rem;color:#9ca3af;">PIN：</span>'
-          +'<span style="font-family:monospace;font-size:.9rem;font-weight:700;color:#374151;">'+(staffPins[s.name]||'未設定')+'</span>'
-          +(staffPins[s.name]?'<button class="btn-pin-reset" data-nm="'+s.name+'" style="background:#fee2e2;color:#dc2626;border:none;padding:3px 8px;border-radius:6px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">リセット</button>':"")
+          +'<div style="display:flex;gap:4px;align-items:center;">'
+          +'<input type="date" class="edit-hiredate" data-orig="'+s.name+'" value="'+(s.hireDate||"")+'" style="flex:1;min-width:0;font-size:.7rem;background:#f3f4f6;color:#374151;border:1px solid #e5e7eb;border-radius:6px;padding:3px 6px;font-family:inherit;">'
+          +(s.hireDate?'<span style="font-size:.68rem;color:#b45309;white-space:nowrap;font-weight:700;">'+calcTenure(s.hireDate)+'</span>':"")
           +'</div>'
-          // 編集フォーム
-          +'<div style="display:flex;flex-direction:column;gap:6px;">'
-          +'<div style="display:flex;gap:6px;">'
-          +'<input type="text" class="edit-sname" data-orig="'+s.name+'" value="'+s.name+'" placeholder="氏名" style="flex:1;font-size:.85rem;">'
-          +'<input type="text" class="edit-syomi" data-orig="'+s.name+'" value="'+s.yomi+'" placeholder="よみがな" style="flex:1;font-size:.85rem;">'
-          +'</div>'
-          +'<div style="display:flex;gap:6px;">'
-          +'<button class="btn-edit-save" data-orig="'+s.name+'" style="background:#b45309;color:#fff;border:none;padding:6px 12px;border-radius:8px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;flex:1;">保存</button>'
-          +(s.status==="休職"
-            ?'<button class="btn-status" data-orig="'+s.name+'" data-st="在籍" style="background:#dcfce7;color:#16a34a;border:none;padding:6px 10px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">復職</button>'
-            :s.status==="退職"
-            ?'<button class="btn-status" data-orig="'+s.name+'" data-st="在籍" style="background:#dcfce7;color:#16a34a;border:none;padding:6px 10px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">復職</button>'
-            :'<button class="btn-status" data-orig="'+s.name+'" data-st="休職" style="background:#fef9c3;color:#d97706;border:none;padding:6px 10px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">休職</button>'
-          +(s.status==="退職"?'':'<button class="btn-status" data-orig="'+s.name+'" data-st="退職" style="background:#fee2e2;color:#dc2626;border:none;padding:6px 10px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">退職</button>'))
-          +'</div>'
-          +'</div></div>';
+          +'</td>'
+          +'<td style="padding:6px 2px;text-align:center;vertical-align:middle;">'
+          +'<span style="background:'+statusColor+'20;color:'+statusColor+';font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:5px;white-space:nowrap;">'+statusLabel+'</span>'
+          +'</td>'
+          +'<td style="padding:6px 2px;text-align:center;vertical-align:middle;">'
+          +'<div style="font-family:monospace;font-size:.75rem;font-weight:700;color:#374151;">'+(staffPins[s.name]||'未設定')+'</div>'
+          +(staffPins[s.name]?'<button class="btn-pin-reset" data-nm="'+s.name+'" style="background:#fee2e2;color:#dc2626;border:none;padding:2px 5px;border-radius:4px;font-size:.62rem;font-weight:700;cursor:pointer;font-family:inherit;margin-top:2px;">リセット</button>':"")
+          +'</td>'
+          +'<td style="padding:6px 4px;vertical-align:middle;width:68px;">'+actionBtns+'</td>'
+          +'</tr>';
       }
       tc='<div class="admin-card"><div class="admin-title">スタッフ追加</div>'
         +'<div style="display:flex;flex-direction:column;gap:8px;">'
-        +'<input type="text" id="inp-name" placeholder="氏名（例：山田太郎）" value="'+newName+'">'
-        +'<input type="text" id="inp-yomi" placeholder="よみがな（例：やまだたろう）" value="'+newYomi+'">'
+        +'<div style="display:flex;gap:8px;">'
+        +'<input type="text" id="inp-lname" placeholder="姓" value="'+newLastName+'" style="flex:1;min-width:0;">'
+        +'<input type="text" id="inp-fname" placeholder="名" value="'+newFirstName+'" style="flex:1;min-width:0;">'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;">'
+        +'<input type="text" id="inp-lname-yomi" placeholder="姓よみ（自動）" value="'+newLastYomi+'" style="flex:1;min-width:0;">'
+        +'<input type="text" id="inp-fname-yomi" placeholder="名よみ（自動）" value="'+newFirstYomi+'" style="flex:1;min-width:0;">'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;align-items:center;">'
+        +'<label style="font-size:.78rem;color:#9ca3af;white-space:nowrap;">入社日</label>'
+        +'<input type="date" id="inp-hiredate" value="'+newHireDate+'" style="flex:1;min-width:0;">'
+        +'</div>'
         +'<button class="btn-export" id="btn-add-staff">追加</button>'
         +'</div></div>'
-        +(active.length?'<div class="admin-card"><div class="admin-title">在籍（'+active.length+'名）</div>'+active.map(staffCard).join("")+'</div>':"")
-        +(leave.length?'<div class="admin-card"><div class="admin-title" style="color:#d97706;">休職（'+leave.length+'名）</div>'+leave.map(staffCard).join("")+'</div>':"")
-        +(retired.length?'<div class="admin-card"><div class="admin-title" style="color:#dc2626;">退職（'+retired.length+'名）</div>'+retired.map(staffCard).join("")+'</div>':"");
+        +(active.length?'<div class="admin-card" style="padding:8px 6px;overflow-x:auto;"><div class="admin-title" style="padding:0 2px 8px;">在籍（'+active.length+'名）</div>'+staffTableHead+active.map(staffRow).join("")+staffTableFoot+'</div>':"")
+        +(leave.length?'<div class="admin-card" style="padding:8px 6px;overflow-x:auto;"><div class="admin-title" style="color:#d97706;padding:0 2px 8px;">休職（'+leave.length+'名）</div>'+staffTableHead+leave.map(staffRow).join("")+staffTableFoot+'</div>':"")
+        +(retired.length?'<div class="admin-card" style="padding:8px 6px;overflow-x:auto;"><div class="admin-title" style="color:#dc2626;padding:0 2px 8px;">退職（'+retired.length+'名）</div>'+staffTableHead+retired.map(staffRow).join("")+staffTableFoot+'</div>':"");
     }
 
-    app.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;">'
+    app.innerHTML='<div class="admin-sticky-bar">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー</div>'
       +'<button style="background:#e5e7eb;color:#9ca3af;font-size:.82rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
-      +'<div class="tab-row">'
+      +'<div class="tab-row" style="margin-bottom:0;">'
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
       +'<button class="tab-btn '+(adminTab==="export"?"tab-on":"tab-off")+'" onclick="setTab(\'export\')">CSV出力</button>'
       +'<button class="tab-btn '+(adminTab==="staff"?"tab-on":"tab-off")+'" onclick="setTab(\'staff\')">スタッフ管理</button>'
+      +'</div>'
       +'</div>'+tc;
 
     // イベント
@@ -758,29 +798,45 @@ function render(){
 
     // スタッフ追加
     var addStaffBtn=document.getElementById("btn-add-staff");
-    var inpName=document.getElementById("inp-name");
-    var inpYomi=document.getElementById("inp-yomi");
-    if(inpName)inpName.oninput=function(){newName=inpName.value;};
-    if(inpYomi)inpYomi.oninput=function(){newYomi=inpYomi.value;};
+    var inpLname=document.getElementById("inp-lname");
+    var inpFname=document.getElementById("inp-fname");
+    var inpLnameYomi=document.getElementById("inp-lname-yomi");
+    var inpFnameYomi=document.getElementById("inp-fname-yomi");
+    var inpHiredate=document.getElementById("inp-hiredate");
+    if(inpLname)inpLname.oninput=function(){newLastName=inpLname.value;};
+    if(inpFname)inpFname.oninput=function(){newFirstName=inpFname.value;};
+    if(inpLnameYomi)inpLnameYomi.oninput=function(){newLastYomi=inpLnameYomi.value;};
+    if(inpFnameYomi)inpFnameYomi.oninput=function(){newFirstYomi=inpFnameYomi.value;};
+    if(inpHiredate)inpHiredate.oninput=function(){newHireDate=inpHiredate.value;};
     if(addStaffBtn)addStaffBtn.onclick=function(){
-      var n=(inpName?.value||"").trim(),y=(inpYomi?.value||"").trim();
-      if(!n||!y)return;
-      if(staffList.find(function(s){return s.name===n;}))return;
-      staffList.push({name:n,yomi:y,status:"在籍"});
-      saveData("tc5_staff",staffList);newName="";newYomi="";render();
+      var ln=(inpLname?.value||"").trim(),fn=(inpFname?.value||"").trim();
+      var ly=(inpLnameYomi?.value||"").trim(),fy=(inpFnameYomi?.value||"").trim();
+      var hd=inpHiredate?.value||"";
+      if(!ln||!ly){alert("姓と姓よみを入力してください");return;}
+      var n=ln+fn,y=ly+fy;
+      if(staffList.find(function(s){return s.name===n;})){alert("同名のスタッフが既に存在します");return;}
+      staffList.push({name:n,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:y,hireDate:hd,status:"在籍"});
+      saveData("tc5_staff",staffList);newLastName="";newFirstName="";newLastYomi="";newFirstYomi="";newHireDate="";render();
     };
     // スタッフ編集保存
     document.querySelectorAll(".btn-edit-save").forEach(function(b){
       b.onclick=function(){
         var orig=b.dataset.orig;
-        var nameInp=document.querySelector(".edit-sname[data-orig='"+orig+"']");
-        var yomiInp=document.querySelector(".edit-syomi[data-orig='"+orig+"']");
-        var newN=(nameInp?nameInp.value:"").trim();
-        var newY=(yomiInp?yomiInp.value:"").trim();
-        if(!newN||!newY){alert("氏名とよみがなを入力してください");return;}
+        var lnameInp=document.querySelector(".edit-slname[data-orig='"+orig+"']");
+        var fnameInp=document.querySelector(".edit-sfname[data-orig='"+orig+"']");
+        var lyomiInp=document.querySelector(".edit-slyomi[data-orig='"+orig+"']");
+        var fyomiInp=document.querySelector(".edit-sfyomi[data-orig='"+orig+"']");
+        var newLN=(lnameInp?lnameInp.value:"").trim();
+        var newFN=(fnameInp?fnameInp.value:"").trim();
+        var newLY=(lyomiInp?lyomiInp.value:"").trim();
+        var newFY=(fyomiInp?fyomiInp.value:"").trim();
+        var newN=newLN+newFN,newY=newLY+newFY;
+        if(!newLN||!newLY){alert("姓と姓よみを入力してください");return;}
         var s=staffList.find(function(s){return s.name===orig;});
         if(!s){alert("スタッフが見つかりません");return;}
-        s.name=newN;s.yomi=newY;
+        var hdInp=document.querySelector(".edit-hiredate[data-orig='"+orig+"']");
+        s.lastName=newLN;s.firstName=newFN;s.yomiLast=newLY;s.yomiFirst=newFY;s.name=newN;s.yomi=newY;
+        if(hdInp)s.hireDate=hdInp.value;
         saveData("tc5_staff",staffList);
         // 打刻データの名前も全て更新
         records.forEach(function(r){if(r.staff===orig)r.staff=newN;});
@@ -795,6 +851,29 @@ function render(){
         saveData("tc5_approvals",approvals);
         render();
       };
+    });
+    // よみがな自動入力（IMEのひらがな入力を対応欄へ1:1）
+    function attachYomiIME(nameEl,yomiEl){
+      if(!nameEl||!yomiEl)return;
+      var buf="";
+      nameEl.addEventListener("compositionupdate",function(e){
+        if(/^[぀-ゟ゠-ヿ]+$/.test(e.data))buf=e.data;
+      });
+      nameEl.addEventListener("compositionend",function(){
+        if(buf){yomiEl.value=buf;buf="";}
+      });
+    }
+    // 追加フォーム
+    attachYomiIME(inpLname,inpLnameYomi);
+    attachYomiIME(inpFname,inpFnameYomi);
+    // 各行
+    document.querySelectorAll(".edit-slname").forEach(function(lnEl){
+      var orig=lnEl.dataset.orig;
+      attachYomiIME(lnEl,document.querySelector(".edit-slyomi[data-orig='"+orig+"']"));
+      attachYomiIME(
+        document.querySelector(".edit-sfname[data-orig='"+orig+"']"),
+        document.querySelector(".edit-sfyomi[data-orig='"+orig+"']")
+      );
     });
     // PINリセット
     document.querySelectorAll(".btn-pin-reset").forEach(function(b){
