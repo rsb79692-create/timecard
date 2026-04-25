@@ -191,6 +191,10 @@ var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate=""
 var selStaffDetail=null;
 var staffHrmTab="在籍中";
 var csvPreviewType=""; // "daily" or "monthly"
+var masterDepts=loadData("tc_master_depts",[]);
+var masterLocs=loadData("tc_master_locs",[]);
+if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
+if(!masterLocs.length){masterLocs=["ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","春木"];}
 
 function filteredStaff(){
   var row=YOMI_ROWS.find(function(r){return r.label===yomiTab;})||YOMI_ROWS[0];
@@ -455,7 +459,7 @@ function render(){
     var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
     var mRecsPrev=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
     var activeStaffP=staffList.slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
-    var allLocsP=[...new Set(staffList.map(function(s){return s.location||"";}).filter(Boolean))].sort();
+    var allLocsP=masterLocs.slice();
     var allTypesP=[...new Set(staffList.map(function(s){return s.employmentType||"";}).filter(Boolean))].sort();
     var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
     var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
@@ -739,7 +743,7 @@ function render(){
       if(staffHrmTab==="在籍中") tabFiltered=sorted.filter(function(s){return !s.status||s.status==="在籍"||s.status==="休職";});
       else if(staffHrmTab==="退職済み") tabFiltered=sorted.filter(function(s){return s.status==="退職";});
       else tabFiltered=sorted;
-      var allLocations=[...new Set(staffList.map(function(s){return s.location||"";}).filter(Boolean))].sort();
+      var allLocations=masterLocs.slice();
       var mf=function(label,id,type,ph){
         return '<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">'+label+'</label>'
           +'<input type="'+type+'" id="'+id+'" placeholder="'+ph+'" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;box-sizing:border-box;"></div>';
@@ -783,7 +787,8 @@ function render(){
         +mf("名よみ","modal-fname-yomi","text","たろう")
         +mf("社員番号","modal-empid","text","001")
         +mf("入社日","modal-hiredate","date","")
-        +mf("拠点","modal-location","text","本店")
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">雇用形態</label>'
         +'<select id="modal-emptype" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("")+'</select></div>'
@@ -829,6 +834,35 @@ function render(){
         +modalHtml;
     }
 
+    if(adminTab==="master"){
+      var deptItems=masterDepts.map(function(d,i){
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
+          +'<span style="font-size:.9rem;color:#1a1a1a;">'+d+'</span>'
+          +'<button class="btn-del-dept" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+          +'</div>';
+      }).join("");
+      var locItems=masterLocs.map(function(l,i){
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
+          +'<span style="font-size:.9rem;color:#1a1a1a;">'+l+'</span>'
+          +'<button class="btn-del-loc" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+          +'</div>';
+      }).join("");
+      tc='<div class="admin-card">'
+        +'<div class="admin-title">部門マスター</div>'
+        +(deptItems||'<div class="empty">未登録</div>')
+        +'<div style="display:flex;gap:8px;margin-top:12px;">'
+        +'<input id="new-dept" type="text" placeholder="部門名を入力" style="flex:1;">'
+        +'<button id="btn-add-dept" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
+        +'</div></div>'
+        +'<div class="admin-card">'
+        +'<div class="admin-title">拠点マスター</div>'
+        +(locItems||'<div class="empty">未登録</div>')
+        +'<div style="display:flex;gap:8px;margin-top:12px;">'
+        +'<input id="new-loc" type="text" placeholder="拠点名を入力" style="flex:1;">'
+        +'<button id="btn-add-loc" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
+        +'</div></div>';
+    }
+
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー</div>'
@@ -838,6 +872,7 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
       +'<button class="tab-btn '+(adminTab==="export"?"tab-on":"tab-off")+'" onclick="setTab(\'export\')">CSV出力</button>'
       +'<button class="tab-btn '+(adminTab==="staff"?"tab-on":"tab-off")+'" onclick="setTab(\'staff\')">スタッフ管理</button>'
+      +'<button class="tab-btn '+(adminTab==="master"?"tab-on":"tab-off")+'" onclick="setTab(\'master\')">マスター管理</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -989,7 +1024,8 @@ function render(){
       var newN=ln+fn,newY=ly+fy;
       var empId=(document.getElementById("modal-empid")?.value||"").trim();
       var hd=document.getElementById("modal-hiredate")?.value||"";
-      var loc=(document.getElementById("modal-location")?.value||"").trim();
+      var loc=document.getElementById("modal-location")?.value||"";
+      var dept=document.getElementById("modal-dept")?.value||"";
       var et=document.getElementById("modal-emptype")?.value||"";
       var role=document.getElementById("modal-role")?.value||"";
       var stat=document.getElementById("modal-status")?.value||"在籍";
@@ -1005,10 +1041,10 @@ function render(){
           if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
-        s.employeeId=empId;s.hireDate=hd;s.location=loc;s.employmentType=et;s.role=role;s.status=stat;
+        s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
       } else {
         if(staffList.find(function(s){return s.name===newN;})){alert("同名のスタッフが既に存在します");return;}
-        staffList.push({name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,employmentType:et,role:role,status:stat});
+        staffList.push({name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat});
       }
       saveData("tc5_staff",staffList);closeHrmModal();render();
     };
@@ -1020,6 +1056,39 @@ function render(){
     }
     attachModalIME(document.getElementById("modal-lname"),document.getElementById("modal-lname-yomi"));
     attachModalIME(document.getElementById("modal-fname"),document.getElementById("modal-fname-yomi"));
+
+    // 部門マスター
+    var addDeptBtn=document.getElementById("btn-add-dept");
+    if(addDeptBtn)addDeptBtn.onclick=function(){
+      var v=(document.getElementById("new-dept")?.value||"").trim();
+      if(!v)return;
+      if(masterDepts.includes(v)){alert("既に存在します");return;}
+      masterDepts.push(v);
+      saveData("tc_master_depts",masterDepts);render();
+    };
+    document.querySelectorAll(".btn-del-dept").forEach(function(b){
+      b.onclick=function(){
+        if(!confirm(masterDepts[parseInt(b.dataset.idx)]+"を削除しますか？"))return;
+        masterDepts.splice(parseInt(b.dataset.idx),1);
+        saveData("tc_master_depts",masterDepts);render();
+      };
+    });
+    // 拠点マスター
+    var addLocBtn=document.getElementById("btn-add-loc");
+    if(addLocBtn)addLocBtn.onclick=function(){
+      var v=(document.getElementById("new-loc")?.value||"").trim();
+      if(!v)return;
+      if(masterLocs.includes(v)){alert("既に存在します");return;}
+      masterLocs.push(v);
+      saveData("tc_master_locs",masterLocs);render();
+    };
+    document.querySelectorAll(".btn-del-loc").forEach(function(b){
+      b.onclick=function(){
+        if(!confirm(masterLocs[parseInt(b.dataset.idx)]+"を削除しますか？"))return;
+        masterLocs.splice(parseInt(b.dataset.idx),1);
+        saveData("tc_master_locs",masterLocs);render();
+      };
+    });
     return;
   }
 }
@@ -1059,6 +1128,7 @@ function openHrmEdit(nm){
   document.getElementById("modal-empid").value=s?(s.employeeId||""):"";
   document.getElementById("modal-hiredate").value=s?(s.hireDate||""):"";
   document.getElementById("modal-location").value=s?(s.location||""):"";
+  document.getElementById("modal-dept").value=s?(s.dept||""):"";
   document.getElementById("modal-emptype").value=s?(s.employmentType||""):"";
   document.getElementById("modal-role").value=s?(s.role||""):"";
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
@@ -1185,6 +1255,8 @@ loadFromFirebase(function(data) {
   if(data.tc5_staff){staffList=Array.isArray(data.tc5_staff)?data.tc5_staff:Object.values(data.tc5_staff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
   if(data.tc5_approvals){approvals=data.tc5_approvals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
   if(data.tc5_pins){staffPins=data.tc5_pins;localStorage.setItem("tc5_pins",JSON.stringify(staffPins));}
+  if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
+  if(data.tc_master_locs){masterLocs=Array.isArray(data.tc_master_locs)?data.tc_master_locs:Object.values(data.tc_master_locs);localStorage.setItem("tc_master_locs",JSON.stringify(masterLocs));}
   listenFirebase();
   render();
 });
