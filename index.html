@@ -82,7 +82,7 @@ button:active{transform:scale(.94);}
 .btn-bs{background:#92400e;} .btn-be{background:#1e3a8a;}
 /* 共通 */
 .btn-admin{background:#e5e7eb;color:#9ca3af;font-size:.85rem;padding:12px;width:100%;border-radius:12px;margin-top:8px;}
-.btn-back{background:#1a1a1a;color:#fff;font-size:1.1rem;font-weight:900;padding:12px 20px;text-align:left;margin-bottom:12px;display:block;width:100%;border-radius:12px;}
+.btn-back{background:#f3f4f6;color:#6b7280;font-size:.85rem;font-weight:700;padding:8px 16px;text-align:left;margin-bottom:12px;display:inline-block;border-radius:8px;border:none;cursor:pointer;font-family:inherit;}
 .btn-pin{background:#e5e7eb;color:#1a1a1a;padding:18px;font-size:1.4rem;font-weight:700;border-radius:14px;}
 .btn-pin-enter{background:#b45309;color:#fff;padding:18px;font-size:1.2rem;font-weight:700;border-radius:14px;}
 .btn-pin-clear{background:#e5e7eb;color:#9ca3af;padding:18px;font-size:1rem;border-radius:14px;}
@@ -286,13 +286,20 @@ function render(){
       +'<div class="clock" id="clk" style="margin-top:6px;">'+fmtTimeSec(now)+'</div>'
       +'<div class="date-disp">'+fmtDate(now)+'</div>'
       +'</div>'
-      +(punchMsg?'<div class="msg-ok">✅ '+punchMsg+'</div>':"")
-      +'<div class="grid2">'
-      +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
-      +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
-      +'<button class="btn-punch btn-bs" '+(cbs?"":"disabled")+' onclick="doPunch(\'breakStart\')">☕<br>休憩開始</button>'
-      +'<button class="btn-punch btn-be" '+(cbe?"":"disabled")+' onclick="doPunch(\'breakEnd\')">▶<br>休憩終了</button>'
-      +'</div>'
+      +(punchMsg
+        ?'<div style="text-align:center;padding:36px 20px;">'
+          +'<div style="font-size:3.5rem;margin-bottom:12px;">✅</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:#059669;">打刻完了</div>'
+          +'<div style="font-size:.95rem;color:#374151;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
+          +'<div style="font-size:.78rem;color:#9ca3af;margin-top:18px;">まもなく画面が戻ります…</div>'
+          +'</div>'
+        :'<div class="grid2">'
+          +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
+          +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
+          +'<button class="btn-punch btn-bs" '+(cbs?"":"disabled")+' onclick="doPunch(\'breakStart\')">☕<br>休憩開始</button>'
+          +'<button class="btn-punch btn-be" '+(cbe?"":"disabled")+' onclick="doPunch(\'breakEnd\')">▶<br>休憩終了</button>'
+          +'</div>'
+      )
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span>'+(worked?'<span class="hist-worked">実働 '+worked+'</span>':"")+'</div>'
       +histHTML+'</div>';
@@ -1097,7 +1104,7 @@ function doPunch(type){
   saveData("tc5_records",records);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
-  punchTimer=setTimeout(function(){punchMsg=null;render();},3500);
+  punchTimer=setTimeout(function(){punchMsg=null;staffName=null;screen="home";render();},1500);
   render();
 }
 
