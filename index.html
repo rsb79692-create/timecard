@@ -426,6 +426,7 @@ function render(){
     return; // staffDetail終了
   }
   if(screen==="admin"){
+    var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
     var tc="";
