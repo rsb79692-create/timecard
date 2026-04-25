@@ -190,6 +190,7 @@ var approvals=loadData("tc5_approvals",{});
 var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
 var selStaffDetail=null;
 var staffHrmTab="在籍中";
+var csvPreviewType=""; // "daily" or "monthly"
 
 function filteredStaff(){
   var row=YOMI_ROWS.find(function(r){return r.label===yomiTab;})||YOMI_ROWS[0];
@@ -204,7 +205,7 @@ function filteredStaff(){
 function render(){
   var now=new Date();
   var app=document.getElementById("app");
-  app.className=screen==="admin"?"wrap admin-mode":"wrap";
+  app.className=(screen==="admin"||screen==="csvPreview")?"wrap admin-mode":"wrap";
 
   // ── ホーム ──
   if(screen==="home"){
@@ -440,6 +441,149 @@ function render(){
     });
     return; // staffDetail終了
   }
+
+  if(screen==="csvPreview"){
+    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    if(prevMonths.indexOf(selMonth)<0)prevMonths.unshift(selMonth);
+    var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+    var mRecsPrev=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+    var activeStaffP=staffList.slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    var allLocsP=[...new Set(staffList.map(function(s){return s.location||"";}).filter(Boolean))].sort();
+    var allTypesP=[...new Set(staffList.map(function(s){return s.employmentType||"";}).filter(Boolean))].sort();
+    var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
+    var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
+    var titleP=csvPreviewType==="monthly"?"月次集計データ":"日次データ";
+    var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#6b7280;white-space:nowrap;border-bottom:2px solid #e5e7eb;";
+    var theadHtmlP,tbodyHtmlP;
+    if(csvPreviewType==="monthly"){
+      theadHtmlP='<tr style="background:#f3f4f6;">'
+        +'<th style="'+thS+'">社員番号</th>'
+        +'<th style="'+thS+'">氏名</th>'
+        +'<th style="'+thS+'">拠点</th>'
+        +'<th style="'+thS+'">雇用形態</th>'
+        +'<th style="'+thS+'text-align:right;">勤務日数</th>'
+        +'<th style="'+thS+'text-align:right;">総労働時間</th>'
+        +'<th style="'+thS+'text-align:right;">残業時間</th>'
+        +'</tr>';
+      tbodyHtmlP=activeStaffP.map(function(s,i){
+        var nm=s.name;
+        var sr=mRecsPrev.filter(function(r){return r.staff===nm;});
+        var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
+        var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
+        var ot=Math.max(0,ms-days.length*8*3600000);
+        return'<tr class="csv-prev-row" data-empid="'+(s.employeeId||"")+'" data-nm="'+nm+'" data-loc="'+(s.location||"")+'" data-etype="'+(s.employmentType||"")+'" style="border-bottom:1px solid #f3f4f6;height:44px;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(s.employeeId||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;">'+nm+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+(s.location||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+(s.employmentType||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;">'+days.length+'日</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:#b45309;">'+(toHM(ms)||"0:00")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:'+(ot>0?"#dc2626":"#9ca3af")+'">'+(ot>0?toHM(ot):"—")+'</td>'
+          +'</tr>';
+      }).join("");
+    } else {
+      theadHtmlP='<tr style="background:#f3f4f6;">'
+        +'<th style="'+thS+'">日付</th>'
+        +'<th style="'+thS+'">社員番号</th>'
+        +'<th style="'+thS+'">氏名</th>'
+        +'<th style="'+thS+'">出勤時刻</th>'
+        +'<th style="'+thS+'">退勤時刻</th>'
+        +'<th style="'+thS+'text-align:right;">労働時間</th>'
+        +'<th style="'+thS+'">拠点</th>'
+        +'</tr>';
+      var DAYS_P=["日","月","火","水","木","金","土"];
+      var dRowsP=[];
+      activeStaffP.forEach(function(s){
+        var nm=s.name;
+        var sr=mRecsPrev.filter(function(r){return r.staff===nm;});
+        var dates=[...new Set(sr.map(function(r){return r.date;}))].sort();
+        dates.forEach(function(dk){
+          var dr=sr.filter(function(r){return r.date===dk;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+          var cin=dr.find(function(r){return r.type==="clockIn";});
+          var cout=dr.find(function(r){return r.type==="clockOut";});
+          dRowsP.push({date:dk,yobi:DAYS_P[new Date(dk).getDay()],empId:s.employeeId||"",name:nm,cin:cin?cin.time:"—",cout:cout?cout.time:"—",ms:calcMs(dr),loc:s.location||"",etype:s.employmentType||""});
+        });
+      });
+      dRowsP.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
+      tbodyHtmlP=dRowsP.map(function(r,i){
+        var isWknd=new Date(r.date).getDay()===0||new Date(r.date).getDay()===6;
+        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #f3f4f6;height:44px;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;white-space:nowrap;'+(isWknd?"color:#dc2626;font-weight:700;":"color:#374151;")+'">'
+          +r.date+' ('+r.yobi+')</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(r.empId||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;">'+r.name+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#059669;">'+r.cin+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+r.cout+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:#b45309;">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+r.loc+'</td>'
+          +'</tr>';
+      }).join("");
+    }
+    var rowCountP=((tbodyHtmlP||"").match(/csv-prev-row/g)||[]).length;
+    app.innerHTML='<div class="admin-sticky-bar" style="padding:16px 20px 12px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+      +'<div style="font-size:1.15rem;font-weight:900;color:#1a1a1a;">'+titleP+'</div>'
+      +'<div style="display:flex;gap:8px;">'
+      +'<button id="btn-csv-preview-dl" style="background:#b45309;color:#fff;border:none;padding:8px 20px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 CSV出力</button>'
+      +'<button onclick="screen=\'admin\';adminTab=\'export\';render();" style="background:#e5e7eb;color:#374151;border:none;padding:8px 20px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">← 戻る</button>'
+      +'</div></div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+      +'<select id="csv-f-month" style="padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:.85rem;font-family:inherit;background:#fff;">'+prevMonthOpts+'</select>'
+      +'<input id="csv-f-id" type="text" placeholder="社員番号" style="padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:.85rem;width:100px;font-family:inherit;">'
+      +'<input id="csv-f-name" type="text" placeholder="氏名" style="padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:.85rem;width:110px;font-family:inherit;">'
+      +'<select id="csv-f-loc" style="padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:.85rem;font-family:inherit;background:#fff;">'+locOptsP+'</select>'
+      +'<select id="csv-f-type" style="padding:6px 10px;border:1px solid #e5e7eb;border-radius:8px;font-size:.85rem;font-family:inherit;background:#fff;">'+typeOptsP+'</select>'
+      +'<span id="csv-prev-count" style="font-size:.8rem;color:#6b7280;margin-left:4px;">全'+rowCountP+'件</span>'
+      +'</div></div>'
+      +'<div style="overflow-x:auto;background:#fff;border:1px solid #e5e7eb;border-radius:12px;margin-top:16px;">'
+      +'<table style="min-width:700px;width:100%;border-collapse:collapse;">'
+      +'<thead>'+theadHtmlP+'</thead>'
+      +'<tbody id="csv-prev-tbody">'+tbodyHtmlP+'</tbody>'
+      +'</table></div>';
+    var csvFMonth=document.getElementById("csv-f-month");
+    if(csvFMonth)csvFMonth.onchange=function(){selMonth=csvFMonth.value;render();};
+    [document.getElementById("csv-f-id"),document.getElementById("csv-f-name")].forEach(function(el){if(el)el.oninput=filterCsvPreview;});
+    [document.getElementById("csv-f-loc"),document.getElementById("csv-f-type")].forEach(function(el){if(el)el.onchange=filterCsvPreview;});
+    filterCsvPreview();
+    var dlBtn=document.getElementById("btn-csv-preview-dl");
+    if(dlBtn)dlBtn.onclick=function(){
+      if(csvPreviewType==="daily"){
+        var mRe2=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
+          .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
+        var DAYS2=["日","月","火","水","木","金","土"];
+        var hdr2="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,実働時間";
+        var rows2=[];
+        activeNs2.forEach(function(nm){
+          var sr2=mRe2.filter(function(r){return r.staff===nm;});
+          var dates2=[...new Set(sr2.map(function(r){return r.date;}))].sort();
+          dates2.forEach(function(dk){
+            var dr2=sr2.filter(function(r){return r.date===dk;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+            var cin2=dr2.find(function(r){return r.type==="clockIn";});
+            var cout2=dr2.find(function(r){return r.type==="clockOut";});
+            var bs2=dr2.find(function(r){return r.type==="breakStart";});
+            var be2=dr2.find(function(r){return r.type==="breakEnd";});
+            rows2.push([nm,monthKey(dk),dk,DAYS2[new Date(dk).getDay()],cin2?cin2.time:"",cout2?cout2.time:"",bs2?bs2.time:"",be2?be2.time:"",toHM(calcMs(dr2))].join(","));
+          });
+        });
+        dlCSV(hdr2+"\n"+rows2.join("\n"),"穂乃味_日次勤怠_"+selMonth+".csv");
+      } else {
+        var mRe3=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var activeNs3=staffList.filter(function(s){return !s.status||s.status==="在籍";})
+          .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
+        var hdr3="氏名,年月,総実働時間,出勤日数";
+        var rows3=activeNs3.map(function(nm){
+          var sr3=mRe3.filter(function(r){return r.staff===nm;});
+          var dys=[...new Set(sr3.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
+          var ms3=dys.reduce(function(s,dk){return s+calcMs(sr3.filter(function(r){return r.date===dk;}));},0);
+          return[nm,selMonth,toHM(ms3)||"0:00",dys.length].join(",");
+        });
+        dlCSV(hdr3+"\n"+rows3.join("\n"),"穂乃味_月次勤怠_"+selMonth+".csv");
+      }
+    };
+    return;
+  }
+
   if(screen==="admin"){
     var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
@@ -536,8 +680,10 @@ function render(){
       tc='<div class="admin-card">'
         +'<div class="admin-title">CSV エクスポート</div>'
         +'<select id="sel-month" style="width:100%;margin-bottom:10px;">'+monOpts+'</select>'
-        +'<button class="btn-export" id="btn-csv-daily" style="margin-bottom:8px;">📥 日次CSV（1人1日1行）</button>'
-        +'<button class="btn-export" id="btn-csv-monthly">📥 月次CSV（1人1行）</button>'
+        +'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
+        +'<button class="btn-export" id="btn-csv-daily" style="width:auto;padding:10px 24px;">📥 日次CSV</button>'
+        +'<button class="btn-export" id="btn-csv-monthly" style="width:auto;padding:10px 24px;">📥 月次CSV</button>'
+        +'</div>'
         +'</div>'
         +'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHeader+sumHTML+'</div>';
     }
@@ -742,46 +888,11 @@ function render(){
 
     // CSV日次
     var csvD=document.getElementById("btn-csv-daily");
-    if(csvD)csvD.onclick=function(){
-      var mRe=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
-      var activeNs=staffList.filter(function(s){return !s.status||s.status==="在籍";})
-        .sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");})
-        .map(function(s){return s.name;});
-      var DAYS=["日","月","火","水","木","金","土"];
-      var hdr="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,実働時間";
-      var rows=[];
-      activeNs.forEach(function(nm){
-        var sr=mRe.filter(function(r){return r.staff===nm;});
-        var dates=[...new Set(sr.map(function(r){return r.date;}))].sort();
-        dates.forEach(function(dk){
-          var dr=sr.filter(function(r){return r.date===dk;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
-          var dObj=new Date(dk);
-          var cin=dr.find(function(r){return r.type==="clockIn";});
-          var cout=dr.find(function(r){return r.type==="clockOut";});
-          var bs=dr.find(function(r){return r.type==="breakStart";});
-          var be=dr.find(function(r){return r.type==="breakEnd";});
-          rows.push([nm,monthKey(dk),dk,DAYS[dObj.getDay()],cin?cin.time:"",cout?cout.time:"",bs?bs.time:"",be?be.time:"",toHM(calcMs(dr))].join(","));
-        });
-      });
-      dlCSV(hdr+"\n"+rows.join("\n"),"穂乃味_日次勤怠_"+selMonth+".csv");
-    };
+    if(csvD)csvD.onclick=function(){csvPreviewType="daily";screen="csvPreview";render();};
 
     // CSV月次
     var csvM=document.getElementById("btn-csv-monthly");
-    if(csvM)csvM.onclick=function(){
-      var mRe=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
-      var activeNs=staffList.filter(function(s){return !s.status||s.status==="在籍";})
-        .sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");})
-        .map(function(s){return s.name;});
-      var hdr="氏名,年月,総実働時間,出勤日数";
-      var rows=activeNs.map(function(nm){
-        var sr=mRe.filter(function(r){return r.staff===nm;});
-        var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
-        var ms=days.reduce(function(s,dk){return s+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
-        return[nm,selMonth,toHM(ms)||"0:00",days.length].join(",");
-      });
-      dlCSV(hdr+"\n"+rows.join("\n"),"穂乃味_月次勤怠_"+selMonth+".csv");
-    };
+    if(csvM)csvM.onclick=function(){csvPreviewType="monthly";screen="csvPreview";render();};
 
     // 打刻追加
     var addRecBtn=document.getElementById("btn-add-rec");
@@ -905,6 +1016,26 @@ function render(){
 }
 
 // ===== アクション =====
+function filterCsvPreview(){
+  var fid=(document.getElementById("csv-f-id")||{value:""}).value||"";
+  var fnm=(document.getElementById("csv-f-name")||{value:""}).value||"";
+  var floc=(document.getElementById("csv-f-loc")||{value:""}).value||"";
+  var ftype=(document.getElementById("csv-f-type")||{value:""}).value||"";
+  var tbody=document.getElementById("csv-prev-tbody");
+  if(!tbody)return;
+  var rows=tbody.querySelectorAll("tr.csv-prev-row");
+  var visible=0;
+  rows.forEach(function(tr){
+    var show=(!fid||(tr.dataset.empid||"").includes(fid))
+      &&(!fnm||(tr.dataset.nm||"").includes(fnm))
+      &&(!floc||tr.dataset.loc===floc)
+      &&(!ftype||tr.dataset.etype===ftype);
+    tr.style.display=show?"":"none";
+    if(show)visible++;
+  });
+  var cnt=document.getElementById("csv-prev-count");
+  if(cnt)cnt.textContent="全"+rows.length+"件"+(visible<rows.length?" / 表示"+visible+"件":"");
+}
 function openStaffDetail(nm){selStaffDetail=nm;screen="staffDetail";render();}
 function openHrmEdit(nm){
   var s=nm?staffList.find(function(x){return x.name===nm;}):null;
