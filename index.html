@@ -202,7 +202,7 @@ var staffPins=loadData("tc5_pins",{});  // スタッフPIN管理
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
-var adminTab="records",yomiTab="すべて";
+var adminTab="records",yomiTab=facilityName?"当該施設":"すべて";
 var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
@@ -216,14 +216,18 @@ var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=loadData("tc_master_locs",[]);
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
 if(!masterLocs.length){masterLocs=["ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","春木"];}
-var locTab=facilityName||"すべて"; // トークンがある施設を初期タブに
-
 function filteredStaff(){
+  if(yomiTab==="当該施設"){
+    return staffList.filter(function(s){
+      if(s.status==="退職"||s.status==="休職")return false;
+      return (s.location||"")===(facilityName||"");
+    }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+  }
+  var row=YOMI_ROWS.find(function(r){return r.label===yomiTab;})||YOMI_ROWS[0];
   return staffList.filter(function(s){
     if(s.status==="退職"||s.status==="休職")return false;
-    if(locTab!=="すべて"&&(s.location||"")!==locTab)return false;
-    return true;
-  }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    return !row.r||(s.yomi>=row.r[0]&&s.yomi<=row.r[1]);
+  }).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
 }
 
 // ===== レンダリング =====
@@ -355,9 +359,12 @@ function render(){
       return;
     }
     var list=filteredStaff();
-    var locTabs=["すべて"].concat(masterLocs);
-    var tabsHTML=locTabs.map(function(l){
-      return '<button class="yomi-tab '+(locTab===l?"yomi-on":"yomi-off")+'" onclick="setLocTab(\''+l+'\')">'+l+'</button>';
+    var facilityTabHtml=facilityName
+      ?'<button class="yomi-tab '+(yomiTab==="当該施設"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'当該施設\')">'+facilityName+'</button>'
+       +'<span style="display:inline-block;width:1px;height:22px;background:#d1d5db;margin:2px 3px;align-self:center;"></span>'
+      :'';
+    var tabsHTML=facilityTabHtml+YOMI_ROWS.map(function(r){
+      return '<button class="yomi-tab '+(yomiTab===r.label?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r.label+'\')">'+r.label+'</button>';
     }).join("");
     var staffHTML=list.length?list.map(function(s){
       return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+'</button>';
@@ -366,8 +373,8 @@ function render(){
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
-      +'<div class="label">'+(locTab!=="すべて"?'【'+locTab+'】 ':'')+'スタッフを選択してください</div>'
-      +'<div class="yomi-tabs">'+tabsHTML+'</div>'
+      +'<div class="label">'+(yomiTab==="当該施設"?'【'+facilityName+'】 ':'')+'スタッフを選択してください</div>'
+      +'<div class="yomi-tabs" style="align-items:center;">'+tabsHTML+'</div>'
       +'<div class="staff-grid">'+staffHTML+'</div>'
       +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
     return;
@@ -1321,7 +1328,6 @@ function closeHrmModal(){
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
 function goHome(){staffName=null;screen="home";render();}
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
-function setLocTab(v){locTab=v;render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){adminTab=v;render();}
 function selStaff(s){
