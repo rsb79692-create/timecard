@@ -202,7 +202,9 @@ var staffPins=loadData("tc5_pins",{});  // スタッフPIN管理
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
-var adminTab="records",yomiTab=facilityName?"当該施設":"すべて";
+var masterGroups=loadData("tc_master_groups",[]);
+var grpEditIdx=null;
+var adminTab="records",yomiTab=masterGroups.length>0?masterGroups[0].name:"すべて";
 var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
@@ -217,17 +219,17 @@ var masterLocs=loadData("tc_master_locs",[]);
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
 if(!masterLocs.length){masterLocs=["ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","春木"];}
 function filteredStaff(){
-  if(yomiTab==="当該施設"){
+  var grp=masterGroups.find(function(g){return g.name===yomiTab;});
+  if(grp){
     return staffList.filter(function(s){
       if(s.status==="退職"||s.status==="休職")return false;
-      return (s.location||"")===(facilityName||"");
+      return (grp.members||[]).indexOf(s.name)>=0;
     }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
   }
-  var row=YOMI_ROWS.find(function(r){return r.label===yomiTab;})||YOMI_ROWS[0];
+  // すべて
   return staffList.filter(function(s){
-    if(s.status==="退職"||s.status==="休職")return false;
-    return !row.r||(s.yomi>=row.r[0]&&s.yomi<=row.r[1]);
-  }).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
+    return s.status!=="退職"&&s.status!=="休職";
+  }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
 }
 
 // ===== レンダリング =====
@@ -359,13 +361,10 @@ function render(){
       return;
     }
     var list=filteredStaff();
-    var facilityTabHtml=facilityName
-      ?'<button class="yomi-tab '+(yomiTab==="当該施設"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'当該施設\')">'+facilityName+'</button>'
-       +'<span style="display:inline-block;width:1px;height:22px;background:#d1d5db;margin:2px 3px;align-self:center;"></span>'
-      :'';
-    var tabsHTML=facilityTabHtml+YOMI_ROWS.map(function(r){
-      return '<button class="yomi-tab '+(yomiTab===r.label?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r.label+'\')">'+r.label+'</button>';
-    }).join("");
+    var tabsHTML=masterGroups.map(function(g){
+      return '<button class="yomi-tab '+(yomiTab===g.name?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+g.name+'\')">'+g.name+'</button>';
+    }).join("")
+    +'<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>';
     var staffHTML=list.length?list.map(function(s){
       return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
@@ -373,8 +372,8 @@ function render(){
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
-      +'<div class="label">'+(yomiTab==="当該施設"?'【'+facilityName+'】 ':'')+'スタッフを選択してください</div>'
-      +'<div class="yomi-tabs" style="align-items:center;">'+tabsHTML+'</div>'
+      +'<div class="label">スタッフを選択してください</div>'
+      +'<div class="yomi-tabs">'+tabsHTML+'</div>'
       +'<div class="staff-grid">'+staffHTML+'</div>'
       +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
     return;
@@ -1016,7 +1015,38 @@ function render(){
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
         +'<button id="btn-change-pin" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
-        +'</div></div>';
+        +'</div></div>'
+        +'<div class="admin-card">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        +'<div class="admin-title" style="margin-bottom:0;">グループ管理</div>'
+        +'<button id="btn-grp-add" style="background:#2563eb;color:#fff;border:none;padding:7px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">＋ グループ追加</button>'
+        +'</div>'
+        +(masterGroups.length?masterGroups.map(function(g,i){
+          return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
+            +'<div><span style="font-weight:700;font-size:.9rem;">'+g.name+'</span>'
+            +'<span style="font-size:.75rem;color:#9ca3af;margin-left:8px;">'+(g.members||[]).length+'名</span></div>'
+            +'<div style="display:flex;gap:6px;">'
+            +'<button class="btn-grp-edit" data-idx="'+i+'" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">編集</button>'
+            +'<button class="btn-grp-del" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+            +'</div></div>';
+        }).join(""):'<div class="empty">グループなし</div>')
+        +'</div>'
+        +'<div id="grp-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:300;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;">'
+        +'<div style="background:#fff;width:100%;max-width:480px;border-radius:16px;box-shadow:0 20px 60px rgba(0,0,0,.2);">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid #f3f4f6;">'
+        +'<span id="grp-modal-title" style="font-size:16px;font-weight:700;">グループ編集</span>'
+        +'<button onclick="closeGrpModal()" style="background:#f3f4f6;border:none;width:32px;height:32px;border-radius:8px;font-size:18px;color:#6b7280;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+        +'</div>'
+        +'<div style="padding:20px 24px;">'
+        +'<label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">グループ名</label>'
+        +'<input id="grp-modal-name" type="text" placeholder="例：調理チーム" style="width:100%;font-size:14px;padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;font-family:inherit;outline:none;box-sizing:border-box;">'
+        +'<label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px;">メンバー選択</label>'
+        +'<div id="grp-cb-list" style="max-height:260px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;padding:4px 12px;"></div>'
+        +'</div>'
+        +'<div style="display:flex;gap:10px;padding:16px 24px;border-top:1px solid #f3f4f6;">'
+        +'<button id="btn-grp-save" style="flex:1;background:#2563eb;color:#fff;border:none;padding:12px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<button onclick="closeGrpModal()" style="flex:1;background:#f3f4f6;color:#374151;border:none;padding:12px;border-radius:10px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+        +'</div></div></div>';
     }
 
     app.innerHTML='<div class="admin-sticky-bar">'
@@ -1262,11 +1292,84 @@ function render(){
       document.getElementById("new-admin-pin").value="";
       render();
     };
+    // グループ管理
+    var addGrpBtn=document.getElementById("btn-grp-add");
+    if(addGrpBtn)addGrpBtn.onclick=function(){
+      document.getElementById("grp-modal-title").textContent="グループ追加";
+      openGrpModal(null);
+    };
+    document.querySelectorAll(".btn-grp-edit").forEach(function(b){
+      b.onclick=function(){
+        document.getElementById("grp-modal-title").textContent="グループ編集";
+        openGrpModal(parseInt(b.dataset.idx));
+      };
+    });
+    document.querySelectorAll(".btn-grp-del").forEach(function(b){
+      b.onclick=function(){
+        var g=masterGroups[parseInt(b.dataset.idx)];
+        if(!confirm(g.name+"を削除しますか？"))return;
+        var delName=g.name;
+        masterGroups.splice(parseInt(b.dataset.idx),1);
+        if(yomiTab===delName)yomiTab=masterGroups.length>0?masterGroups[0].name:"すべて";
+        saveMasterGroups();render();
+      };
+    });
+    var grpSaveBtn=document.getElementById("btn-grp-save");
+    if(grpSaveBtn)grpSaveBtn.onclick=saveGrp;
     return;
   }
 }
 
 // ===== アクション =====
+function saveMasterGroups(){
+  localStorage.setItem("tc_master_groups",JSON.stringify(masterGroups));
+  fetch(FB_URL+"/master/groups.json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(masterGroups)
+  }).catch(function(e){console.error("FB save error:",e);});
+}
+function openGrpModal(idx){
+  grpEditIdx=idx;
+  var modal=document.getElementById("grp-modal");
+  if(!modal)return;
+  var g=idx!==null?masterGroups[idx]:null;
+  document.getElementById("grp-modal-name").value=g?g.name:"";
+  var cbList=document.getElementById("grp-cb-list");
+  if(cbList){
+    var active=staffList.filter(function(s){return !s.status||s.status==="在籍";})
+      .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    cbList.innerHTML=active.map(function(s){
+      var chk=g&&(g.members||[]).indexOf(s.name)>=0?" checked":"";
+      return '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid #f3f4f6;cursor:pointer;">'
+        +'<input type="checkbox" name="grp-member" value="'+s.name+'"'+chk+' style="width:16px;height:16px;accent-color:#2563eb;">'
+        +'<span style="font-size:.9rem;font-weight:600;">'+s.name+'</span>'
+        +(s.location?'<span style="font-size:.75rem;color:#9ca3af;">'+s.location+'</span>':"")
+        +'</label>';
+    }).join("");
+  }
+  modal.style.display="flex";
+}
+function closeGrpModal(){
+  var m=document.getElementById("grp-modal");
+  if(m)m.style.display="none";
+  grpEditIdx=null;
+}
+function saveGrp(){
+  var nameEl=document.getElementById("grp-modal-name");
+  var name=(nameEl?nameEl.value:"").trim();
+  if(!name){alert("グループ名を入力してください");return;}
+  var members=[];
+  document.querySelectorAll('input[name="grp-member"]:checked').forEach(function(cb){members.push(cb.value);});
+  if(grpEditIdx!==null){
+    var oldName=masterGroups[grpEditIdx].name;
+    masterGroups[grpEditIdx]={name:name,members:members};
+    if(yomiTab===oldName)yomiTab=name;
+  } else {
+    masterGroups.push({name:name,members:members});
+    if(masterGroups.length===1)yomiTab=name;
+  }
+  saveMasterGroups();closeGrpModal();render();
+}
 function filterCsvPreview(){
   var fid=(document.getElementById("csv-f-id")||{value:""}).value||"";
   var fnm=(document.getElementById("csv-f-name")||{value:""}).value||"";
@@ -1435,6 +1538,12 @@ loadFromFirebase(function(data) {
   if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
   if(data.tc_master_locs){masterLocs=Array.isArray(data.tc_master_locs)?data.tc_master_locs:Object.values(data.tc_master_locs);localStorage.setItem("tc_master_locs",JSON.stringify(masterLocs));}
   if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;localStorage.setItem("tc_admin_pin",ADMIN_PIN);}
+  if(data.master && data.master.groups){
+    masterGroups=Array.isArray(data.master.groups)?data.master.groups:Object.values(data.master.groups);
+    localStorage.setItem("tc_master_groups",JSON.stringify(masterGroups));
+    var validTabs=masterGroups.map(function(g){return g.name;}).concat(["すべて"]);
+    if(validTabs.indexOf(yomiTab)<0)yomiTab=masterGroups.length>0?masterGroups[0].name:"すべて";
+  }
   listenFirebase();
   render();
 });
