@@ -226,10 +226,16 @@ function filteredStaff(){
       return (grp.members||[]).indexOf(s.name)>=0;
     }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
   }
-  // すべて
-  return staffList.filter(function(s){
-    return s.status!=="退職"&&s.status!=="休職";
-  }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+  var active=staffList.filter(function(s){return s.status!=="退職"&&s.status!=="休職";});
+  // あいうえおタブ絞り込み
+  var yr=YOMI_ROWS.find(function(y){return y.label===yomiTab&&y.r;});
+  if(yr){
+    active=active.filter(function(s){
+      var y0=(s.yomi||"").charAt(0);
+      return y0>=yr.r[0]&&y0<=yr.r[1];
+    });
+  }
+  return active.sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
 }
 
 // ===== レンダリング =====
@@ -364,7 +370,10 @@ function render(){
     var tabsHTML=masterGroups.map(function(g){
       return '<button class="yomi-tab '+(yomiTab===g.name?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+g.name+'\')">'+g.name+'</button>';
     }).join("")
-    +'<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>';
+    +'<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>'
+    +YOMI_ROWS.slice(1).map(function(y){
+      return '<button class="yomi-tab '+(yomiTab===y.label?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+y.label+'\')">'+y.label+'</button>';
+    }).join("");
     var staffHTML=list.length?list.map(function(s){
       return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
@@ -1038,8 +1047,8 @@ function render(){
         +'<button onclick="closeGrpModal()" style="background:#f3f4f6;border:none;width:32px;height:32px;border-radius:8px;font-size:18px;color:#6b7280;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
         +'</div>'
         +'<div style="padding:20px 24px;">'
-        +'<label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">グループ名</label>'
-        +'<input id="grp-modal-name" type="text" placeholder="例：調理チーム" style="width:100%;font-size:14px;padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;font-family:inherit;outline:none;box-sizing:border-box;">'
+        +'<label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">グループ名（拠点から選択）</label>'
+        +'<select id="grp-modal-name" style="width:100%;font-size:14px;padding:8px 12px;border:1px solid #e5e7eb;border-radius:8px;margin-bottom:16px;font-family:inherit;outline:none;box-sizing:border-box;background:#f9fafb;"></select>'
         +'<label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:8px;">メンバー選択</label>'
         +'<div id="grp-cb-list" style="max-height:260px;overflow-y:auto;border:1px solid #e5e7eb;border-radius:8px;padding:4px 12px;"></div>'
         +'</div>'
@@ -1333,7 +1342,16 @@ function openGrpModal(idx){
   var modal=document.getElementById("grp-modal");
   if(!modal)return;
   var g=idx!==null?masterGroups[idx]:null;
-  document.getElementById("grp-modal-name").value=g?g.name:"";
+  // 選択済み拠点（他のグループが使用中）を除外してドロップダウン構築
+  var usedLocs=masterGroups.filter(function(_,i){return i!==idx;}).map(function(gg){return gg.name;});
+  var availLocs=masterLocs.filter(function(l){return usedLocs.indexOf(l)<0;});
+  var nameEl=document.getElementById("grp-modal-name");
+  if(nameEl){
+    nameEl.innerHTML='<option value="">選択してください</option>'
+      +availLocs.map(function(l){
+        return '<option value="'+l+'"'+(g&&g.name===l?" selected":"")+'>'+l+'</option>';
+      }).join("");
+  }
   var cbList=document.getElementById("grp-cb-list");
   if(cbList){
     var active=staffList.filter(function(s){return !s.status||s.status==="在籍";})
@@ -1357,7 +1375,10 @@ function closeGrpModal(){
 function saveGrp(){
   var nameEl=document.getElementById("grp-modal-name");
   var name=(nameEl?nameEl.value:"").trim();
-  if(!name){alert("グループ名を入力してください");return;}
+  if(!name){alert("拠点を選択してください");return;}
+  // 重複防止（編集中のグループ自身は除く）
+  var dupIdx=masterGroups.findIndex(function(g){return g.name===name;});
+  if(dupIdx>=0&&dupIdx!==grpEditIdx){alert("この拠点のグループはすでに存在します");return;}
   var members=[];
   document.querySelectorAll('input[name="grp-member"]:checked').forEach(function(cb){members.push(cb.value);});
   if(grpEditIdx!==null){
@@ -1541,7 +1562,7 @@ loadFromFirebase(function(data) {
   if(data.master && data.master.groups){
     masterGroups=Array.isArray(data.master.groups)?data.master.groups:Object.values(data.master.groups);
     localStorage.setItem("tc_master_groups",JSON.stringify(masterGroups));
-    var validTabs=masterGroups.map(function(g){return g.name;}).concat(["すべて"]);
+    var validTabs=masterGroups.map(function(g){return g.name;}).concat(["すべて"]).concat(YOMI_ROWS.slice(1).map(function(y){return y.label;}));
     if(validTabs.indexOf(yomiTab)<0)yomiTab=masterGroups.length>0?masterGroups[0].name:"すべて";
   }
   listenFirebase();
