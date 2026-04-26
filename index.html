@@ -123,15 +123,16 @@ input:focus{border-color:#b45309;}
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
 var ADMIN_PIN=localStorage.getItem("tc_admin_pin")||""; // Firebaseのconfig/adminPinから読み込む
-const VALID_TOKENS={
-  "nanairo1214":"ナナイロ",
-  "kokora1214":"ココラ",
-  "harvest1214":"ハーベスト",
-  "miuge-kaizuka1214":"ミュゲ貝塚",
-  "miuge-haruki1214":"ミュゲ春木",
-  "miuge-izumi1214":"ミュゲの泉",
-  "haruiro1214":"ハルイロ"
-};
+var DEFAULT_FACILITIES=[
+  {name:"ナナイロ",token:"nanairo1214"},{name:"ココラ",token:"kokora1214"},
+  {name:"ハーベスト",token:"harvest1214"},{name:"ミュゲ貝塚",token:"miuge-kaizuka1214"},
+  {name:"ミュゲ春木",token:"miuge-haruki1214"},{name:"ミュゲの泉",token:"miuge-izumi1214"},
+  {name:"ハルイロ",token:"haruiro1214"}
+];
+var masterFacilities=loadData("tc_master_facilities",[]);
+if(!masterFacilities.length){masterFacilities=DEFAULT_FACILITIES.slice();}
+function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f.token)t[f.token]=f.name;});return t;}
+var VALID_TOKENS=buildValidTokens();
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
 if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
   localStorage.setItem("facilityToken",urlToken);
@@ -220,9 +221,8 @@ var staffHrmTab="在籍中";
 var csvPreviewType=""; // "daily" or "monthly"
 var viewerExpandedStaff=null;
 var masterDepts=loadData("tc_master_depts",[]);
-var masterLocs=loadData("tc_master_locs",[]);
+var masterLocs=masterFacilities.map(function(f){return f.name;});
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
-if(!masterLocs.length){masterLocs=["ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","春木"];}
 function filteredStaff(){
   var grp=masterGroups.find(function(g){return g.name===yomiTab;});
   if(grp){
@@ -1021,11 +1021,22 @@ function render(){
           +'<button class="btn-del-dept" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div>';
       }).join("");
-      var locItems=masterLocs.map(function(l,i){
-        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
-          +'<span style="font-size:.9rem;color:#1a1a1a;">'+l+'</span>'
+      var locItems=masterFacilities.map(function(f,i){
+        var facUrl="https://rsb79692-create.github.io/timecard/?token="+encodeURIComponent(f.token||"");
+        var qrUrl="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data="+encodeURIComponent(facUrl);
+        return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
+          +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
+          +'<div><div style="font-size:.95rem;font-weight:700;color:#1a1a1a;">'+f.name+'</div>'
+          +'<div style="font-size:.75rem;color:#9ca3af;font-family:monospace;">'+(f.token||"トークンなし")+'</div></div>'
+          +'<div style="display:flex;gap:6px;">'
+          +'<button class="btn-qr-loc" data-idx="'+i+'" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">QR</button>'
           +'<button class="btn-del-loc" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
-          +'</div>';
+          +'</div></div>'
+          +'<div id="qr-panel-'+i+'" style="display:none;margin-top:10px;padding:12px;background:#f9fafb;border-radius:10px;text-align:center;">'
+          +'<img src="'+qrUrl+'" width="160" height="160" alt="QR" style="border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);">'
+          +'<div style="font-size:.7rem;color:#9ca3af;margin-top:6px;word-break:break-all;">'+facUrl+'</div>'
+          +'<button class="btn-print-qr" data-url="'+facUrl+'" data-name="'+f.name+'" style="margin-top:8px;background:#b45309;color:#fff;border:none;padding:7px 20px;border-radius:8px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">印刷</button>'
+          +'</div></div>';
       }).join("");
       tc='<div class="admin-card">'
         +'<div class="admin-title">部門マスター</div>'
@@ -1035,11 +1046,14 @@ function render(){
         +'<button id="btn-add-dept" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
         +'</div></div>'
         +'<div class="admin-card">'
-        +'<div class="admin-title">拠点マスター</div>'
+        +'<div class="admin-title">拠点トークン管理</div>'
         +(locItems||'<div class="empty">未登録</div>')
-        +'<div style="display:flex;gap:8px;margin-top:12px;">'
-        +'<input id="new-loc" type="text" placeholder="拠点名を入力" style="flex:1;">'
-        +'<button id="btn-add-loc" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
+        +'<div style="margin-top:14px;">'
+        +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
+        +'<input id="new-loc-name" type="text" placeholder="拠点名（例: ナナイロ）" style="flex:1;">'
+        +'<input id="new-loc-token" type="text" placeholder="トークン（例: nanairo1214）" style="flex:1;">'
+        +'</div>'
+        +'<button id="btn-add-loc" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 拠点追加</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者PIN設定</div>'
@@ -1299,20 +1313,45 @@ function render(){
         saveData("tc_master_depts",masterDepts);render();
       };
     });
-    // 拠点マスター
+    // 拠点トークン管理
     var addLocBtn=document.getElementById("btn-add-loc");
     if(addLocBtn)addLocBtn.onclick=function(){
-      var v=(document.getElementById("new-loc")?.value||"").trim();
-      if(!v)return;
-      if(masterLocs.includes(v)){alert("既に存在します");return;}
-      masterLocs.push(v);
-      saveData("tc_master_locs",masterLocs);render();
+      var name=(document.getElementById("new-loc-name")?.value||"").trim();
+      var token=(document.getElementById("new-loc-token")?.value||"").trim();
+      if(!name){alert("拠点名を入力してください");return;}
+      if(masterFacilities.find(function(f){return f.name===name;})){alert("既に存在します");return;}
+      masterFacilities.push({name:name,token:token});
+      saveFacilities();render();
     };
     document.querySelectorAll(".btn-del-loc").forEach(function(b){
       b.onclick=function(){
-        if(!confirm(masterLocs[parseInt(b.dataset.idx)]+"を削除しますか？"))return;
-        masterLocs.splice(parseInt(b.dataset.idx),1);
-        saveData("tc_master_locs",masterLocs);render();
+        var f=masterFacilities[parseInt(b.dataset.idx)];
+        if(!confirm((f?f.name:"拠点")+"を削除しますか？"))return;
+        masterFacilities.splice(parseInt(b.dataset.idx),1);
+        saveFacilities();render();
+      };
+    });
+    document.querySelectorAll(".btn-qr-loc").forEach(function(b){
+      b.onclick=function(){
+        var idx=parseInt(b.dataset.idx);
+        var panel=document.getElementById("qr-panel-"+idx);
+        if(panel){panel.style.display=panel.style.display==="none"?"block":"none";}
+      };
+    });
+    document.querySelectorAll(".btn-print-qr").forEach(function(b){
+      b.onclick=function(){
+        var url=b.dataset.url,name=b.dataset.name;
+        var qrSrc="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data="+encodeURIComponent(url);
+        var win=window.open("","_blank","width=420,height=560");
+        win.document.write('<!DOCTYPE html><html><head><title>'+name+'</title>'
+          +'<style>body{text-align:center;font-family:sans-serif;padding:30px;}h2{font-size:1.3rem;margin-bottom:16px;}p{font-size:.72rem;color:#888;margin-top:10px;word-break:break-all;max-width:300px;margin-left:auto;margin-right:auto;}</style>'
+          +'</head><body>'
+          +'<h2>'+name+'</h2>'
+          +'<img src="'+qrSrc+'" width="200" height="200">'
+          +'<p>'+url+'</p>'
+          +'<script>window.onload=function(){window.print();window.close();}<\/script>'
+          +'</body></html>');
+        win.document.close();
       };
     });
     // 管理者PIN変更
@@ -1577,6 +1616,17 @@ function pinOk(){
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
 }
 
+function saveFacilities(){
+  localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
+  masterLocs=masterFacilities.map(function(f){return f.name;});
+  VALID_TOKENS=buildValidTokens();
+  tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+  facilityName=VALID_TOKENS[effectiveToken]||"";
+  fetch(FB_URL+"/master/locations.json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(masterFacilities)
+  }).catch(function(e){console.error("facilities save error",e);});
+}
 function dlCSV(csv,fname){
   var bom="\uFEFF";
   var blob=new Blob([bom+csv],{type:"text/csv;charset=utf-8;"});
@@ -1604,7 +1654,18 @@ loadFromFirebase(function(data) {
   if(data.tc5_approvals){approvals=data.tc5_approvals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
   if(data.tc5_pins){staffPins=data.tc5_pins;localStorage.setItem("tc5_pins",JSON.stringify(staffPins));}
   if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
-  if(data.tc_master_locs){masterLocs=Array.isArray(data.tc_master_locs)?data.tc_master_locs:Object.values(data.tc_master_locs);localStorage.setItem("tc_master_locs",JSON.stringify(masterLocs));}
+  if(data.master && data.master.locations){
+    var locs=Array.isArray(data.master.locations)?data.master.locations:Object.values(data.master.locations);
+    masterFacilities=locs;
+    localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
+    masterLocs=masterFacilities.map(function(f){return f.name;});
+    VALID_TOKENS=buildValidTokens();
+    tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+    facilityName=VALID_TOKENS[effectiveToken]||"";
+    if(urlToken&&tokenValid){localStorage.setItem("facilityToken",urlToken);}
+  } else {
+    fetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
+  }
   if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;localStorage.setItem("tc_admin_pin",ADMIN_PIN);}
   if(data.config && data.config.adminToken){ADMIN_TOKEN=data.config.adminToken;localStorage.setItem("tc_admin_token",ADMIN_TOKEN);}
   else if(!data.config||!data.config.adminToken){
