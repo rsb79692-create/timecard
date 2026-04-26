@@ -133,8 +133,12 @@ const VALID_TOKENS={
   "haruiro1214":"ハルイロ"
 };
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
-var tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken);
-var facilityName=VALID_TOKENS[urlToken]||"";
+if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
+  localStorage.setItem("facilityToken",urlToken);
+}
+var effectiveToken=urlToken||localStorage.getItem("facilityToken")||"";
+var tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+var facilityName=VALID_TOKENS[effectiveToken]||"";
 const YOMI_ROWS=[
   {label:"すべて",r:null},
   {label:"ア",r:["ぁ","お"]},{label:"カ",r:["か","ご"]},{label:"サ",r:["さ","ぞ"]},
