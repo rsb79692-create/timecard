@@ -337,7 +337,7 @@ function render(){
 
   // ── PIN ──
   if(screen==="pin"){
-    var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#d1d5db">────</span>';
+    var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#d1d5db">────────</span>';
     app.innerHTML='<div class="center" style="padding-top:40px;margin-bottom:28px;">'
       +'<div style="font-size:1.6rem;font-weight:900;">管理者認証</div>'
       +'<div style="color:#9ca3af;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
@@ -890,7 +890,7 @@ function render(){
         +'<div class="admin-title">管理者PIN設定</div>'
         +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:12px;">状態: <strong style="color:'+(ADMIN_PIN?"#059669":"#dc2626")+';">'+(ADMIN_PIN?"設定済み":"未設定（ログイン不可）")+'</strong></div>'
         +'<div style="display:flex;gap:8px;">'
-        +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字4桁）" maxlength="4" style="flex:1;">'
+        +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
         +'<button id="btn-change-pin" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>';
     }
@@ -1125,7 +1125,8 @@ function render(){
     var changePinBtn=document.getElementById("btn-change-pin");
     if(changePinBtn)changePinBtn.onclick=function(){
       var v=(document.getElementById("new-admin-pin")?.value||"").trim();
-      if(!/^\d{4}$/.test(v)){alert("PINは数字4桁で入力してください");return;}
+      // ※ Firebase の config/adminPin も8桁で設定し直してください
+      if(!/^\d{8}$/.test(v)){alert("PINは数字8桁で入力してください");return;}
       ADMIN_PIN=v;
       localStorage.setItem("tc_admin_pin",v);
       fetch(FB_URL+"/config/adminPin.json",{
@@ -1270,9 +1271,9 @@ function sNewOk(){
 }
 function pinTap(v){
   if(v==="C"){pinInput="";}
-  else if(pinInput.length<4){pinInput+=String(v);}
+  else if(pinInput.length<8){pinInput+=String(v);}
   render();
-  if(pinInput.length===4){setTimeout(pinOk,150);}
+  if(pinInput.length===8){setTimeout(pinOk,150);}
 }
 function pinOk(){
   if(!ADMIN_PIN){pinInput="";render();return;}
