@@ -143,6 +143,11 @@ const VIEWER_TOKEN="roumushi2026";
 var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerMode=viewerParam===VIEWER_TOKEN;
 var viewerInvalid=viewerParam!==null&&!viewerMode;
+var ADMIN_TOKEN=localStorage.getItem("tc_admin_token")||"honomi2026";
+var adminParam=new URLSearchParams(location.search).get("admin");
+var adminUrlUsed=adminParam!==null;
+var adminTokenValid=false;
+var adminTokenInvalid=false;
 const YOMI_ROWS=[
   {label:"すべて",r:null},
   {label:"ア",r:["ぁ","お"]},{label:"カ",r:["か","ご"]},{label:"サ",r:["さ","ぞ"]},
@@ -250,6 +255,24 @@ function render(){
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
       +'<div style="font-size:.85rem;color:#9ca3af;">正しい閲覧URLをご利用ください</div>'
+      +'</div>';
+    return;
+  }
+  // ── 管理者トークンURL認証中 ──
+  if(adminUrlUsed&&!adminTokenValid&&!adminTokenInvalid){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
+      +'</div>';
+    return;
+  }
+  // ── 管理者トークン不正 ──
+  if(adminTokenInvalid){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">管理者トークンが正しくありません</div>'
       +'</div>';
     return;
   }
@@ -1026,6 +1049,14 @@ function render(){
         +'<button id="btn-change-pin" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
+        +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:#059669;font-family:monospace;">'+ADMIN_TOKEN+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">?admin='+ADMIN_TOKEN+' でPINなしアクセス可</div>'
+        +'<div style="display:flex;gap:8px;">'
+        +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
+        +'<button id="btn-change-token" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'</div></div>'
+        +'<div class="admin-card">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
         +'<div class="admin-title" style="margin-bottom:0;">グループ管理</div>'
         +'<button id="btn-grp-add" style="background:#2563eb;color:#fff;border:none;padding:7px 16px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">＋ グループ追加</button>'
@@ -1301,6 +1332,22 @@ function render(){
       document.getElementById("new-admin-pin").value="";
       render();
     };
+    // 管理者トークン変更
+    var changeTokenBtn=document.getElementById("btn-change-token");
+    if(changeTokenBtn)changeTokenBtn.onclick=function(){
+      var v=(document.getElementById("new-admin-token")?.value||"").trim();
+      if(v.length<4){alert("トークンは4文字以上で入力してください");return;}
+      ADMIN_TOKEN=v;
+      localStorage.setItem("tc_admin_token",v);
+      fetch(FB_URL+"/config/adminToken.json",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(v)
+      }).then(function(){alert("管理者トークンを更新しました");})
+        .catch(function(){alert("Firebase保存に失敗しました");});
+      document.getElementById("new-admin-token").value="";
+      render();
+    };
     // グループ管理
     var addGrpBtn=document.getElementById("btn-grp-add");
     if(addGrpBtn)addGrpBtn.onclick=function(){
@@ -1559,6 +1606,14 @@ loadFromFirebase(function(data) {
   if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
   if(data.tc_master_locs){masterLocs=Array.isArray(data.tc_master_locs)?data.tc_master_locs:Object.values(data.tc_master_locs);localStorage.setItem("tc_master_locs",JSON.stringify(masterLocs));}
   if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;localStorage.setItem("tc_admin_pin",ADMIN_PIN);}
+  if(data.config && data.config.adminToken){ADMIN_TOKEN=data.config.adminToken;localStorage.setItem("tc_admin_token",ADMIN_TOKEN);}
+  else if(!data.config||!data.config.adminToken){
+    fetch(FB_URL+"/config/adminToken.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify("honomi2026")}).catch(function(){});
+  }
+  if(adminUrlUsed){
+    if(adminParam===ADMIN_TOKEN){adminTokenValid=true;adminTokenInvalid=false;screen="admin";adminTab="records";}
+    else{adminTokenValid=false;adminTokenInvalid=true;}
+  }
   if(data.master && data.master.groups){
     masterGroups=Array.isArray(data.master.groups)?data.master.groups:Object.values(data.master.groups);
     localStorage.setItem("tc_master_groups",JSON.stringify(masterGroups));
