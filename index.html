@@ -219,7 +219,7 @@ function filteredStaff(){
   if(yomiTab==="すべて"){
     return active.sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
   }
-  return active.filter(function(s){return (s.location||"")===yomiTab;})
+  return active.filter(function(s){var loc=s.location||"";return loc===yomiTab||loc==="";})
     .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
 }
 
