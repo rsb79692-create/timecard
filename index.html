@@ -216,14 +216,14 @@ var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=loadData("tc_master_locs",[]);
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
 if(!masterLocs.length){masterLocs=["ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","春木"];}
+var locTab=facilityName||"すべて"; // トークンがある施設を初期タブに
 
 function filteredStaff(){
-  var row=YOMI_ROWS.find(function(r){return r.label===yomiTab;})||YOMI_ROWS[0];
   return staffList.filter(function(s){
-    // 退職・休職は打刻画面に出さない
     if(s.status==="退職"||s.status==="休職")return false;
-    return !row.r||(s.yomi>=row.r[0]&&s.yomi<=row.r[1]);
-  }).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
+    if(locTab!=="すべて"&&(s.location||"")!==locTab)return false;
+    return true;
+  }).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
 }
 
 // ===== レンダリング =====
@@ -355,8 +355,9 @@ function render(){
       return;
     }
     var list=filteredStaff();
-    var tabsHTML=YOMI_ROWS.map(function(r){
-      return '<button class="yomi-tab '+(yomiTab===r.label?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r.label+'\')">'+r.label+'</button>';
+    var locTabs=["すべて"].concat(masterLocs);
+    var tabsHTML=locTabs.map(function(l){
+      return '<button class="yomi-tab '+(locTab===l?"yomi-on":"yomi-off")+'" onclick="setLocTab(\''+l+'\')">'+l+'</button>';
     }).join("");
     var staffHTML=list.length?list.map(function(s){
       return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+'</button>';
@@ -365,7 +366,7 @@ function render(){
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
-      +'<div class="label">スタッフを選択してください</div>'
+      +'<div class="label">'+(locTab!=="すべて"?'【'+locTab+'】 ':'')+'スタッフを選択してください</div>'
       +'<div class="yomi-tabs">'+tabsHTML+'</div>'
       +'<div class="staff-grid">'+staffHTML+'</div>'
       +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
@@ -1320,6 +1321,7 @@ function closeHrmModal(){
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
 function goHome(){staffName=null;screen="home";render();}
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
+function setLocTab(v){locTab=v;render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){adminTab=v;render();}
 function selStaff(s){
