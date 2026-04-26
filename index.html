@@ -123,6 +123,16 @@ input:focus{border-color:#b45309;}
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
 var ADMIN_PIN=localStorage.getItem("tc_admin_pin")||""; // Firebaseのconfig/adminPinから読み込む
+const VALID_TOKENS={
+  "nanairo1214":"ナナイロ",
+  "kokora1214":"ココラ",
+  "harvest1214":"ハーベスト",
+  "miuge-kaizuka1214":"ミュゲ貝塚",
+  "miuge-haruki1214":"ミュゲ春木"
+};
+var urlToken=(new URLSearchParams(location.search).get("token"))||"";
+var tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken);
+var facilityName=VALID_TOKENS[urlToken]||"";
 const YOMI_ROWS=[
   {label:"すべて",r:null},
   {label:"ア",r:["ぁ","お"]},{label:"カ",r:["か","ご"]},{label:"サ",r:["さ","ぞ"]},
@@ -213,6 +223,15 @@ function render(){
 
   // ── ホーム ──
   if(screen==="home"){
+    if(!tokenValid){
+      app.innerHTML='<div class="center" style="padding-top:80px;padding-bottom:24px;">'
+        +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
+        +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このURLからは打刻できません</div>'
+        +'<div style="font-size:.85rem;color:#9ca3af;">正しい施設URLをご利用ください</div>'
+        +'</div>'
+        +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
+      return;
+    }
     var list=filteredStaff();
     var tabsHTML=YOMI_ROWS.map(function(r){
       return '<button class="yomi-tab '+(yomiTab===r.label?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r.label+'\')">'+r.label+'</button>';
@@ -1180,6 +1199,7 @@ function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){adminTab=v;render();}
 function selStaff(s){
+  if(!tokenValid)return;
   staffName=s;
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
@@ -1192,6 +1212,7 @@ function selStaff(s){
 function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;});saveData("tc5_staff",staffList);render();}
 
 function doPunch(type){
+  if(!tokenValid)return;
   var d=new Date();
   records.push({id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()});
   saveData("tc5_records",records);
