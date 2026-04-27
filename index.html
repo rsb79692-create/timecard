@@ -913,7 +913,7 @@ function render(){
         var sl=s.status||"在籍";
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
-        return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;cursor:pointer;background:'+(i%2===1?"#f9fafb":"#fff")+';" onclick="openHrmEdit(\''+s.name+'\')">'
+        return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
           +'<td style="padding:0 14px;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
           +'<td style="padding:0 14px;overflow:hidden;">'
           +'<div style="font-size:14px;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispName+'</div>'
@@ -923,7 +923,7 @@ function render(){
           +'<td style="padding:0 14px;font-size:13px;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType||'<span style="color:#d1d5db;">−</span>')+'</td>'
           +'<td style="padding:0 14px;font-size:13px;">'
           +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+sl+'</span>'
-          +(s.hireDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':"")
+          +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px;">退職日: '+s.retireDate+'</div>':(s.hireDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':""))
           +'</td>'
           +'<td style="padding:0 14px;white-space:nowrap;">'
           +'<button class="btn-hrm-edit" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
@@ -946,7 +946,7 @@ function render(){
         +mf("姓よみ","modal-lname-yomi","text","やまだ")
         +mf("名よみ","modal-fname-yomi","text","たろう")
         +mf("社員番号","modal-empid","text","001")
-        +mf("入社日","modal-hiredate","date","")
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">入社日</label><input type="text" id="modal-hiredate" placeholder="例：20261209" maxlength="10" inputmode="numeric" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:monospace;outline:none;box-sizing:border-box;ime-mode:disabled;"></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #e5e7eb;border-radius:8px;background:#f9fafb;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">雇用形態</label>'
@@ -1176,8 +1176,9 @@ function render(){
       b.onclick=function(){openHrmEdit(b.dataset.nm);};
     });
     document.querySelectorAll(".btn-hrm-del").forEach(function(b){
-      b.onclick=function(){
-        if(!confirm(b.dataset.nm+"を削除しますか？\n打刻データは残ります"))return;
+      b.onclick=function(e){
+        e.stopPropagation();
+        if(!confirm(b.dataset.nm+"さんを削除してもよいですか？この操作は元に戻せません。"))return;
         staffList=staffList.filter(function(s){return s.name!==b.dataset.nm;});
         saveData("tc5_staff",staffList);render();
       };
@@ -1212,12 +1213,28 @@ function render(){
       if(!ln||!ly){alert("姓と姓よみは必須です");return;}
       var newN=ln+fn,newY=ly+fy;
       var empId=(document.getElementById("modal-empid")?.value||"").trim();
-      var hd=document.getElementById("modal-hiredate")?.value||"";
+      var hdRaw=(document.getElementById("modal-hiredate")?.value||"").trim().replace(/\D/g,"");
+      if(hdRaw.length>0&&hdRaw.length!==8){alert("入社日は8桁で入力してください（例：20261209）");return;}
+      var hd=hdRaw.length===8?hdRaw.slice(0,4)+"/"+hdRaw.slice(4,6)+"/"+hdRaw.slice(6,8):"";
       var loc=document.getElementById("modal-location")?.value||"";
       var dept=document.getElementById("modal-dept")?.value||"";
       var et=document.getElementById("modal-emptype")?.value||"";
       var role=document.getElementById("modal-role")?.value||"";
       var stat=document.getElementById("modal-status")?.value||"在籍";
+      // 退職日の取得
+      var retireDate="";
+      if(stat==="退職"){
+        var prevStat=orig?(staffList.find(function(s){return s.name===orig;})||{}).status:"";
+        if(prevStat!=="退職"){
+          var rdRaw=prompt("退職日を入力してください（例：20261209）");
+          if(rdRaw===null)return;
+          rdRaw=rdRaw.trim().replace(/\D/g,"");
+          if(rdRaw.length!==8){alert("退職日は8桁で入力してください（例：20261209）");return;}
+          retireDate=rdRaw.slice(0,4)+"/"+rdRaw.slice(4,6)+"/"+rdRaw.slice(6,8);
+        } else {
+          retireDate=(staffList.find(function(s){return s.name===orig;})||{}).retireDate||"";
+        }
+      }
       if(orig){
         var s=staffList.find(function(s){return s.name===orig;});
         if(!s)return;
@@ -1231,9 +1248,12 @@ function render(){
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
         s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
+        if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
       } else {
         if(staffList.find(function(s){return s.name===newN;})){alert("同名のスタッフが既に存在します");return;}
-        staffList.push({name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat});
+        var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat};
+        if(stat==="退職")newStaff.retireDate=retireDate;
+        staffList.push(newStaff);
       }
       saveData("tc5_staff",staffList);closeHrmModal();render();
     };
@@ -1373,11 +1393,11 @@ function openHrmEdit(nm){
   document.getElementById("modal-lname-yomi").value=s?(s.yomiLast!==undefined?s.yomiLast:s.yomi):"";
   document.getElementById("modal-fname-yomi").value=s?(s.yomiFirst||""):"";
   document.getElementById("modal-empid").value=s?(s.employeeId||""):"";
-  document.getElementById("modal-hiredate").value=s?(s.hireDate||""):"";
+  document.getElementById("modal-hiredate").value=s&&s.hireDate?s.hireDate.replace(/[-\/]/g,""):"";  // yyyy/mm/dd or yyyy-mm-dd → yyyymmdd
   document.getElementById("modal-location").value=s?(s.location||""):"";
   document.getElementById("modal-dept").value=s?(s.dept||""):"";
-  document.getElementById("modal-emptype").value=s?(s.employmentType||""):"";
-  document.getElementById("modal-role").value=s?(s.role||""):"";
+  document.getElementById("modal-emptype").value=s?(s.employmentType||"パート"):"パート";
+  document.getElementById("modal-role").value=s?(s.role||"一般"):"一般";
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
