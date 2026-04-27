@@ -227,7 +227,7 @@ function filteredStaff(){
 function render(){
   var now=new Date();
   var app=document.getElementById("app");
-  app.className=(screen==="admin"||screen==="csvPreview"||viewerMode)?"wrap admin-mode":"wrap";
+  app.className=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode)?"wrap admin-mode":"wrap";
 
   // ── 閲覧専用トークン不正 ──
   if(viewerInvalid){
