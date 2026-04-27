@@ -496,101 +496,112 @@ function render(){
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
     var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.timestamp)===selMonth;});
-    var dates=[...new Set(mRecsStaff.map(function(r){return r.date;}))].sort();
-    // 月の全日を生成
     var year=parseInt(selMonth.split("-")[0]),mon=parseInt(selMonth.split("-")[1])-1;
     var daysInMonth=new Date(year,mon+1,0).getDate();
     var allDates=[];
     for(var di=1;di<=daysInMonth;di++){allDates.push(year+"-"+pad(mon+1)+"-"+pad(di));}
     var DAYS=["日","月","火","水","木","金","土"];
-    var totalMs=0;var totalDays=0;
-    var dayRows=allDates.map(function(dk){
+    var totalMs=0,totalDays=0,totalOtMs=0;
+    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#6b7280;white-space:nowrap;border-bottom:2px solid #e5e7eb;background:#f9fafb;height:36px;";
+    var dayRows=allDates.map(function(dk,rowIdx){
       var dr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
       var cin=dr.find(function(r){return r.type==="clockIn";});
       var cout=dr.find(function(r){return r.type==="clockOut";});
       var bs=dr.find(function(r){return r.type==="breakStart";});
       var be=dr.find(function(r){return r.type==="breakEnd";});
       var ms=calcMs(dr);
-      if(ms>0){totalMs+=ms;totalDays++;}
-      var worked2=toHM(ms);
+      if(ms>0){totalMs+=ms;totalDays++;totalOtMs+=Math.max(0,ms-8*3600000);}
       var approved2=approvals[dk+"__"+nm];
       var locked2=approved2;
       var dObj=new Date(dk);
-      var yobi=DAYS[dObj.getDay()];
-      var isWeekend=dObj.getDay()===0||dObj.getDay()===6;
-      function tInp(rec,type,dk){
-        if(locked2)return rec?'<span style="font-family:monospace;font-size:.78rem;color:#374151;">'+rec.time+'</span>':'<span style="color:#d1d5db;font-size:.78rem;">--:--</span>';
-        var hv=rec?rec.time.split(":")[0]:"",mv=rec?rec.time.split(":")[1]:"";
-        var hO='<option value="">-</option>'+Array.from({length:24},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(hv===v?" selected":"")+'>'+v+'</option>';}).join("");
-        var mO='<option value="">-</option>'+Array.from({length:60},function(_,i){var v=pad(i);return'<option value="'+v+'"'+(mv===v?" selected":"")+'>'+v+'</option>';}).join("");
-        return'<span style="display:inline-flex;align-items:center;gap:1px;">'
-          +'<select class="sel-hour" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+hO+'</select>'
-          +'<span style="font-size:.72rem;">:</span>'
-          +'<select class="sel-min" data-id="'+(rec?rec.id:"")+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="padding:1px;border:1px solid #e5e7eb;border-radius:4px;background:#f9fafb;font-size:.72rem;width:40px;">'+mO+'</select>'
-          +'</span>';
+      var dow=dObj.getDay();
+      var yobi=DAYS[dow];
+      var isSun=dow===0,isSat=dow===6;
+      var bgRow=approved2?"#f0fdf4":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#f9fafb":"#fff");
+      var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
+      var hasData=dr.length>0;
+      var otMs=Math.max(0,ms-8*3600000);
+      var workedColor=otMs>0?"#b45309":"#374151";
+      function tCell(rec,type){
+        var time=rec?rec.time:"";var id=rec?rec.id:"";
+        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;color:'+(rec?"#374151":"#d1d5db")+'">'+(rec?time:"−")+'</span>';
+        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;cursor:pointer;color:'+(rec?"#374151":"#d1d5db")+';border-bottom:1px dashed '+(rec?"#9ca3af":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>';
       }
-      return '<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 60px;gap:4px;align-items:center;border-bottom:1px solid #f3f4f6;padding:6px 2px;'+(approved2?"background:#f0fdf4;":"")+(isWeekend?"opacity:.55;":"")+'">'
-        // 日付
-        +'<div style="font-size:.75rem;font-weight:700;'+(isWeekend?"color:#9ca3af;":"")+'">'+dk.slice(5)+'<br><span style="font-size:.68rem;color:#9ca3af;">'+yobi+'</span>'+(worked2?'<br><span style="font-size:.65rem;color:#b45309;">'+worked2+'</span>':"")+'</div>'
-        // 出勤
-        +'<div><div style="font-size:.65rem;color:#059669;font-weight:700;margin-bottom:1px;">出勤</div>'+tInp(cin,"clockIn",dk)+'</div>'
-        // 休憩
-        +'<div><div style="font-size:.65rem;color:#d97706;font-weight:700;margin-bottom:1px;">休憩</div>'
-        +tInp(bs,"breakStart",dk)+'<span style="font-size:.65rem;">〜</span>'+tInp(be,"breakEnd",dk)+'</div>'
-        // 退勤
-        +'<div><div style="font-size:.65rem;color:#dc2626;font-weight:700;margin-bottom:1px;">退勤</div>'+tInp(cout,"clockOut",dk)+'</div>'
-        // 承認
-        +'<div style="text-align:center;">'
-        +(approved2
-          ?'<div style="background:#dcfce7;color:#16a34a;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;margin-bottom:2px;">✓承認</div>'
-           +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.62rem;font-weight:700;padding:2px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">引戻</button>'
-          :(dr.length>0?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.62rem;font-weight:700;padding:3px 4px;border-radius:4px;cursor:pointer;font-family:inherit;width:100%;">承認</button>':""))
-        +'</div>'
-        +'</div>';
+      var brkText=(bs||be)?((bs?bs.time:"??:??")+"〜"+(be?be.time:"??:??")):"";
+      var brkDisplay=locked2
+        ?'<span style="font-family:monospace;font-size:.8rem;color:'+(brkText?"#d97706":"#d1d5db")+'">'+(brkText||"−")+'</span>'
+        :'<span style="display:inline-flex;align-items:center;gap:2px;">'
+          +tCell(bs,"breakStart")
+          +'<span style="font-size:.75rem;color:#d1d5db;">〜</span>'
+          +tCell(be,"breakEnd")
+          +'</span>';
+      var approveBtn=approved2
+        ?'<span style="background:#dcfce7;color:#16a34a;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:12px;">承認済</span>'
+         +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="display:inline-block;margin-left:4px;background:transparent;color:#9ca3af;border:none;font-size:.68rem;cursor:pointer;font-family:inherit;">取消</button>'
+        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:12px;cursor:pointer;font-family:inherit;">承認</button>':"");
+      return'<tr style="height:44px;border-bottom:1px solid #f3f4f6;background:'+bgRow+';">'
+        +'<td style="padding:0 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
+        +'<td style="padding:0 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
+        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#d1d5db;">−</span>')+'</td>'
+        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#d1d5db;">−</span>')+'</td>'
+        +'<td style="padding:0 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#d1d5db;">−</span>')+'</td>'
+        +'<td style="padding:0 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
+        +'<td style="padding:0 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
+        +'</tr>';
     }).join("");
-    app.innerHTML='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-      +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'admin\';render();">← 戻る</button>'
-      +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
-      +'<select id="det-month" style="font-size:.85rem;padding:6px;">'+monOpts3+'</select>'
+    app.innerHTML=''
+      // ① ヘッダー
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'admin\';render();">← 戻る</button>'
+        +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
+        +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #e5e7eb;border-radius:8px;">'+monOpts3+'</select>'
       +'</div>'
-      +'<div style="background:#fff;border-radius:12px;padding:8px 12px;margin-bottom:10px;display:flex;gap:16px;">'
-      +'<span style="font-size:.85rem;color:#9ca3af;">出勤日数 <strong style="color:#1a1a1a;">'+totalDays+'日</strong></span>'
-      +'<span style="font-size:.85rem;color:#9ca3af;">総実働 <strong style="color:#b45309;">'+(toHM(totalMs)||"0:00")+'</strong></span>'
+      // ② サマリーバー
+      +'<div style="background:#fff;border-radius:12px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #e5e7eb;">'
+        +'<div style="flex:1;text-align:center;border-right:1px solid #e5e7eb;">'
+          +'<div style="font-size:.72rem;color:#9ca3af;margin-bottom:2px;">出勤日数</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:#374151;">'+totalDays+'<span style="font-size:.8rem;font-weight:400;">日</span></div>'
+        +'</div>'
+        +'<div style="flex:1;text-align:center;border-right:1px solid #e5e7eb;">'
+          +'<div style="font-size:.72rem;color:#9ca3af;margin-bottom:2px;">総実働時間</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:#b45309;">'+(toHM(totalMs)||"0:00")+'</div>'
+        +'</div>'
+        +'<div style="flex:1;text-align:center;">'
+          +'<div style="font-size:.72rem;color:#9ca3af;margin-bottom:2px;">残業時間</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:'+(totalOtMs>0?"#dc2626":"#9ca3af")+'">'+(totalOtMs>0?toHM(totalOtMs):"0:00")+'</div>'
+        +'</div>'
       +'</div>'
-      +'<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
-      +'<div style="display:grid;grid-template-columns:52px 1fr 1fr 1fr 60px;gap:4px;padding:4px 2px;border-bottom:2px solid #e5e7eb;margin-bottom:4px;">'
-      +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;">日付</div>'
-      +'<div style="font-size:.68rem;font-weight:700;color:#059669;">出勤</div>'
-      +'<div style="font-size:.68rem;font-weight:700;color:#d97706;">休憩</div>'
-      +'<div style="font-size:.68rem;font-weight:700;color:#dc2626;">退勤</div>'
-      +'<div style="font-size:.68rem;font-weight:700;color:#9ca3af;text-align:center;">承認</div>'
-      +'</div>'
-      +dayRows+'</div>';
+      // ③ テーブル
+      +'<div style="background:#fff;border-radius:12px;border:1px solid #e5e7eb;overflow:hidden;">'
+        +'<div style="overflow-x:auto;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:560px;">'
+            +'<thead><tr>'
+              +'<th style="'+thS+'width:70px;">日付</th>'
+              +'<th style="'+thS+'width:40px;text-align:center;">曜日</th>'
+              +'<th style="'+thS+'text-align:center;">出勤</th>'
+              +'<th style="'+thS+'text-align:center;">退勤</th>'
+              +'<th style="'+thS+'text-align:center;">休憩</th>'
+              +'<th style="'+thS+'text-align:right;">実働</th>'
+              +'<th style="'+thS+'text-align:center;">承認</th>'
+            +'</tr></thead>'
+            +'<tbody>'+dayRows+'</tbody>'
+          +'</table>'
+        +'</div>'
+      +'</div>';
     // イベント
     var dm=document.getElementById("det-month");
     if(dm)dm.onchange=function(){selMonth=dm.value;render();};
-    // 承認（日付指定）
     document.querySelectorAll(".btn-approve").forEach(function(b){
-      b.onclick=function(){
-        var dk2=b.dataset.dk||selDate;
-        approvals[dk2+"__"+b.dataset.nm]=true;
-        saveData("tc5_approvals",approvals);render();
-      };
+      b.onclick=function(){approvals[b.dataset.dk+"__"+b.dataset.nm]=true;saveData("tc5_approvals",approvals);render();};
     });
-    // 引き戻し（日付指定）
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
-      b.onclick=function(){
-        var dk2=b.dataset.dk||selDate;
-        delete approvals[dk2+"__"+b.dataset.nm];
-        saveData("tc5_approvals",approvals);render();
-      };
+      b.onclick=function(){delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveData("tc5_approvals",approvals);render();};
     });
-    // 時刻タップで編集ポップアップ
     document.querySelectorAll(".time-cell").forEach(function(el){
       el.onclick=function(){
-        var id=el.dataset.id,nm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
-        var cur=el.textContent==="--:--"?"":el.textContent;
-        var val=prompt("時刻を入力（例：08:30）\n"+TYPE_LABEL[type]+" / "+nm+" / "+date,cur);
+        var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
+        var cur=el.textContent==="−"?"":el.textContent;
+        var val=prompt("時刻を入力（例：08:30）\n"+TYPE_LABEL[type]+" / "+snm+" / "+date,cur);
         if(val===null)return;
         val=val.trim();
         if(!/^\d{1,2}:\d{2}$/.test(val)){alert("形式が違います（例：08:30）");return;}
@@ -603,14 +614,14 @@ function render(){
           var rec=records.find(function(r){return r.id===id;});
           if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();}
         } else {
-          var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
+          var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
           if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();}
-          else{records.push({id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
+          else{records.push({id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
         }
         saveData("tc5_records",records);render();
       };
     });
-    return; // staffDetail終了
+    return;
   }
 
   if(screen==="csvPreview"){
