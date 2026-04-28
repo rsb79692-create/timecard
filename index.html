@@ -149,6 +149,12 @@ var adminParam=new URLSearchParams(location.search).get("admin");
 var adminUrlUsed=adminParam!==null;
 var adminTokenValid=false;
 var adminTokenInvalid=false;
+var demoParam=new URLSearchParams(location.search).get("demo");
+var demoUrlUsed=demoParam!==null;
+var demoMode=false;
+var demoExpired=false;
+var demoInvalid=false;
+var demoAccessConfig=null;
 const DEF_STAFF=[
   {name:"谷村",yomi:"たにむら"},{name:"茂野",yomi:"しげの"},{name:"吉田",yomi:"よしだ"},
   {name:"中島",yomi:"なかしま"},{name:"大城",yomi:"おおしろ"},{name:"谷口",yomi:"たにぐち"},
@@ -253,6 +259,34 @@ function render(){
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
       +'<div style="font-size:.85rem;color:#9ca3af;">管理者トークンが正しくありません</div>'
+      +'</div>';
+    return;
+  }
+
+  // ── デモURL期限切れ ──
+  if(demoExpired){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">⏰</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このデモURLは期限切れです</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">管理者にお問い合わせください</div>'
+      +'</div>';
+    return;
+  }
+  // ── デモURL不正 ──
+  if(demoInvalid){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">デモURLが正しくありません</div>'
+      +'</div>';
+    return;
+  }
+  // ── デモURL認証中 ──
+  if(demoUrlUsed&&!demoMode&&!demoExpired&&!demoInvalid){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
       +'</div>';
     return;
   }
@@ -1061,11 +1095,26 @@ function render(){
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
+        +'<div class="admin-card">'
+        +'<div class="admin-title">デモアクセス管理</div>'
+        +(demoAccessConfig
+          ?'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">トークン: <strong style="color:#059669;font-family:monospace;">'+demoAccessConfig.token+'</strong></div>'
+           +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:8px;">有効期限: <strong style="color:#059669;font-family:monospace;">'+demoAccessConfig.expireDate+'</strong></div>'
+           +'<div style="font-size:.75rem;color:#9ca3af;margin-bottom:10px;word-break:break-all;">デモURL: https://rsb79692-create.github.io/timecard/?demo='+encodeURIComponent(demoAccessConfig.token)+'</div>'
+           +'<button id="btn-demo-disable" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:6px 16px;border-radius:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:12px;">無効化</button>'
+          :'<div style="color:#9ca3af;font-size:.85rem;margin-bottom:12px;">デモアクセス未設定</div>'
+        )
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+        +'<input id="new-demo-token" type="text" placeholder="デモトークン（例: demo20260430）" style="flex:1;">'
+        +'<input id="new-demo-expire" type="text" placeholder="有効期限（yyyymmdd）" maxlength="8" inputmode="numeric" style="width:130px;">'
+        +'</div>'
+        +'<button id="btn-save-demo" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">設定・更新</button>'
+        +'</div>'
     }
 
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-      +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
       +'<button style="background:#e5e7eb;color:#9ca3af;font-size:.82rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
       +'<div class="tab-row" style="margin-bottom:0;">'
@@ -1367,6 +1416,31 @@ function render(){
       document.getElementById("new-admin-token").value="";
       render();
     };
+    // デモアクセス設定
+    var saveDemoBtn=document.getElementById("btn-save-demo");
+    if(saveDemoBtn)saveDemoBtn.onclick=function(){
+      var tok=(document.getElementById("new-demo-token")?.value||"").trim();
+      var exp=(document.getElementById("new-demo-expire")?.value||"").trim().replace(/\D/g,"");
+      if(!tok){alert("デモトークンを入力してください");return;}
+      if(!/^\d{8}$/.test(exp)){alert("有効期限は8桁で入力してください（例：20260430）");return;}
+      demoAccessConfig={token:tok,expireDate:exp};
+      fetch(FB_URL+"/config/demoAccess.json",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(demoAccessConfig)
+      }).then(function(){alert("デモアクセスを設定しました");render();})
+        .catch(function(){alert("Firebase保存に失敗しました");});
+    };
+    // デモアクセス無効化
+    var disableDemoBtn=document.getElementById("btn-demo-disable");
+    if(disableDemoBtn)disableDemoBtn.onclick=function(){
+      if(!confirm("デモアクセスを無効化しますか？"))return;
+      demoAccessConfig=null;
+      fetch(FB_URL+"/config/demoAccess.json",{
+        method:"DELETE"
+      }).then(function(){alert("デモアクセスを無効化しました");render();})
+        .catch(function(){alert("Firebase操作に失敗しました");});
+    };
     return;
   }
 }
@@ -1566,9 +1640,21 @@ loadFromFirebase(function(data) {
   else if(!data.config||!data.config.adminToken){
     fetch(FB_URL+"/config/adminToken.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify("honomi2026")}).catch(function(){});
   }
+  if(data.config && data.config.demoAccess){demoAccessConfig=data.config.demoAccess;}
   if(adminUrlUsed){
     if(adminParam===ADMIN_TOKEN){adminTokenValid=true;adminTokenInvalid=false;screen="admin";adminTab="records";}
     else{adminTokenValid=false;adminTokenInvalid=true;}
+  }
+  if(demoUrlUsed){
+    var dc=data.config&&data.config.demoAccess;
+    if(!dc||!dc.token||demoParam!==dc.token){
+      demoInvalid=true;
+    } else {
+      var dn=new Date();
+      var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
+      if(dTodayStr>dc.expireDate){demoExpired=true;}
+      else{demoMode=true;screen="admin";adminTab="records";}
+    }
   }
   // yomiTabが現在の拠点一覧にない場合はfacilityNameにフォールバック
   var validFacTabs=masterFacilities.map(function(f){return f.name;}).concat(["すべて"]);
