@@ -120,6 +120,25 @@ input:focus{border-color:#b45309;}
 <body>
 <div class="wrap" id="app"></div>
 <script>
+// ===== カスタムモーダル =====
+function showModal(opts){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:12px;padding:24px;max-width:340px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.3);";
+  if(opts.title){var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#1a1a1a;margin-bottom:12px;";ttl.textContent=opts.title;card.appendChild(ttl);}
+  var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#374151;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
+  var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
+  function close(){if(ov.parentNode)document.body.removeChild(ov);}
+  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#e5e7eb;color:#374151;border:none;padding:11px;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
+  var ok=document.createElement("button");ok.textContent="OK";ok.style.cssText="flex:1;background:#2563eb;color:#fff;border:none;padding:11px;border-radius:8px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
+  card.appendChild(row);ov.appendChild(card);
+  ov.onclick=function(e){if(e.target===ov){close();if(opts.onCancel)opts.onCancel();}};
+  document.body.appendChild(ov);ok.focus();
+}
+function showAlert(msg,cb){showModal({message:msg,alertOnly:true,onOK:cb});}
+function showConfirm(msg,onOK,onCancel){showModal({title:"確認",message:msg,alertOnly:false,onOK:onOK,onCancel:onCancel});}
+
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
 var ADMIN_PIN=localStorage.getItem("tc_admin_pin")||""; // Firebaseのconfig/adminPinから読み込む
@@ -381,7 +400,7 @@ function render(){
     if(vcDailyBtn)vcDailyBtn.onclick=function(){
       var vChkKeys={};var vUnapproved=0;
       vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys[k]){vChkKeys[k]=true;if(!approvals[k])vUnapproved++;}});
-      if(vUnapproved>0){alert("未承認のデータが"+vUnapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
+      if(vUnapproved>0){showAlert("未承認のデータが"+vUnapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       var DAYS_D=["日","月","火","水","木","金","土"];
       var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩開始,休憩終了,実働時間";
       var rows=[];
@@ -406,7 +425,7 @@ function render(){
     if(vcBtn)vcBtn.onclick=function(){
       var vChkKeys2={};var vUnapproved2=0;
       vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys2[k]){vChkKeys2[k]=true;if(!approvals[k])vUnapproved2++;}});
-      if(vUnapproved2>0){alert("未承認のデータが"+vUnapproved2+"件あります。すべて承認してからCSVを出力してください。");return;}
+      if(vUnapproved2>0){showAlert("未承認のデータが"+vUnapproved2+"件あります。すべて承認してからCSVを出力してください。");return;}
       var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間";
       var csvRows=vStaff.map(function(s){
         var nm=s.name;
@@ -667,10 +686,10 @@ function render(){
         var val=prompt("時刻を入力（例：08:30）\n"+TYPE_LABEL[type]+" / "+snm+" / "+date,cur);
         if(val===null)return;
         val=val.trim();
-        if(!/^\d{1,2}:\d{2}$/.test(val)){alert("形式が違います（例：08:30）");return;}
+        if(!/^\d{1,2}:\d{2}$/.test(val)){showAlert("形式が違います（例：08:30）");return;}
         var parts=val.split(":");
         var hh=parseInt(parts[0]),mm=parseInt(parts[1]);
-        if(hh>23||mm>59){alert("時刻が正しくありません");return;}
+        if(hh>23||mm>59){showAlert("時刻が正しくありません");return;}
         var newTime=pad(hh)+":"+pad(mm);
         var d=new Date(date);d.setHours(hh,mm,0,0);
         if(id){
@@ -795,7 +814,7 @@ function render(){
       var chkRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted&&r.type==="clockIn";});
       var chkKeys={};var unapproved=0;
       chkRecs.forEach(function(r){var k=r.date+"__"+r.staff;if(!chkKeys[k]){chkKeys[k]=true;if(!approvals[k])unapproved++;}});
-      if(unapproved>0){alert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
+      if(unapproved>0){showAlert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       if(csvPreviewType==="daily"){
         var mRe2=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
@@ -1204,16 +1223,17 @@ function render(){
     // 一括承認
     var bulkApproveBtn=document.getElementById("btn-bulk-approve");
     if(bulkApproveBtn)bulkApproveBtn.onclick=function(){
-      if(!confirm("表示中の日付の未承認データをすべて承認します。よろしいですか？"))return;
-      var targets=allStaffSorted.filter(function(s){
-        var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
-        return sr.length>0&&!approvals[selDate+"__"+s.name];
+      showConfirm("表示中の日付の未承認データをすべて承認します。よろしいですか？",function(){
+        var targets=allStaffSorted.filter(function(s){
+          var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
+          return sr.length>0&&!approvals[selDate+"__"+s.name];
+        });
+        if(!targets.length){showAlert("承認済みでないデータはありません");return;}
+        targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
+        saveData("tc5_approvals",approvals);
+        render();
+        showAlert(targets.length+"件を承認しました");
       });
-      if(!targets.length){alert("承認済みでないデータはありません");return;}
-      targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
-      saveData("tc5_approvals",approvals);
-      alert(targets.length+"件を承認しました");
-      render();
     };
 
     // 引き戻し
@@ -1243,7 +1263,7 @@ function render(){
       var date=document.getElementById("add-date")?.value;
       var type=document.getElementById("add-type")?.value;
       var time=document.getElementById("add-time")?.value;
-      if(!staff||!date||!type||!time){alert("全て入力してください");return;}
+      if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
       var parts=time.split(":");
       var ts=new Date(date);ts.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
       records.push({id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true});
@@ -1269,9 +1289,10 @@ function render(){
     // 削除
     document.querySelectorAll(".btn-del-rec").forEach(function(b){
       b.onclick=function(){
-        if(!confirm("削除しますか？\n元データは勤怠一覧で確認できます"))return;
-        var rec=records.find(function(r){return r.id===b.dataset.id;});
-        if(rec){rec.deleted=true;saveData("tc5_records",records);render();}
+        showConfirm("削除しますか？\n元データは勤怠一覧で確認できます",function(){
+          var rec=records.find(function(r){return r.id===b.dataset.id;});
+          if(rec){rec.deleted=true;saveData("tc5_records",records);render();}
+        });
       };
     });
 
@@ -1287,9 +1308,10 @@ function render(){
     document.querySelectorAll(".btn-hrm-del").forEach(function(b){
       b.onclick=function(e){
         e.stopPropagation();
-        if(!confirm(b.dataset.nm+"さんを削除してもよいですか？この操作は元に戻せません。"))return;
-        staffList=staffList.filter(function(s){return s.name!==b.dataset.nm;});
-        saveData("tc5_staff",staffList);render();
+        showConfirm(b.dataset.nm+"さんを削除してもよいですか？この操作は元に戻せません。",function(){
+          staffList=staffList.filter(function(s){return s.name!==b.dataset.nm;});
+          saveData("tc5_staff",staffList);render();
+        });
       };
     });
     function filterHrmRows(){
@@ -1319,11 +1341,11 @@ function render(){
       var fn=(document.getElementById("modal-fname")?.value||"").trim();
       var ly=(document.getElementById("modal-lname-yomi")?.value||"").trim();
       var fy=(document.getElementById("modal-fname-yomi")?.value||"").trim();
-      if(!ln||!ly){alert("姓と姓よみは必須です");return;}
+      if(!ln||!ly){showAlert("姓と姓よみは必須です");return;}
       var newN=ln+fn,newY=ly+fy;
       var empId=(document.getElementById("modal-empid")?.value||"").trim();
       var hdRaw=(document.getElementById("modal-hiredate")?.value||"").trim().replace(/\D/g,"");
-      if(hdRaw.length>0&&hdRaw.length!==8){alert("入社日は8桁で入力してください（例：20261209）");return;}
+      if(hdRaw.length>0&&hdRaw.length!==8){showAlert("入社日は8桁で入力してください（例：20261209）");return;}
       var hd=hdRaw.length===8?hdRaw.slice(0,4)+"/"+hdRaw.slice(4,6)+"/"+hdRaw.slice(6,8):"";
       var loc=document.getElementById("modal-location")?.value||"";
       var dept=document.getElementById("modal-dept")?.value||"";
@@ -1338,7 +1360,7 @@ function render(){
           var rdRaw=prompt("退職日を入力してください（例：20261209）");
           if(rdRaw===null)return;
           rdRaw=rdRaw.trim().replace(/\D/g,"");
-          if(rdRaw.length!==8){alert("退職日は8桁で入力してください（例：20261209）");return;}
+          if(rdRaw.length!==8){showAlert("退職日は8桁で入力してください（例：20261209）");return;}
           retireDate=rdRaw.slice(0,4)+"/"+rdRaw.slice(4,6)+"/"+rdRaw.slice(6,8);
         } else {
           retireDate=(staffList.find(function(s){return s.name===orig;})||{}).retireDate||"";
@@ -1348,7 +1370,7 @@ function render(){
         var s=staffList.find(function(s){return s.name===orig;});
         if(!s)return;
         if(newN!==orig){
-          if(staffList.find(function(x){return x.name===newN&&x!==s;})){alert("同名のスタッフが既に存在します");return;}
+          if(staffList.find(function(x){return x.name===newN&&x!==s;})){showAlert("同名のスタッフが既に存在します");return;}
           records.forEach(function(r){if(r.staff===orig)r.staff=newN;});
           saveData("tc5_records",records);
           var na={};Object.keys(approvals).forEach(function(k){na[k.replace("__"+orig,"__"+newN)]=approvals[k];});
@@ -1359,7 +1381,7 @@ function render(){
         s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
         if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
       } else {
-        if(staffList.find(function(s){return s.name===newN;})){alert("同名のスタッフが既に存在します");return;}
+        if(staffList.find(function(s){return s.name===newN;})){showAlert("同名のスタッフが既に存在します");return;}
         var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat};
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
@@ -1380,15 +1402,16 @@ function render(){
     if(addDeptBtn)addDeptBtn.onclick=function(){
       var v=(document.getElementById("new-dept")?.value||"").trim();
       if(!v)return;
-      if(masterDepts.includes(v)){alert("既に存在します");return;}
+      if(masterDepts.includes(v)){showAlert("既に存在します");return;}
       masterDepts.push(v);
       saveData("tc_master_depts",masterDepts);render();
     };
     document.querySelectorAll(".btn-del-dept").forEach(function(b){
       b.onclick=function(){
-        if(!confirm(masterDepts[parseInt(b.dataset.idx)]+"を削除しますか？"))return;
-        masterDepts.splice(parseInt(b.dataset.idx),1);
-        saveData("tc_master_depts",masterDepts);render();
+        showConfirm(masterDepts[parseInt(b.dataset.idx)]+"を削除しますか？",function(){
+          masterDepts.splice(parseInt(b.dataset.idx),1);
+          saveData("tc_master_depts",masterDepts);render();
+        });
       };
     });
     // 拠点トークン管理
@@ -1396,17 +1419,18 @@ function render(){
     if(addLocBtn)addLocBtn.onclick=function(){
       var name=(document.getElementById("new-loc-name")?.value||"").trim();
       var token=(document.getElementById("new-loc-token")?.value||"").trim();
-      if(!name){alert("拠点名を入力してください");return;}
-      if(masterFacilities.find(function(f){return f.name===name;})){alert("既に存在します");return;}
+      if(!name){showAlert("拠点名を入力してください");return;}
+      if(masterFacilities.find(function(f){return f.name===name;})){showAlert("既に存在します");return;}
       masterFacilities.push({name:name,token:token});
       saveFacilities();render();
     };
     document.querySelectorAll(".btn-del-loc").forEach(function(b){
       b.onclick=function(){
         var f=masterFacilities[parseInt(b.dataset.idx)];
-        if(!confirm((f?f.name:"拠点")+"を削除しますか？"))return;
-        masterFacilities.splice(parseInt(b.dataset.idx),1);
-        saveFacilities();render();
+        showConfirm((f?f.name:"拠点")+"を削除しますか？",function(){
+          masterFacilities.splice(parseInt(b.dataset.idx),1);
+          saveFacilities();render();
+        });
       };
     });
     document.querySelectorAll(".btn-qr-loc").forEach(function(b){
@@ -1437,15 +1461,15 @@ function render(){
     if(changePinBtn)changePinBtn.onclick=function(){
       var v=(document.getElementById("new-admin-pin")?.value||"").trim();
       // ※ Firebase の config/adminPin も8桁で設定し直してください
-      if(!/^\d{8}$/.test(v)){alert("PINは数字8桁で入力してください");return;}
+      if(!/^\d{8}$/.test(v)){showAlert("PINは数字8桁で入力してください");return;}
       ADMIN_PIN=v;
       localStorage.setItem("tc_admin_pin",v);
       fetch(FB_URL+"/config/adminPin.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(v)
-      }).then(function(){alert("PINを変更しました");})
-        .catch(function(){alert("Firebase保存に失敗しました");});
+      }).then(function(){showAlert("PINを変更しました");})
+        .catch(function(){showAlert("Firebase保存に失敗しました");});
       document.getElementById("new-admin-pin").value="";
       render();
     };
@@ -1453,15 +1477,15 @@ function render(){
     var changeTokenBtn=document.getElementById("btn-change-token");
     if(changeTokenBtn)changeTokenBtn.onclick=function(){
       var v=(document.getElementById("new-admin-token")?.value||"").trim();
-      if(v.length<4){alert("トークンは4文字以上で入力してください");return;}
+      if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
       ADMIN_TOKEN=v;
       localStorage.setItem("tc_admin_token",v);
       fetch(FB_URL+"/config/adminToken.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(v)
-      }).then(function(){alert("管理者トークンを更新しました");})
-        .catch(function(){alert("Firebase保存に失敗しました");});
+      }).then(function(){showAlert("管理者トークンを更新しました");})
+        .catch(function(){showAlert("Firebase保存に失敗しました");});
       document.getElementById("new-admin-token").value="";
       render();
     };
@@ -1470,25 +1494,26 @@ function render(){
     if(saveDemoBtn)saveDemoBtn.onclick=function(){
       var tok=(document.getElementById("new-demo-token")?.value||"").trim();
       var exp=(document.getElementById("new-demo-expire")?.value||"").trim().replace(/\D/g,"");
-      if(!tok){alert("デモトークンを入力してください");return;}
-      if(!/^\d{8}$/.test(exp)){alert("有効期限は8桁で入力してください（例：20260430）");return;}
+      if(!tok){showAlert("デモトークンを入力してください");return;}
+      if(!/^\d{8}$/.test(exp)){showAlert("有効期限は8桁で入力してください（例：20260430）");return;}
       demoAccessConfig={token:tok,expireDate:exp};
       fetch(FB_URL+"/config/demoAccess.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(demoAccessConfig)
-      }).then(function(){alert("デモアクセスを設定しました");render();})
-        .catch(function(){alert("Firebase保存に失敗しました");});
+      }).then(function(){showAlert("デモアクセスを設定しました");render();})
+        .catch(function(){showAlert("Firebase保存に失敗しました");});
     };
     // デモアクセス無効化
     var disableDemoBtn=document.getElementById("btn-demo-disable");
     if(disableDemoBtn)disableDemoBtn.onclick=function(){
-      if(!confirm("デモアクセスを無効化しますか？"))return;
-      demoAccessConfig=null;
-      fetch(FB_URL+"/config/demoAccess.json",{
-        method:"DELETE"
-      }).then(function(){alert("デモアクセスを無効化しました");render();})
-        .catch(function(){alert("Firebase操作に失敗しました");});
+      showConfirm("デモアクセスを無効化しますか？",function(){
+        demoAccessConfig=null;
+        fetch(FB_URL+"/config/demoAccess.json",{
+          method:"DELETE"
+        }).then(function(){showAlert("デモアクセスを無効化しました");render();})
+          .catch(function(){showAlert("Firebase操作に失敗しました");});
+      });
     };
     return;
   }
@@ -1541,9 +1566,10 @@ function openHrmEdit(nm){
       pr.textContent="リセット";
       pr.style.cssText="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;";
       pr.onclick=function(){
-        if(!confirm(nm+"のPINをリセットしますか？"))return;
-        delete staffPins[nm];saveData("tc5_pins",staffPins);
-        pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">未設定</strong>';
+        showConfirm(nm+"のPINをリセットしますか？",function(){
+          delete staffPins[nm];saveData("tc5_pins",staffPins);
+          pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">未設定</strong>';
+        });
       };
       pinDiv.appendChild(pr);
     }
