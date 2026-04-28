@@ -1,10 +1,10 @@
 {
-  "name": "穂乃味 タイムカード",
-  "short_name": "穂乃味打刻",
+  "name": "穂乃味タイムカード",
+  "short_name": "タイムカード",
   "start_url": "/timecard/",
   "display": "standalone",
-  "background_color": "#f8f5f0",
-  "theme_color": "#b45309",
+  "background_color": "#f5f0eb",
+  "theme_color": "#c0632a",
   "orientation": "portrait",
   "icons": [
     {
