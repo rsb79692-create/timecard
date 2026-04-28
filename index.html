@@ -403,7 +403,7 @@ function render(){
       +(staffPinError?'<div style="color:#dc2626;text-align:center;font-size:.9rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="sTap('+n+')">'+n+'</button>';}).join("")
-      +'<button class="btn-pin-clear" onclick="sTap(\'C\')">C</button>'
+      +'<button class="btn-pin-clear" onclick="sTap(\'C\')">⌫</button>'
       +'<button class="btn-pin" onclick="sTap(0)">0</button>'
       +'<button class="btn-pin-enter" onclick="sOk()">→</button>'
       +'</div>';
@@ -425,7 +425,7 @@ function render(){
       +(staffPinError?'<div style="color:#dc2626;text-align:center;font-size:.9rem;margin-bottom:10px;">PINが一致しません。やり直してください</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="sNewTap('+n+')">'+n+'</button>';}).join("")
-      +'<button class="btn-pin-clear" onclick="sNewTap(\'C\')">C</button>'
+      +'<button class="btn-pin-clear" onclick="sNewTap(\'C\')">⌫</button>'
       +'<button class="btn-pin" onclick="sNewTap(0)">0</button>'
       +'<button class="btn-pin-enter" onclick="sNewOk()">→</button>'
       +'</div>';
@@ -481,7 +481,7 @@ function render(){
       +(!ADMIN_PIN?'<div style="color:#d97706;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
-      +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">C</button>'
+      +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">⌫</button>'
       +'<button class="btn-pin" onclick="pinTap(0)">0</button>'
       +'<button class="btn-pin-enter" onclick="pinOk()">→</button>'
       +'</div>'
@@ -1461,7 +1461,7 @@ function doPunch(type){
 
 // スタッフPIN認証
 function sTap(v){
-  if(v==="C")staffPinInput="";
+  if(v==="C")staffPinInput=staffPinInput.slice(0,-1);
   else if(staffPinInput.length<4)staffPinInput+=v;
   render();
 }
@@ -1476,10 +1476,10 @@ function sOk(){
 // スタッフPIN新規登録
 function sNewTap(v){
   if(staffPinStep===1){
-    if(v==="C")staffPinInput="";
+    if(v==="C")staffPinInput=staffPinInput.slice(0,-1);
     else if(staffPinInput.length<4)staffPinInput+=v;
   } else {
-    if(v==="C")staffPinConfirm="";
+    if(v==="C")staffPinConfirm=staffPinConfirm.slice(0,-1);
     else if(staffPinConfirm.length<4)staffPinConfirm+=v;
   }
   render();
@@ -1500,7 +1500,7 @@ function sNewOk(){
   }
 }
 function pinTap(v){
-  if(v==="C"){pinInput="";}
+  if(v==="C"){pinInput=pinInput.slice(0,-1);}
   else if(pinInput.length<8){pinInput+=String(v);}
   render();
   if(pinInput.length===8){setTimeout(pinOk,150);}
