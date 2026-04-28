@@ -379,6 +379,9 @@ function render(){
     if(vm)vm.onchange=function(){selMonth=vm.value;viewerExpandedStaff=null;render();};
     var vcDailyBtn=document.getElementById("btn-viewer-csv-daily");
     if(vcDailyBtn)vcDailyBtn.onclick=function(){
+      var vChkKeys={};var vUnapproved=0;
+      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys[k]){vChkKeys[k]=true;if(!approvals[k])vUnapproved++;}});
+      if(vUnapproved>0){alert("未承認のデータが"+vUnapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       var DAYS_D=["日","月","火","水","木","金","土"];
       var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩開始,休憩終了,実働時間";
       var rows=[];
@@ -401,6 +404,9 @@ function render(){
     };
     var vcBtn=document.getElementById("btn-viewer-csv");
     if(vcBtn)vcBtn.onclick=function(){
+      var vChkKeys2={};var vUnapproved2=0;
+      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys2[k]){vChkKeys2[k]=true;if(!approvals[k])vUnapproved2++;}});
+      if(vUnapproved2>0){alert("未承認のデータが"+vUnapproved2+"件あります。すべて承認してからCSVを出力してください。");return;}
       var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間";
       var csvRows=vStaff.map(function(s){
         var nm=s.name;
@@ -786,6 +792,10 @@ function render(){
     filterCsvPreview();
     var dlBtn=document.getElementById("btn-csv-preview-dl");
     if(dlBtn)dlBtn.onclick=function(){
+      var chkRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted&&r.type==="clockIn";});
+      var chkKeys={};var unapproved=0;
+      chkRecs.forEach(function(r){var k=r.date+"__"+r.staff;if(!chkKeys[k]){chkKeys[k]=true;if(!approvals[k])unapproved++;}});
+      if(unapproved>0){alert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       if(csvPreviewType==="daily"){
         var mRe2=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
@@ -881,6 +891,7 @@ function render(){
         +'<input type="date" id="sel-date" value="'+selDate+'" style="font-size:.9rem;">'
         +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
         +'<span style="color:#9ca3af;font-size:.72rem;">※時刻をタップで編集</span>'
+        +'<button id="btn-bulk-approve" style="margin-left:auto;background:#0369a1;color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #e5e7eb;">'
@@ -1189,6 +1200,21 @@ function render(){
         saveData("tc5_approvals",approvals);render();
       };
     });
+
+    // 一括承認
+    var bulkApproveBtn=document.getElementById("btn-bulk-approve");
+    if(bulkApproveBtn)bulkApproveBtn.onclick=function(){
+      if(!confirm("表示中の日付の未承認データをすべて承認します。よろしいですか？"))return;
+      var targets=allStaffSorted.filter(function(s){
+        var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
+        return sr.length>0&&!approvals[selDate+"__"+s.name];
+      });
+      if(!targets.length){alert("承認済みでないデータはありません");return;}
+      targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
+      saveData("tc5_approvals",approvals);
+      alert(targets.length+"件を承認しました");
+      render();
+    };
 
     // 引き戻し
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
