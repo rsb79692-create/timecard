@@ -1229,7 +1229,13 @@ function render(){
         docListHtml='<div class="admin-card"><div class="empty">アップロード済みの資料がありません</div></div>';
       } else {
         docListHtml='<div class="admin-card">'
-          +'<div class="admin-title">アップロード済み（'+docList.length+'件）</div>'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+          +'<div class="admin-title" style="margin-bottom:0;">アップロード済み（'+docList.length+'件）</div>'
+          +'<div style="display:flex;gap:6px;">'
+          +'<button onclick="bulkDownloadDocuments()" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL</button>'
+          +'<button onclick="bulkDeleteDocuments()" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括削除</button>'
+          +'</div>'
+          +'</div>'
           +docList.map(function(d){
             var icon=extIconsA[d.fileType]||'📎';
             var sizeStr=d.fileSize<1048576?Math.round(d.fileSize/1024)+'KB':Math.round(d.fileSize/1048576*10)/10+'MB';
@@ -1801,6 +1807,14 @@ function saveFacilities(){
 }
 // ===== 資料管理 =====
 function downloadFile(url,fileName){
+  var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
+  if(isIOS){
+    // iOS Safariは a.download 非対応のため新しいタブで開く
+    showAlert('iOSでは直接開きます。\n画面長押し→「ダウンロード」または共有メニューから保存してください。',function(){
+      window.open(url,'_blank');
+    });
+    return;
+  }
   fetch(url)
     .then(function(res){return res.blob();})
     .then(function(blob){
@@ -1811,6 +1825,32 @@ function downloadFile(url,fileName){
       URL.revokeObjectURL(a.href);
     })
     .catch(function(){showAlert('ダウンロードに失敗しました');});
+}
+function bulkDownloadDocuments(){
+  if(!docList.length)return;
+  var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
+  showConfirm('全'+docList.length+'件の資料をダウンロードします。よろしいですか？',function(){
+    if(isIOS){showAlert('iOSでは一括ダウンロードに対応していません。\n個別にダウンロードしてください。');return;}
+    docList.forEach(function(d,i){
+      setTimeout(function(){downloadFile(d.downloadURL,d.fileName);},i*600);
+    });
+  });
+}
+function bulkDeleteDocuments(){
+  if(!docList.length)return;
+  showConfirm('全'+docList.length+'件の資料を削除します。この操作は取り消せません。\nよろしいですか？',function(){
+    Promise.all(docList.map(function(d){
+      return fetch(DB_DOCS+'/'+d.id+'/isActive.json',{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(false)
+      });
+    })).then(function(){
+      showAlert('全'+docList.length+'件を削除しました',function(){setTab('documents');});
+    }).catch(function(){
+      showAlert('削除に失敗した項目があります');
+      setTab('documents');
+    });
+  });
 }
 function onDocFileSelect(input){
   var f=input.files[0];
