@@ -962,7 +962,9 @@ function render(){
       var delRecs=dRecs.filter(function(r){return r.deleted;});
       tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
+        +'<button id="btn-date-prev" style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
         +'<input type="date" id="sel-date" value="'+selDate+'" style="font-size:.9rem;">'
+        +'<button id="btn-date-next" style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
         +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
         +'<span style="color:#9ca3af;font-size:.72rem;">※時刻をタップで編集</span>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:#0369a1;color:#fff;border:none;padding:6px 14px;border-radius:8px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
@@ -1300,6 +1302,10 @@ function render(){
     // イベント
     var sd=document.getElementById("sel-date");
     if(sd)sd.onchange=function(){selDate=sd.value;render();};
+    var bdPrev=document.getElementById("btn-date-prev");
+    if(bdPrev)bdPrev.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()-1);selDate=fmtDateKey(d);render();};
+    var bdNext=document.getElementById("btn-date-next");
+    if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
 
     // 時・分セレクトが変わったら即保存
     function saveTimeSelect(el){
