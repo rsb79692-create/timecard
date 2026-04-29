@@ -233,6 +233,7 @@ var selDate=fmtDateKey(today);
 var approvals=loadData("tc5_approvals",{});
 var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
 var selStaffDetail=null;
+var staffDetailFrom="csvPreview";
 var staffHrmTab="在籍中";
 var csvPreviewType=""; // "daily" or "monthly"
 var viewerExpandedStaff=null;
@@ -398,9 +399,14 @@ function render(){
     if(vm)vm.onchange=function(){selMonth=vm.value;viewerExpandedStaff=null;render();};
     var vcDailyBtn=document.getElementById("btn-viewer-csv-daily");
     if(vcDailyBtn)vcDailyBtn.onclick=function(){
-      var vChkKeys={};var vUnapproved=0;
-      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys[k]){vChkKeys[k]=true;if(!approvals[k])vUnapproved++;}});
-      if(vUnapproved>0){showAlert("未承認のデータが"+vUnapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
+      var vChkSeen={};var vAutoKeys=[];
+      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkSeen[k]){vChkSeen[k]=true;if(!approvals[k])vAutoKeys.push(k);}});
+      if(vAutoKeys.length>0){
+        vcDailyBtn.textContent="承認処理中...";
+        vAutoKeys.forEach(function(k){approvals[k]=true;});
+        saveData("tc5_approvals",approvals);
+        vcDailyBtn.textContent="📥 日次CSV";
+      }
       var DAYS_D=["日","月","火","水","木","金","土"];
       var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩開始,休憩終了,実働時間";
       var rows=[];
@@ -423,9 +429,14 @@ function render(){
     };
     var vcBtn=document.getElementById("btn-viewer-csv");
     if(vcBtn)vcBtn.onclick=function(){
-      var vChkKeys2={};var vUnapproved2=0;
-      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkKeys2[k]){vChkKeys2[k]=true;if(!approvals[k])vUnapproved2++;}});
-      if(vUnapproved2>0){showAlert("未承認のデータが"+vUnapproved2+"件あります。すべて承認してからCSVを出力してください。");return;}
+      var vChkSeen2={};var vAutoKeys2=[];
+      vMRecs.filter(function(r){return r.type==="clockIn";}).forEach(function(r){var k=r.date+"__"+r.staff;if(!vChkSeen2[k]){vChkSeen2[k]=true;if(!approvals[k])vAutoKeys2.push(k);}});
+      if(vAutoKeys2.length>0){
+        vcBtn.textContent="承認処理中...";
+        vAutoKeys2.forEach(function(k){approvals[k]=true;});
+        saveData("tc5_approvals",approvals);
+        vcBtn.textContent="📥 月次CSV";
+      }
       var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間";
       var csvRows=vStaff.map(function(s){
         var nm=s.name;
@@ -633,7 +644,7 @@ function render(){
     app.innerHTML=''
       // ① ヘッダー
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'csvPreview\';render();">← 戻る</button>'
+        +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
         +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
         +'<div style="display:flex;align-items:center;gap:8px;">'
           +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #e5e7eb;border-radius:8px;">'+monOpts3+'</select>'
@@ -749,7 +760,7 @@ function render(){
         var ot=Math.max(0,ms-days.length*8*3600000);
         return'<tr class="csv-prev-row" data-empid="'+(s.employeeId||"")+'" data-nm="'+nm+'" data-loc="'+(s.location||"")+'" data-etype="'+(s.employmentType||"")+'" style="border-bottom:1px solid #f3f4f6;height:44px;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(s.employeeId||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;">'+nm+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+nm+'\',\'csvPreview\')" onmouseover="this.style.color=\'#2563eb\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+nm+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+(s.location||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+(s.employmentType||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;">'+days.length+'日</td>'
@@ -782,12 +793,15 @@ function render(){
       });
       dRowsP.sort(function(a,b){return a.date<b.date?-1:a.date>b.date?1:0;});
       tbodyHtmlP=dRowsP.map(function(r,i){
-        var isWknd=new Date(r.date).getDay()===0||new Date(r.date).getDay()===6;
-        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #f3f4f6;height:44px;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;white-space:nowrap;'+(isWknd?"color:#dc2626;font-weight:700;":"color:#374151;")+'">'
+        var dow=new Date(r.date).getDay();
+        var isSun=dow===0,isSat=dow===6;
+        var rowBg=isSun?"#fff1f2":isSat?"#eff6ff":(i%2===1?"#f9fafb":"#fff");
+        var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
+        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #f3f4f6;height:44px;background:'+rowBg+';">'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;white-space:nowrap;color:'+dayColor+';'+((isSun||isSat)?"font-weight:700;":"")+'">'
           +r.date+' ('+r.yobi+')</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(r.empId||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;">'+r.name+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+r.name+'\',\'csvPreview\')" onmouseover="this.style.color=\'#2563eb\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+r.name+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#059669;">'+r.cin+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+r.cout+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:#b45309;">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
@@ -897,7 +911,7 @@ function render(){
         }
         return '<tr style="border-bottom:1px solid #f3f4f6;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';box-shadow:2px 0 4px rgba(0,0,0,.04);">'
-          +'<span style="color:#b45309;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\')">'+nm+'</span>'
+          +'<span style="color:#b45309;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(worked?'<br><span style="font-size:.65rem;color:#b45309;">'+worked+'</span>':"")
           +'</td>'
           +tCell(cin,"clockIn","出","#059669")
@@ -1552,7 +1566,7 @@ function filterCsvPreview(){
   var cnt=document.getElementById("csv-prev-count");
   if(cnt)cnt.textContent="全"+rows.length+"件"+(visible<rows.length?" / 表示"+visible+"件":"");
 }
-function openStaffDetail(nm){selStaffDetail=nm;screen="staffDetail";render();}
+function openStaffDetail(nm,from){selStaffDetail=nm;staffDetailFrom=from||"csvPreview";screen="staffDetail";render();}
 function openHrmEdit(nm){
   var s=nm?staffList.find(function(x){return x.name===nm;}):null;
   var modal=document.getElementById("hrm-modal");
