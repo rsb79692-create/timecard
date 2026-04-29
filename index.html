@@ -1801,7 +1801,16 @@ function saveFacilities(){
 }
 // ===== 資料管理 =====
 function downloadFile(url,fileName){
-  window.open(url+'&response-content-disposition=attachment%3B+filename%3D'+encodeURIComponent(fileName),'_blank');
+  fetch(url)
+    .then(function(res){return res.blob();})
+    .then(function(blob){
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(blob);
+      a.download=fileName;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    })
+    .catch(function(){showAlert('ダウンロードに失敗しました');});
 }
 function onDocFileSelect(input){
   var f=input.files[0];
