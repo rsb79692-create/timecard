@@ -960,10 +960,21 @@ function render(){
           +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
+      var sdParts=selDate.split('-'),sdY=parseInt(sdParts[0]),sdMo=parseInt(sdParts[1]),sdDy=parseInt(sdParts[2]);
+      var sdAllYears=[...new Set(records.map(function(r){return new Date(r.timestamp).getFullYear();}))].sort();
+      var sdThisY=new Date().getFullYear();
+      if(sdAllYears.indexOf(sdThisY)<0)sdAllYears.push(sdThisY);
+      sdAllYears.sort();
+      var sdMaxDay=new Date(sdY,sdMo,0).getDate();
+      var sdYOpts=sdAllYears.map(function(y){return'<option value="'+y+'"'+(y===sdY?' selected':'')+'>'+y+'年</option>';}).join('');
+      var sdMOpts=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMo?' selected':'')+'>'+m+'月</option>';}).join('');
+      var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
       tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<button id="btn-date-prev" style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
-        +'<input type="date" id="sel-date" value="'+selDate+'" style="font-size:.9rem;">'
+        +'<select id="sd-y" style="font-size:.9rem;border:1px solid #e5e7eb;border-radius:6px;padding:3px 4px;">'+sdYOpts+'</select>'
+        +'<select id="sd-m" style="font-size:.9rem;border:1px solid #e5e7eb;border-radius:6px;padding:3px 4px;">'+sdMOpts+'</select>'
+        +'<select id="sd-d" style="font-size:.9rem;border:1px solid #e5e7eb;border-radius:6px;padding:3px 4px;">'+sdDOpts+'</select>'
         +'<button id="btn-date-next" style="background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
         +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
         +'<span style="color:#9ca3af;font-size:.72rem;">※時刻をタップで編集</span>'
@@ -1300,8 +1311,17 @@ function render(){
       +'</div>'+tc;
 
     // イベント
-    var sd=document.getElementById("sel-date");
-    if(sd)sd.onchange=function(){selDate=sd.value;render();};
+    function applySelDate(){
+      var y=parseInt(document.getElementById("sd-y")?.value);
+      var m=parseInt(document.getElementById("sd-m")?.value);
+      var d=parseInt(document.getElementById("sd-d")?.value);
+      if(!y||!m||!d)return;
+      var maxD=new Date(y,m,0).getDate();
+      if(d>maxD)d=maxD;
+      selDate=y+"-"+pad(m)+"-"+pad(d);
+      render();
+    }
+    ["sd-y","sd-m","sd-d"].forEach(function(id){var el=document.getElementById(id);if(el)el.onchange=applySelDate;});
     var bdPrev=document.getElementById("btn-date-prev");
     if(bdPrev)bdPrev.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()-1);selDate=fmtDateKey(d);render();};
     var bdNext=document.getElementById("btn-date-next");
