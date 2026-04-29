@@ -469,7 +469,7 @@ function render(){
       +'<div class="label">スタッフを選択してください</div>'
       +'<div class="yomi-tabs">'+tabsHTML+'</div>'
       +'<div class="staff-grid">'+staffHTML+'</div>'
-      +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
+      +(urlToken?'':'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>');
     return;
   }
 
