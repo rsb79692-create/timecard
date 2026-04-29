@@ -9,6 +9,7 @@
 <meta name="apple-mobile-web-app-title" content="穂乃味打刻">
 <meta name="theme-color" content="#f8f5f0">
 <link rel="manifest" href="manifest.json">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <title>穂乃味 タイムカード</title>
 <script>
 // ===== Firebase REST API設定 =====
@@ -1245,7 +1246,7 @@ function render(){
           +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
           +'<div class="admin-title" style="margin-bottom:0;">アップロード済み（'+docList.length+'件）</div>'
           +'<div style="display:flex;gap:6px;">'
-          +'<button onclick="bulkDownloadDocuments()" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL</button>'
+          +'<button onclick="bulkDownloadDocuments()" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL(ZIP)</button>'
           +'<button onclick="bulkDeleteDocuments()" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括削除</button>'
           +'</div>'
           +'</div>'
@@ -1854,11 +1855,34 @@ function downloadFile(url,fileName){
 }
 function bulkDownloadDocuments(){
   if(!docList.length)return;
-  var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
-  showConfirm('全'+docList.length+'件の資料をダウンロードします。よろしいですか？',function(){
-    if(isIOS){showAlert('iOSでは一括ダウンロードに対応していません。\n個別にダウンロードしてください。');return;}
-    docList.forEach(function(d,i){
-      setTimeout(function(){downloadFile(d.downloadURL,d.fileName);},i*600);
+  showConfirm('全'+docList.length+'件の資料をZIPで一括ダウンロードします。よろしいですか？',function(){
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML='<div style="background:#fff;border-radius:12px;padding:24px 32px;text-align:center;">'
+      +'<div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div>'
+      +'<div style="font-size:.85rem;color:#6b7280;">しばらくお待ちください</div></div>';
+    document.body.appendChild(ov);
+    var zip=new JSZip();
+    Promise.all(docList.map(function(d){
+      return fetch(d.downloadURL)
+        .then(function(res){return res.blob();})
+        .then(function(blob){zip.file(d.fileName,blob);})
+        .catch(function(){});
+    }))
+    .then(function(){return zip.generateAsync({type:'blob'});})
+    .then(function(content){
+      if(ov.parentNode)document.body.removeChild(ov);
+      var now=new Date();
+      var fname='資料_'+now.getFullYear()+pad(now.getMonth()+1)+pad(now.getDate())+'.zip';
+      var a=document.createElement('a');
+      a.href=URL.createObjectURL(content);
+      a.download=fname;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    })
+    .catch(function(){
+      if(ov.parentNode)document.body.removeChild(ov);
+      showAlert('一括ダウンロードに失敗しました');
     });
   });
 }
