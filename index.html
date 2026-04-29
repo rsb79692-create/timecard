@@ -618,9 +618,8 @@ function render(){
           +tCell(be,"breakEnd")
           +'</span>';
       var approveBtn=approved2
-        ?'<span style="background:#dcfce7;color:#16a34a;font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:12px;">承認済</span>'
-         +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="display:inline-block;margin-left:4px;background:transparent;color:#9ca3af;border:none;font-size:.68rem;cursor:pointer;font-family:inherit;">取消</button>'
-        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:12px;cursor:pointer;font-family:inherit;">承認</button>':"");
+        ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e5e7eb;color:#6b7280;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:12px;cursor:pointer;font-family:inherit;">引き戻し</button>'
+        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#2563eb;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:12px;cursor:pointer;font-family:inherit;">承認</button>':"");
       return'<tr style="height:44px;border-bottom:1px solid #f3f4f6;background:'+bgRow+';">'
         +'<td style="padding:0 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:0 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
@@ -634,9 +633,12 @@ function render(){
     app.innerHTML=''
       // ① ヘッダー
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'admin\';render();">← 戻る</button>'
+        +'<button style="background:#e5e7eb;color:#1a1a1a;font-size:.85rem;padding:7px 14px;border-radius:10px;border:none;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'csvPreview\';render();">← 戻る</button>'
         +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
-        +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #e5e7eb;border-radius:8px;">'+monOpts3+'</select>'
+        +'<div style="display:flex;align-items:center;gap:8px;">'
+          +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #e5e7eb;border-radius:8px;">'+monOpts3+'</select>'
+          +'<button id="btn-bulk-approve-detail" style="background:#2563eb;color:#fff;border:none;padding:7px 14px;border-radius:10px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
+        +'</div>'
       +'</div>'
       // ② サマリーバー
       +'<div style="background:#fff;border-radius:12px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #e5e7eb;">'
@@ -679,6 +681,16 @@ function render(){
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveData("tc5_approvals",approvals);render();};
     });
+    var bulkBtn=document.getElementById("btn-bulk-approve-detail");
+    if(bulkBtn)bulkBtn.onclick=function(){
+      showConfirm("この月の未承認データをすべて承認します。よろしいですか？",function(){
+        var unapprovedDates=[...new Set(mRecsStaff.filter(function(r){return !r.deleted&&!approvals[r.date+"__"+nm];}).map(function(r){return r.date;}))];
+        if(!unapprovedDates.length){showAlert("承認済みでないデータはありません");return;}
+        unapprovedDates.forEach(function(dk){approvals[dk+"__"+nm]=true;});
+        saveData("tc5_approvals",approvals);
+        showAlert(unapprovedDates.length+"件承認しました",function(){render();});
+      });
+    };
     document.querySelectorAll(".time-cell").forEach(function(el){
       el.onclick=function(){
         var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
