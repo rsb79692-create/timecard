@@ -484,6 +484,14 @@ function render(){
               var now3=new Date();
               var fname2='資料_'+now3.getFullYear()+pad(now3.getMonth()+1)+pad(now3.getDate())+'.zip';
               var a2=document.createElement('a');a2.href=URL.createObjectURL(content);a2.download=fname2;a2.click();URL.revokeObjectURL(a2.href);
+              Promise.all(docs.map(function(d){
+                return fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)});
+              })).then(function(){
+                var secEl=document.getElementById('viewer-docs-section');
+                if(secEl)secEl.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
+                var bBtn=document.getElementById('btn-viewer-bulk-dl');
+                if(bBtn)bBtn.style.display='none';
+              }).catch(function(){});
             }).catch(function(){if(ov2.parentNode)document.body.removeChild(ov2);showAlert('一括ダウンロードに失敗しました');});
           });
         };
@@ -506,7 +514,7 @@ function render(){
           +'</div></div>'
           +'<div style="display:flex;gap:8px;">'
           +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeName+'\')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
+          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+safeName+'\',\''+d.id+'\')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>'
           +'</div>';
       }).join('');
@@ -1906,6 +1914,33 @@ function saveFacilities(){
   }).catch(function(e){console.error("facilities save error",e);});
 }
 // ===== 資料管理 =====
+function viewerDownloadAndDelete(url,fileName,docId){
+  downloadFile(url,fileName);
+  setTimeout(function(){
+    fetch(DB_DOCS+'/'+docId+'/isActive.json',{
+      method:'PUT',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(false)
+    }).then(function(){
+      // DOMから該当アイテムを消す
+      var secEl=document.getElementById('viewer-docs-section');
+      if(secEl){
+        var items=secEl.querySelectorAll('div[data-docid="'+docId+'"]');
+        items.forEach(function(el){el.parentNode&&el.parentNode.removeChild(el);});
+        // ボタンのonclick経由なので親のdivを探す
+        var allItems=secEl.querySelectorAll('[onclick*="'+docId+'"]');
+        allItems.forEach(function(btn){
+          var wrap=btn.closest('div[style*="border:1px solid"]');
+          if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);
+        });
+        if(!secEl.querySelector('div[style*="border:1px solid"]')){
+          secEl.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
+          var bBtn=document.getElementById('btn-viewer-bulk-dl');
+          if(bBtn)bBtn.style.display='none';
+        }
+      }
+    }).catch(function(){});
+  },1000);
+}
 function downloadFile(url,fileName){
   var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
   if(isIOS){
