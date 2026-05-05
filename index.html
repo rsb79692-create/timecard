@@ -243,6 +243,7 @@ var staffHrmTab="在籍中";
 var csvPreviewType=""; // "daily" or "monthly"
 var viewerExpandedStaff=null;
 var docList=[];var docLoading=false;var selectedDocFile=null;
+var staffUploadFile=null;var staffUploadMsg=null;
 var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=masterFacilities.map(function(f){return f.name;});
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
@@ -589,7 +590,24 @@ function render(){
       )
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span>'+(worked?'<span class="hist-worked">実働 '+worked+'</span>':"")+'</div>'
-      +histHTML+'</div>';
+      +histHTML+'</div>'
+      +'<div style="margin-top:16px;background:#fff;border-radius:16px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06);">'
+      +'<div style="font-weight:700;font-size:.95rem;margin-bottom:12px;">📎 書類をアップロード</div>'
+      +(staffUploadMsg
+        ?'<div style="background:#d1fae5;border:1px solid #10b981;border-radius:10px;padding:12px;text-align:center;font-weight:700;color:#065f46;font-size:.95rem;">✅ '+staffUploadMsg+'</div>'
+        :'<label for="staff-file-input" style="display:block;background:#f0f9ff;border:2px dashed #93c5fd;border-radius:10px;padding:16px;text-align:center;cursor:pointer;margin-bottom:10px;">'
+        +(staffUploadFile
+          ?'<div style="font-size:.9rem;color:#374151;font-weight:700;">📄 '+staffUploadFile.name+'</div><div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">タップで変更</div>'
+          :'<div style="font-size:1.8rem;margin-bottom:6px;">📷</div><div style="font-size:.9rem;font-weight:700;color:#374151;">カメラ撮影 or ファイルを選択</div><div style="font-size:.75rem;color:#9ca3af;margin-top:2px;">画像・PDF対応</div>'
+        )
+        +'</label>'
+        +'<input type="file" id="staff-file-input" style="display:none;" accept="image/*,application/pdf" capture="environment" onchange="onStaffFileSelect(this)">'
+        +(staffUploadFile
+          ?'<button id="btn-staff-upload" onclick="uploadStaffDocument()" style="background:#059669;color:#fff;border:none;border-radius:10px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">送信する</button>'
+          :''
+        )
+      )
+      +'</div>';
     return;
   }
 
@@ -1236,41 +1254,55 @@ function render(){
 
     if(adminTab==="documents"){
       var extIconsA={pdf:'📄',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',png:'🖼',jpg:'🖼',jpeg:'🖼'};
+      var adminDocs=docList.filter(function(d){return !d.isStaffUpload;});
+      var staffDocs=docList.filter(function(d){return !!d.isStaffUpload;});
+      function renderDocItem(d,showUploader){
+        var icon=extIconsA[d.fileType]||'📎';
+        var sizeStr=d.fileSize<1048576?Math.round(d.fileSize/1024)+'KB':Math.round(d.fileSize/1048576*10)/10+'MB';
+        var date=d.uploadedAt?new Date(d.uploadedAt).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'';
+        return '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;background:#fafafa;">'
+          +'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">'
+          +'<span style="font-size:1.5rem;flex-shrink:0;margin-top:2px;">'+icon+'</span>'
+          +'<div style="flex:1;min-width:0;">'
+          +'<div style="font-weight:700;font-size:.92rem;">'+d.title+'</div>'
+          +'<div style="font-size:.72rem;color:#9ca3af;margin-top:2px;word-break:break-all;">'
+          +(showUploader?'提出者: <b style="color:#374151;">'+d.uploadedBy+'</b> &nbsp;':'')
+          +d.fileName+' ('+sizeStr+') &nbsp;'+date+'</div>'
+          +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#6b7280;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
+          +'</div>'
+          +'</div>'
+          +'<div style="display:flex;gap:8px;">'
+          +'<button onclick="downloadFile(\''+d.downloadURL+'\',\''+d.fileName+'\')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
+          +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:none;padding:8px 14px;border-radius:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
+          +'</div>'
+          +'</div>';
+      }
       var docListHtml='';
       if(docLoading){
         docListHtml='<div class="admin-card"><div class="empty">読み込み中...</div></div>';
-      } else if(!docList.length){
+      } else if(!adminDocs.length){
         docListHtml='<div class="admin-card"><div class="empty">アップロード済みの資料がありません</div></div>';
       } else {
         docListHtml='<div class="admin-card">'
           +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-          +'<div class="admin-title" style="margin-bottom:0;">アップロード済み（'+docList.length+'件）</div>'
+          +'<div class="admin-title" style="margin-bottom:0;">アップロード済み（'+adminDocs.length+'件）</div>'
           +'<div style="display:flex;gap:6px;">'
           +'<button onclick="bulkDownloadDocuments()" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL(ZIP)</button>'
           +'<button onclick="bulkDeleteDocuments()" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括削除</button>'
           +'</div>'
           +'</div>'
-          +docList.map(function(d){
-            var icon=extIconsA[d.fileType]||'📎';
-            var sizeStr=d.fileSize<1048576?Math.round(d.fileSize/1024)+'KB':Math.round(d.fileSize/1048576*10)/10+'MB';
-            var date=d.uploadedAt?new Date(d.uploadedAt).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'';
-            return '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;background:#fafafa;">'
-              +'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">'
-              +'<span style="font-size:1.5rem;flex-shrink:0;margin-top:2px;">'+icon+'</span>'
-              +'<div style="flex:1;min-width:0;">'
-              +'<div style="font-weight:700;font-size:.92rem;">'+d.title+'</div>'
-              +'<div style="font-size:.72rem;color:#9ca3af;margin-top:2px;word-break:break-all;">'+d.fileName+' ('+sizeStr+') &nbsp;'+date+'</div>'
-              +(d.memo?'<div style="font-size:.78rem;color:#6b7280;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
-              +'</div>'
-              +'</div>'
-              +'<div style="display:flex;gap:8px;">'
-              +'<button onclick="downloadFile(\''+d.downloadURL+'\',\''+d.fileName+'\')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
-              +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:none;padding:8px 14px;border-radius:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
-              +'</div>'
-              +'</div>';
-          }).join('')
+          +adminDocs.map(function(d){return renderDocItem(d,false);}).join('')
           +'</div>';
       }
+      var staffDocListHtml='<div class="admin-card">'
+        +'<div class="admin-title" style="margin-bottom:12px;">👤 スタッフ提出書類'+(staffDocs.length?' ('+staffDocs.length+'件)':'')+'</div>'
+        +(docLoading
+          ?'<div class="empty">読み込み中...</div>'
+          :!staffDocs.length
+            ?'<div class="empty">提出済みの書類がありません</div>'
+            :staffDocs.map(function(d){return renderDocItem(d,true);}).join('')
+        )
+        +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">📤 資料アップロード</div>'
         +'<div id="doc-drop-area" style="border:2px dashed #d1d5db;border-radius:12px;padding:24px;text-align:center;cursor:pointer;background:#fafafa;transition:border-color .2s,background .2s;margin-bottom:12px;"'
@@ -1294,7 +1326,8 @@ function render(){
         +'</div>'
         +'<button id="btn-doc-upload" style="background:#b45309;color:#fff;border:none;padding:13px;border-radius:12px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">アップロード</button>'
         +'</div>'
-        +docListHtml;
+        +docListHtml
+        +staffDocListHtml;
     }
 
     app.innerHTML='<div class="admin-sticky-bar">'
@@ -1733,7 +1766,7 @@ function closeHrmModal(){
   var m=document.getElementById("hrm-modal");if(m)m.style.display="none";
 }
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
-function goHome(){staffName=null;screen="home";render();}
+function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;screen="home";render();}
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
@@ -1774,6 +1807,7 @@ function sTap(v){
   if(v==="C")staffPinInput=staffPinInput.slice(0,-1);
   else if(staffPinInput.length<4)staffPinInput+=v;
   render();
+  if(staffPinInput.length===4){setTimeout(sOk,150);}
 }
 function sOk(){
   if(staffPins[staffName]===String(staffPinInput)){
@@ -1793,6 +1827,8 @@ function sNewTap(v){
     else if(staffPinConfirm.length<4)staffPinConfirm+=v;
   }
   render();
+  if(staffPinStep===1&&staffPinInput.length===4){setTimeout(sNewOk,150);}
+  else if(staffPinStep===2&&staffPinConfirm.length===4){setTimeout(sNewOk,150);}
 }
 function sNewOk(){
   if(staffPinStep===1){
@@ -1993,6 +2029,66 @@ function uploadDocument(){
     showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
     if(btn){btn.disabled=false;btn.textContent='アップロード';}
     if(progressWrap)progressWrap.style.display='none';
+  };
+  xhr.send(f);
+}
+// ===== スタッフ書類アップロード =====
+function onStaffFileSelect(input){
+  var f=input.files[0];
+  if(!f)return;
+  if(f.size>20*1024*1024){showAlert('ファイルサイズは20MB以下にしてください');input.value='';return;}
+  staffUploadFile=f;
+  render();
+}
+function uploadStaffDocument(){
+  var f=staffUploadFile;
+  if(!f){showAlert('ファイルを選択してください');return;}
+  var now2=new Date();
+  var dateStr=now2.getFullYear()+'-'+pad(now2.getMonth()+1)+'-'+pad(now2.getDate());
+  var timeStr=pad(now2.getHours())+pad(now2.getMinutes());
+  var renamedName=staffName+'_'+dateStr+'_'+timeStr+'_'+f.name;
+  var ext=(f.name.split('.').pop()||'').toLowerCase();
+  var docId='sdoc'+Date.now();
+  var storagePath='staff_uploads/'+docId+'_'+renamedName;
+  var encodedPath=encodeURIComponent(storagePath);
+  var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
+  var btn=document.getElementById('btn-staff-upload');
+  if(btn){btn.disabled=true;btn.textContent='送信中...';}
+  var xhr=new XMLHttpRequest();
+  xhr.open('POST',uploadUrl);
+  xhr.setRequestHeader('Content-Type',f.type||'application/octet-stream');
+  xhr.onload=function(){
+    if(xhr.status===200){
+      var resp=JSON.parse(xhr.responseText);
+      var token=resp.downloadTokens||'';
+      var downloadURL=STORAGE_BASE+'/'+encodedPath+'?alt=media'+(token?'&token='+token:'');
+      var metadata={
+        title:renamedName,fileName:renamedName,fileType:ext,fileSize:f.size,
+        storageRef:storagePath,downloadURL:downloadURL,
+        uploadedAt:now2.toISOString(),uploadedBy:staffName,isStaffUpload:true,isActive:true
+      };
+      fetch(DB_DOCS+'/'+docId+'.json',{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(metadata)
+      }).then(function(){
+        staffUploadFile=null;
+        staffUploadMsg='送信しました';
+        render();
+        setTimeout(function(){staffUploadMsg=null;render();},3000);
+      }).catch(function(){
+        showAlert('メタデータの保存に失敗しました');
+        if(btn){btn.disabled=false;btn.textContent='送信する';}
+      });
+    } else {
+      var errMsg='アップロードに失敗しました（'+xhr.status+'）';
+      if(xhr.status===403||xhr.status===401)errMsg+='\nFirebase Storage のルールを確認してください';
+      showAlert(errMsg);
+      if(btn){btn.disabled=false;btn.textContent='送信する';}
+    }
+  };
+  xhr.onerror=function(){
+    showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
+    if(btn){btn.disabled=false;btn.textContent='送信する';}
   };
   xhr.send(f);
 }
