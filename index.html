@@ -403,7 +403,10 @@ function render(){
       +'<tbody>'+(vRows||'<tr><td colspan="7" style="padding:20px;text-align:center;color:#9ca3af;">データがありません</td></tr>')+'</tbody>'
       +'</table></div>'
       +'<div style="margin-top:24px;padding:0 4px;">'
-      +'<div style="font-size:1rem;font-weight:900;color:#1a1a1a;margin-bottom:12px;">資料</div>'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+      +'<div style="font-size:1rem;font-weight:900;color:#1a1a1a;">資料</div>'
+      +'<button id="btn-viewer-bulk-dl" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:5px 12px;border-radius:8px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;display:none;">📦 一括DL(ZIP)</button>'
+      +'</div>'
       +'<div id="viewer-docs-section" style="color:#9ca3af;font-size:.85rem;text-align:center;padding:20px;">読み込み中...</div>'
       +'</div>';
     var vm=document.getElementById("viewer-month");
@@ -463,19 +466,48 @@ function render(){
     loadDocumentList(function(docs){
       var el=document.getElementById("viewer-docs-section");
       if(!el)return;
+      var bulkBtn=document.getElementById("btn-viewer-bulk-dl");
       if(!docs.length){el.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';return;}
+      if(bulkBtn){
+        bulkBtn.style.display='';
+        bulkBtn.onclick=function(){
+          showConfirm('全'+docs.length+'件の資料をZIPで一括ダウンロードします。よろしいですか？',function(){
+            var ov2=document.createElement('div');
+            ov2.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+            ov2.innerHTML='<div style="background:#fff;border-radius:12px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#6b7280;">しばらくお待ちください</div></div>';
+            document.body.appendChild(ov2);
+            var zip2=new JSZip();
+            Promise.all(docs.map(function(d){
+              return fetch(d.downloadURL).then(function(res){return res.blob();}).then(function(blob){zip2.file(d.fileName,blob);}).catch(function(){});
+            })).then(function(){return zip2.generateAsync({type:'blob'});}).then(function(content){
+              if(ov2.parentNode)document.body.removeChild(ov2);
+              var now3=new Date();
+              var fname2='資料_'+now3.getFullYear()+pad(now3.getMonth()+1)+pad(now3.getDate())+'.zip';
+              var a2=document.createElement('a');a2.href=URL.createObjectURL(content);a2.download=fname2;a2.click();URL.revokeObjectURL(a2.href);
+            }).catch(function(){if(ov2.parentNode)document.body.removeChild(ov2);showAlert('一括ダウンロードに失敗しました');});
+          });
+        };
+      }
       var extIconsV={pdf:'📄',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',png:'🖼',jpg:'🖼',jpeg:'🖼'};
       el.innerHTML=docs.map(function(d){
         var icon=extIconsV[d.fileType]||'📎';
         var sizeStr=d.fileSize<1048576?Math.round(d.fileSize/1024)+'KB':Math.round(d.fileSize/1048576*10)/10+'MB';
         var date=d.uploadedAt?new Date(d.uploadedAt).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'';
-        return '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;background:#fff;display:flex;align-items:center;gap:10px;">'
+        var ft=(d.fileType||'').toLowerCase();
+        var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
+        var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
+        var safeName=(d.fileName||'').replace(/'/g,'&#39;');
+        return '<div style="border:1px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:8px;background:#fff;">'
+          +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
           +'<span style="font-size:1.4rem;flex-shrink:0;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
           +'<div style="font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+d.title+'</div>'
           +'<div style="font-size:.72rem;color:#9ca3af;margin-top:2px;">'+d.fileName+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
+          +'</div></div>'
+          +'<div style="display:flex;gap:8px;">'
+          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeName+'\')" style="flex:1;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>'
-          +'<button onclick="downloadFile(\''+d.downloadURL+'\',\''+d.fileName+'\')" style="flex-shrink:0;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>';
       }).join('');
     });
