@@ -44,10 +44,10 @@ async function getAuthToken(){
       }
     }catch(e){console.warn("token refresh failed, re-signing in",e);}
   }
-  var r2=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInAnonymously?key="+FB_API_KEY,{
+  var r2=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key="+FB_API_KEY,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
-    body:"{}"
+    body:JSON.stringify({returnSecureToken:true})
   });
   var d2=await r2.json();
   if(!d2.idToken)throw new Error("Anonymous sign-in failed: "+(d2.error&&d2.error.message||"unknown"));
