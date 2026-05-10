@@ -2213,6 +2213,7 @@ function handleDocDrop(event){
   if(titleEl&&!titleEl.value){titleEl.value=f.name.replace(/\.[^.]+$/,'');}
 }
 function uploadDocument(){
+  if(demoMode){showAlert('デモモードではアップロードできません');return;}
   var f=selectedDocFile;
   if(!f){showAlert('ファイルを選択してください');return;}
   var title=(document.getElementById('doc-title')||{value:''}).value.trim();
