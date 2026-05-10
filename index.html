@@ -146,7 +146,8 @@ function showConfirm(msg,onOK,onCancel){showModal({title:"確認",message:msg,al
 
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
-var ADMIN_PIN=localStorage.getItem("tc_admin_pin")||""; // Firebaseのconfig/adminPinから読み込む
+var ADMIN_PIN=""; // メモリのみ保持（localStorageには保存しない）
+var ADMIN_PIN_HASH=""; // SHA-256ハッシュ（Firebase config/adminPinHashから）
 var DEFAULT_FACILITIES=[
   {name:"ナナイロ",token:"nanairo1214"},{name:"ココラ",token:"kokora1214"},
   {name:"ハーベスト",token:"harvest1214"},{name:"ミュゲ貝塚",token:"miuge-kaizuka1214"},
@@ -164,21 +165,27 @@ if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
 var effectiveToken=urlToken||localStorage.getItem("facilityToken")||"";
 var tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
 var facilityName=VALID_TOKENS[effectiveToken]||"";
-const VIEWER_TOKEN="roumushi2026";
 var viewerParam=new URLSearchParams(location.search).get("viewer");
-var viewerMode=viewerParam===VIEWER_TOKEN;
-var viewerInvalid=viewerParam!==null&&!viewerMode;
-var ADMIN_TOKEN=localStorage.getItem("tc_admin_token")||"honomi2026";
+var viewerPending=viewerParam!==null; // Firebase認証待ち
+var viewerMode=false;
+var viewerInvalid=false;
+var viewerTokenConfig=""; // Firebase config/viewerTokenから読み込む
+var ADMIN_TOKEN=""; // Firebase config/adminTokenから読み込む（固定初期値なし）
 var adminParam=new URLSearchParams(location.search).get("admin");
 var adminUrlUsed=adminParam!==null;
 var adminTokenValid=false;
 var adminTokenInvalid=false;
+var isAdminAuthenticated=false; // 管理者認証済みフラグ
 var demoParam=new URLSearchParams(location.search).get("demo");
 var demoUrlUsed=demoParam!==null;
 var demoMode=false;
 var demoExpired=false;
 var demoInvalid=false;
 var demoAccessConfig=null;
+// 既存の機密データをlocalStorageから削除（Phase 1-B 移行処理）
+localStorage.removeItem("tc5_pins");
+localStorage.removeItem("tc_admin_pin");
+localStorage.removeItem("tc_admin_token");
 const DEF_STAFF=[
   {name:"谷村",yomi:"たにむら"},{name:"茂野",yomi:"しげの"},{name:"吉田",yomi:"よしだ"},
   {name:"中島",yomi:"なかしま"},{name:"大城",yomi:"おおしろ"},{name:"谷口",yomi:"たにぐち"},
@@ -217,9 +224,11 @@ function calcMs(rs){
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
+var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/viewerToken"];
 function saveData(k,v){
-  try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
-  // Firebaseにも同期
+  if(SENSITIVE_KEYS.indexOf(k)<0){
+    try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
+  }
   saveToFirebase(k, v);
 }
 
@@ -227,7 +236,7 @@ function saveData(k,v){
 var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
 var staffList=loadData("tc5_staff",DEF_STAFF);
-var staffPins=loadData("tc5_pins",{});  // スタッフPIN管理
+var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageには保存しない）
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
@@ -261,6 +270,23 @@ function render(){
   var now=new Date();
   var app=document.getElementById("app");
   app.className=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode)?"wrap admin-mode":"wrap";
+
+  // ── 閲覧トークン認証待ち（Firebase読込中）──
+  if(viewerPending){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
+      +'</div>';
+    return;
+  }
+
+  // ── 管理系画面の認証ガード ──
+  if((screen==="admin"||screen==="csvPreview"||screen==="staffDetail")&&!isAdminAuthenticated&&!demoMode){
+    screen="home";
+    render();
+    return;
+  }
 
   // ── 閲覧専用トークン不正 ──
   if(viewerInvalid){
@@ -485,7 +511,10 @@ function render(){
               var fname2='資料_'+now3.getFullYear()+pad(now3.getMonth()+1)+pad(now3.getDate())+'.zip';
               var a2=document.createElement('a');a2.href=URL.createObjectURL(content);a2.download=fname2;a2.click();URL.revokeObjectURL(a2.href);
               Promise.all(docs.map(function(d){
-                return fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)});
+                return Promise.all([
+                  fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+                  fetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+                ]);
               })).then(function(){
                 var secEl=document.getElementById('viewer-docs-section');
                 if(secEl)secEl.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
@@ -659,7 +688,7 @@ function render(){
       +'<div style="color:#9ca3af;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
-      +(!ADMIN_PIN?'<div style="color:#d97706;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
+      +(!adminPinReady()?'<div style="color:#d97706;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
       +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">⌫</button>'
@@ -1262,18 +1291,26 @@ function render(){
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者PIN設定</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:12px;">状態: <strong style="color:'+(ADMIN_PIN?"#059669":"#dc2626")+';">'+(ADMIN_PIN?"設定済み":"未設定（ログイン不可）")+'</strong></div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:12px;">状態: <strong style="color:'+(adminPinReady()?"#059669":"#dc2626")+';">'+(adminPinReady()?"設定済み（ハッシュ化済み）":"未設定（ログイン不可）")+'</strong></div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
         +'<button id="btn-change-pin" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:#059669;font-family:monospace;">'+ADMIN_TOKEN+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">?admin='+ADMIN_TOKEN+' でPINなしアクセス可</div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN?"#059669":"#dc2626")+';font-family:monospace;">'+(ADMIN_TOKEN||"未設定（URLログイン不可）")+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' でPINなしアクセス可':'設定がないと管理者URLログインは使用不可')+'</div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'</div></div>'
+        +'<div class="admin-card">'
+        +'<div class="admin-title">閲覧専用トークン（労務士向け）</div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(viewerTokenConfig?"#059669":"#dc2626")+';font-family:monospace;">'+(viewerTokenConfig||"未設定（閲覧URL使用不可）")+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(viewerTokenConfig?'?viewer='+viewerTokenConfig+' でアクセス可':'設定がないと閲覧URLは使用不可')+'</div>'
+        +'<div style="display:flex;gap:8px;">'
+        +'<input id="new-viewer-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
+        +'<button id="btn-change-viewer-token" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">デモアクセス管理</div>'
@@ -1684,18 +1721,16 @@ function render(){
     var changePinBtn=document.getElementById("btn-change-pin");
     if(changePinBtn)changePinBtn.onclick=function(){
       var v=(document.getElementById("new-admin-pin")?.value||"").trim();
-      // ※ Firebase の config/adminPin も8桁で設定し直してください
       if(!/^\d{8}$/.test(v)){showAlert("PINは数字8桁で入力してください");return;}
-      ADMIN_PIN=v;
-      localStorage.setItem("tc_admin_pin",v);
-      fetch(FB_URL+"/config/adminPin.json",{
-        method:"PUT",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(v)
-      }).then(function(){showAlert("PINを変更しました");})
-        .catch(function(){showAlert("Firebase保存に失敗しました");});
-      document.getElementById("new-admin-pin").value="";
-      render();
+      hashPin(v).then(function(h){
+        ADMIN_PIN_HASH=h;ADMIN_PIN="";
+        fetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
+          .then(function(){return fetch(FB_URL+"/config/adminPin.json",{method:"DELETE"});})
+          .then(function(){showAlert("PINを変更しました（ハッシュ化済み）");})
+          .catch(function(){showAlert("Firebase保存に失敗しました");});
+        document.getElementById("new-admin-pin").value="";
+        render();
+      });
     };
     // 管理者トークン変更
     var changeTokenBtn=document.getElementById("btn-change-token");
@@ -1703,7 +1738,6 @@ function render(){
       var v=(document.getElementById("new-admin-token")?.value||"").trim();
       if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
       ADMIN_TOKEN=v;
-      localStorage.setItem("tc_admin_token",v);
       fetch(FB_URL+"/config/adminToken.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
@@ -1711,6 +1745,21 @@ function render(){
       }).then(function(){showAlert("管理者トークンを更新しました");})
         .catch(function(){showAlert("Firebase保存に失敗しました");});
       document.getElementById("new-admin-token").value="";
+      render();
+    };
+    // 閲覧専用トークン変更
+    var changeViewerTokenBtn=document.getElementById("btn-change-viewer-token");
+    if(changeViewerTokenBtn)changeViewerTokenBtn.onclick=function(){
+      var v=(document.getElementById("new-viewer-token")?.value||"").trim();
+      if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
+      viewerTokenConfig=v;
+      fetch(FB_URL+"/config/viewerToken.json",{
+        method:"PUT",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(v)
+      }).then(function(){showAlert("閲覧トークンを更新しました");})
+        .catch(function(){showAlert("Firebase保存に失敗しました");});
+      document.getElementById("new-viewer-token").value="";
       render();
     };
     // デモアクセス設定
@@ -1791,7 +1840,7 @@ function openHrmEdit(nm){
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
-    pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+(nm&&staffPins[nm]?staffPins[nm]:"未設定")+'</strong>';
+    pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+(nm&&staffPins[nm]?'設定済み':"未設定")+'</strong>';
     if(nm&&staffPins[nm]){
       var pr=document.createElement("button");
       pr.textContent="リセット";
@@ -1847,6 +1896,14 @@ function doPunch(type){
   render();
 }
 
+// ===== PIN ハッシュ化 (Phase 1-C/1-D) =====
+async function hashPin(pin){
+  var buf=await crypto.subtle.digest("SHA-256",new TextEncoder().encode("honomi_pin_v1:"+pin));
+  return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');
+}
+function isLegacyPin(val){return /^\d{4}$/.test(val);}
+function adminPinReady(){return !!(ADMIN_PIN_HASH||ADMIN_PIN);}
+
 // スタッフPIN認証
 function sTap(v){
   if(v==="C")staffPinInput=staffPinInput.slice(0,-1);
@@ -1854,12 +1911,20 @@ function sTap(v){
   render();
   if(staffPinInput.length===4){setTimeout(sOk,150);}
 }
-function sOk(){
-  if(staffPins[staffName]===String(staffPinInput)){
-    staffPinError=false;screen="punch";render();
+async function sOk(){
+  var stored=staffPins[staffName];
+  if(!stored){staffPinError=true;staffPinInput="";render();return;}
+  var inputStr=String(staffPinInput);
+  var match=false;
+  if(isLegacyPin(stored)){
+    // 旧形式（4桁平文）: 照合後にハッシュへ自動移行
+    match=(stored===inputStr);
+    if(match){var h=await hashPin(inputStr);staffPins[staffName]=h;saveData("tc5_pins",staffPins);}
   } else {
-    staffPinError=true;staffPinInput="";render();
+    match=((await hashPin(inputStr))===stored);
   }
+  if(match){staffPinError=false;screen="punch";render();}
+  else{staffPinError=true;staffPinInput="";render();}
 }
 
 // スタッフPIN新規登録
@@ -1875,14 +1940,15 @@ function sNewTap(v){
   if(staffPinStep===1&&staffPinInput.length===4){setTimeout(sNewOk,150);}
   else if(staffPinStep===2&&staffPinConfirm.length===4){setTimeout(sNewOk,150);}
 }
-function sNewOk(){
+async function sNewOk(){
   if(staffPinStep===1){
     if(staffPinInput.length<4)return;
     staffPinStep=2;staffPinConfirm="";staffPinError=false;render();
   } else {
     if(staffPinConfirm.length<4)return;
     if(staffPinInput===staffPinConfirm){
-      staffPins[staffName]=staffPinInput;
+      var h=await hashPin(staffPinInput);
+      staffPins[staffName]=h;
       saveData("tc5_pins",staffPins);
       staffPinError=false;screen="punch";render();
     } else {
@@ -1896,9 +1962,23 @@ function pinTap(v){
   render();
   if(pinInput.length===8){setTimeout(pinOk,150);}
 }
-function pinOk(){
-  if(!ADMIN_PIN){pinInput="";render();return;}
-  if(pinInput===ADMIN_PIN){screen="admin";adminTab="records";pinInput="";pinError=false;render();}
+async function pinOk(){
+  if(!adminPinReady()){pinInput="";render();return;}
+  var inputStr=pinInput;
+  var match=false;
+  if(ADMIN_PIN_HASH){
+    match=((await hashPin(inputStr))===ADMIN_PIN_HASH);
+  } else if(ADMIN_PIN){
+    // 旧形式（平文）: 照合後にハッシュへ自動移行
+    match=(inputStr===ADMIN_PIN);
+    if(match){
+      var h=await hashPin(inputStr);
+      ADMIN_PIN_HASH=h;ADMIN_PIN="";
+      fetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(){});
+      fetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(){});
+    }
+  }
+  if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();}
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
 }
 
@@ -1917,10 +1997,10 @@ function saveFacilities(){
 function viewerDownloadAndDelete(url,fileName,docId){
   downloadFile(url,fileName);
   setTimeout(function(){
-    fetch(DB_DOCS+'/'+docId+'/isActive.json',{
-      method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(false)
-    }).then(function(){
+    Promise.all([
+      fetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+      fetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+    ]).then(function(){
       // DOMから該当アイテムを消す
       var secEl=document.getElementById('viewer-docs-section');
       if(secEl){
@@ -2046,10 +2126,10 @@ function bulkDeleteDocuments(){
   if(!docList.length)return;
   showConfirm('全'+docList.length+'件の資料を削除します。この操作は取り消せません。\nよろしいですか？',function(){
     Promise.all(docList.map(function(d){
-      return fetch(DB_DOCS+'/'+d.id+'/isActive.json',{
-        method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(false)
-      });
+      return Promise.all([
+        fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+        fetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+      ]);
     })).then(function(){
       showAlert('全'+docList.length+'件を削除しました',function(){setTab('documents');});
     }).catch(function(){
@@ -2227,10 +2307,10 @@ function loadDocumentList(callback){
 }
 function deleteDocument(docId){
   showConfirm('この資料を削除しますか？',function(){
-    fetch(DB_DOCS+'/'+docId+'/isActive.json',{
-      method:'PUT',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify(false)
-    }).then(function(){
+    Promise.all([
+      fetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+      fetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+    ]).then(function(){
       showAlert('削除しました',function(){setTab('documents');});
     }).catch(function(){
       showAlert('削除に失敗しました');
@@ -2263,7 +2343,7 @@ loadFromFirebase(function(data) {
   if(data.tc5_records){records=Array.isArray(data.tc5_records)?data.tc5_records:Object.values(data.tc5_records);localStorage.setItem("tc5_records",JSON.stringify(records));}
   if(data.tc5_staff){staffList=Array.isArray(data.tc5_staff)?data.tc5_staff:Object.values(data.tc5_staff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
   if(data.tc5_approvals){approvals=data.tc5_approvals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
-  if(data.tc5_pins){staffPins=data.tc5_pins;localStorage.setItem("tc5_pins",JSON.stringify(staffPins));}
+  if(data.tc5_pins){staffPins=data.tc5_pins;} // localStorageには保存しない
   if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
   if(data.master && data.master.locations){
     var locs=Array.isArray(data.master.locations)?data.master.locations:Object.values(data.master.locations);
@@ -2277,15 +2357,29 @@ loadFromFirebase(function(data) {
   } else {
     fetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
   }
-  if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;localStorage.setItem("tc_admin_pin",ADMIN_PIN);}
-  if(data.config && data.config.adminToken){ADMIN_TOKEN=data.config.adminToken;localStorage.setItem("tc_admin_token",ADMIN_TOKEN);}
-  else if(!data.config||!data.config.adminToken){
-    fetch(FB_URL+"/config/adminToken.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify("honomi2026")}).catch(function(){});
-  }
+  // 管理者PIN: ハッシュ優先、旧平文フォールバック（localStorageには保存しない）
+  if(data.config && data.config.adminPinHash){ADMIN_PIN_HASH=data.config.adminPinHash;ADMIN_PIN="";}
+  else if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;}
+  // 管理者トークン: 固定値なし、Firebaseのみ（localStorageには保存しない）
+  if(data.config && data.config.adminToken){ADMIN_TOKEN=data.config.adminToken;}
+  // 閲覧専用トークン
+  if(data.config && data.config.viewerToken){viewerTokenConfig=data.config.viewerToken;}
   if(data.config && data.config.demoAccess){demoAccessConfig=data.config.demoAccess;}
+  // 管理者URLトークン認証
   if(adminUrlUsed){
-    if(adminParam===ADMIN_TOKEN){adminTokenValid=true;adminTokenInvalid=false;screen="admin";adminTab="records";}
-    else{adminTokenValid=false;adminTokenInvalid=true;}
+    if(ADMIN_TOKEN&&adminParam===ADMIN_TOKEN){
+      adminTokenValid=true;adminTokenInvalid=false;
+      isAdminAuthenticated=true;
+      screen="admin";adminTab="records";
+    } else {
+      adminTokenValid=false;adminTokenInvalid=true;
+    }
+  }
+  // 閲覧専用トークン認証（Firebase読込後に確定）
+  if(viewerPending){
+    if(viewerTokenConfig&&viewerParam===viewerTokenConfig){viewerMode=true;viewerInvalid=false;}
+    else{viewerMode=false;viewerInvalid=true;}
+    viewerPending=false;
   }
   if(demoUrlUsed){
     var dc=data.config&&data.config.demoAccess;
@@ -2295,7 +2389,7 @@ loadFromFirebase(function(data) {
       var dn=new Date();
       var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
       if(dTodayStr>dc.expireDate){demoExpired=true;}
-      else{demoMode=true;screen="admin";adminTab="records";}
+      else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";}
     }
   }
   // yomiTabが現在の拠点一覧にない場合はfacilityNameにフォールバック
