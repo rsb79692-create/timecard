@@ -19,8 +19,53 @@ var STORAGE_BUCKET="honomi-timecard.firebasestorage.app";
 var STORAGE_BASE="https://firebasestorage.googleapis.com/v0/b/"+STORAGE_BUCKET+"/o";
 var DB_DOCS=FB_URL+"/documents";
 
+// ===== Phase 3-A: Anonymous Auth (REST API) =====
+// Firebase Console > プロジェクトの設定 > 全般 > ウェブ API キー を設定してください
+var FB_API_KEY="YOUR_FIREBASE_WEB_API_KEY";
+var _fbIdToken="";
+var _fbRefreshToken="";
+var _fbTokenExpiry=0;
+
+async function getAuthToken(){
+  if(_fbIdToken&&Date.now()<_fbTokenExpiry-60000)return _fbIdToken;
+  if(_fbRefreshToken){
+    try{
+      var r=await fetch("https://securetoken.googleapis.com/v1/token?key="+FB_API_KEY,{
+        method:"POST",
+        headers:{"Content-Type":"application/x-www-form-urlencoded"},
+        body:"grant_type=refresh_token&refresh_token="+_fbRefreshToken
+      });
+      var d=await r.json();
+      if(d.id_token){
+        _fbIdToken=d.id_token;
+        _fbRefreshToken=d.refresh_token;
+        _fbTokenExpiry=Date.now()+parseInt(d.expires_in)*1000;
+        return _fbIdToken;
+      }
+    }catch(e){console.warn("token refresh failed, re-signing in",e);}
+  }
+  var r2=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInAnonymously?key="+FB_API_KEY,{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:"{}"
+  });
+  var d2=await r2.json();
+  if(!d2.idToken)throw new Error("Anonymous sign-in failed: "+(d2.error&&d2.error.message||"unknown"));
+  _fbIdToken=d2.idToken;
+  _fbRefreshToken=d2.refreshToken;
+  _fbTokenExpiry=Date.now()+parseInt(d2.expiresIn)*1000;
+  return _fbIdToken;
+}
+
+async function authFetch(url,opts){
+  var tok=await getAuthToken();
+  opts=opts||{};
+  var headers=Object.assign({"Authorization":"Bearer "+tok},opts.headers||{});
+  return fetch(url,Object.assign({},opts,{headers:headers}));
+}
+
 function saveToFirebase(key, val) {
-  fetch(FB_URL + "/" + key + ".json", {
+  authFetch(FB_URL + "/" + key + ".json", {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(val)
@@ -29,13 +74,13 @@ function saveToFirebase(key, val) {
 
 // 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
 function fetchJson(url) {
-  return fetch(url).then(function(r){return r.json();}).catch(function(){return null;});
+  return authFetch(url).then(function(r){return r.json();}).catch(function(){return null;});
 }
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
   setInterval(function(){
     if(screen!=="admin" && screen!=="staffDetail") return;
-    fetch(FB_URL + "/tc5_records.json")
+    authFetch(FB_URL + "/tc5_records.json")
       .then(function(r){return r.json();})
       .then(function(val){
         if(val){
@@ -47,7 +92,7 @@ function listenFirebase() {
           }
         }
       }).catch(function(){});
-    fetch(FB_URL + "/tc5_approvals.json")
+    authFetch(FB_URL + "/tc5_approvals.json")
       .then(function(r){return r.json();})
       .then(function(val){
         if(val && JSON.stringify(val)!==JSON.stringify(approvals)){
@@ -511,8 +556,8 @@ function render(){
               var a2=document.createElement('a');a2.href=URL.createObjectURL(content);a2.download=fname2;a2.click();URL.revokeObjectURL(a2.href);
               Promise.all(docs.map(function(d){
                 return Promise.all([
-                  fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
-                  fetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+                  authFetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+                  authFetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
                 ]);
               })).then(function(){
                 var secEl=document.getElementById('viewer-docs-section');
@@ -1723,8 +1768,8 @@ function render(){
       if(!/^\d{8}$/.test(v)){showAlert("PINは数字8桁で入力してください");return;}
       hashPin(v).then(function(h){
         ADMIN_PIN_HASH=h;ADMIN_PIN="";
-        fetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
-          .then(function(){return fetch(FB_URL+"/config/adminPin.json",{method:"DELETE"});})
+        authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
+          .then(function(){return authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"});})
           .then(function(){showAlert("PINを変更しました（ハッシュ化済み）");})
           .catch(function(){showAlert("Firebase保存に失敗しました");});
         document.getElementById("new-admin-pin").value="";
@@ -1738,8 +1783,8 @@ function render(){
       if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
       hashPin(v).then(function(h){
         ADMIN_TOKEN="";ADMIN_TOKEN_HASH=h;
-        fetch(FB_URL+"/config/adminTokenHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
-          .then(function(){return fetch(FB_URL+"/config/adminToken.json",{method:"DELETE"});})
+        authFetch(FB_URL+"/config/adminTokenHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
+          .then(function(){return authFetch(FB_URL+"/config/adminToken.json",{method:"DELETE"});})
           .then(function(){showAlert("管理者トークンを更新しました（ハッシュ化済み）");})
           .catch(function(){showAlert("Firebase保存に失敗しました");});
         document.getElementById("new-admin-token").value="";
@@ -1752,7 +1797,7 @@ function render(){
       var v=(document.getElementById("new-viewer-token")?.value||"").trim();
       if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
       viewerTokenConfig=v;
-      fetch(FB_URL+"/config/viewerToken.json",{
+      authFetch(FB_URL+"/config/viewerToken.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(v)
@@ -1769,7 +1814,7 @@ function render(){
       if(!tok){showAlert("デモトークンを入力してください");return;}
       if(!/^\d{8}$/.test(exp)){showAlert("有効期限は8桁で入力してください（例：20260430）");return;}
       demoAccessConfig={token:tok,expireDate:exp};
-      fetch(FB_URL+"/config/demoAccess.json",{
+      authFetch(FB_URL+"/config/demoAccess.json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
         body:JSON.stringify(demoAccessConfig)
@@ -1781,7 +1826,7 @@ function render(){
     if(disableDemoBtn)disableDemoBtn.onclick=function(){
       showConfirm("デモアクセスを無効化しますか？",function(){
         demoAccessConfig=null;
-        fetch(FB_URL+"/config/demoAccess.json",{
+        authFetch(FB_URL+"/config/demoAccess.json",{
           method:"DELETE"
         }).then(function(){showAlert("デモアクセスを無効化しました");render();})
           .catch(function(){showAlert("Firebase操作に失敗しました");});
@@ -1973,8 +2018,8 @@ async function pinOk(){
     if(match){
       var h=await hashPin(inputStr);
       ADMIN_PIN_HASH=h;ADMIN_PIN="";
-      fetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(){});
-      fetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(){});
+      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(){});
+      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(){});
     }
   }
   if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();}
@@ -1987,7 +2032,7 @@ function saveFacilities(){
   VALID_TOKENS=buildValidTokens();
   tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
   facilityName=VALID_TOKENS[effectiveToken]||"";
-  fetch(FB_URL+"/master/locations.json",{
+  authFetch(FB_URL+"/master/locations.json",{
     method:"PUT",headers:{"Content-Type":"application/json"},
     body:JSON.stringify(masterFacilities)
   }).catch(function(e){console.error("facilities save error",e);});
@@ -1997,8 +2042,8 @@ function viewerDownloadAndDelete(url,fileName,docId){
   downloadFile(url,fileName);
   setTimeout(function(){
     Promise.all([
-      fetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
-      fetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+      authFetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+      authFetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
     ]).then(function(){
       // DOMから該当アイテムを消す
       var secEl=document.getElementById('viewer-docs-section');
@@ -2126,8 +2171,8 @@ function bulkDeleteDocuments(){
   showConfirm('全'+docList.length+'件の資料を削除します。この操作は取り消せません。\nよろしいですか？',function(){
     Promise.all(docList.map(function(d){
       return Promise.all([
-        fetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
-        fetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+        authFetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+        authFetch(DB_DOCS+'/'+d.id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
       ]);
     })).then(function(){
       showAlert('全'+docList.length+'件を削除しました',function(){setTab('documents');});
@@ -2185,51 +2230,58 @@ function uploadDocument(){
   var progressText=document.getElementById('doc-progress-text');
   if(btn){btn.disabled=true;btn.textContent='アップロード中...';}
   if(progressWrap)progressWrap.style.display='block';
-  var xhr=new XMLHttpRequest();
-  xhr.open('POST',uploadUrl);
-  xhr.setRequestHeader('Content-Type',f.type||'application/octet-stream');
-  xhr.upload.onprogress=function(e){
-    if(e.lengthComputable){
-      var pct=Math.round(e.loaded/e.total*100);
-      if(progressBar)progressBar.style.width=pct+'%';
-      if(progressText)progressText.textContent=pct+'%';
-    }
-  };
-  xhr.onload=function(){
-    if(xhr.status===200){
-      var resp=JSON.parse(xhr.responseText);
-      var token=resp.downloadTokens||'';
-      var downloadURL=STORAGE_BASE+'/'+encodedPath+'?alt=media'+(token?'&token='+token:'');
-      var metadata={
-        title:title,fileName:f.name,fileType:ext,fileSize:f.size,
-        storageRef:storagePath,downloadURL:downloadURL,
-        uploadedAt:new Date().toISOString(),uploadedBy:'admin',memo:memo,isActive:true
-      };
-      fetch(DB_DOCS+'/'+docId+'.json',{
-        method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(metadata)
-      }).then(function(){
-        selectedDocFile=null;
-        showAlert('アップロードしました',function(){setTab('documents');});
-      }).catch(function(){
-        showAlert('メタデータの保存に失敗しました');
+  getAuthToken().then(function(tok){
+    var xhr=new XMLHttpRequest();
+    xhr.open('POST',uploadUrl);
+    xhr.setRequestHeader('Content-Type',f.type||'application/octet-stream');
+    xhr.setRequestHeader('Authorization','Bearer '+tok);
+    xhr.upload.onprogress=function(e){
+      if(e.lengthComputable){
+        var pct=Math.round(e.loaded/e.total*100);
+        if(progressBar)progressBar.style.width=pct+'%';
+        if(progressText)progressText.textContent=pct+'%';
+      }
+    };
+    xhr.onload=function(){
+      if(xhr.status===200){
+        var resp=JSON.parse(xhr.responseText);
+        var token=resp.downloadTokens||'';
+        var downloadURL=STORAGE_BASE+'/'+encodedPath+'?alt=media'+(token?'&token='+token:'');
+        var metadata={
+          title:title,fileName:f.name,fileType:ext,fileSize:f.size,
+          storageRef:storagePath,downloadURL:downloadURL,
+          uploadedAt:new Date().toISOString(),uploadedBy:'admin',memo:memo,isActive:true
+        };
+        authFetch(DB_DOCS+'/'+docId+'.json',{
+          method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(metadata)
+        }).then(function(){
+          selectedDocFile=null;
+          showAlert('アップロードしました',function(){setTab('documents');});
+        }).catch(function(){
+          showAlert('メタデータの保存に失敗しました');
+          if(btn){btn.disabled=false;btn.textContent='アップロード';}
+          if(progressWrap)progressWrap.style.display='none';
+        });
+      } else {
+        var msg='アップロードに失敗しました（'+xhr.status+'）';
+        if(xhr.status===403||xhr.status===401)msg+='\nFirebase Storage のルールを確認してください';
+        showAlert(msg);
         if(btn){btn.disabled=false;btn.textContent='アップロード';}
         if(progressWrap)progressWrap.style.display='none';
-      });
-    } else {
-      var msg='アップロードに失敗しました（'+xhr.status+'）';
-      if(xhr.status===403||xhr.status===401)msg+='\nFirebase Storage のルールを確認してください';
-      showAlert(msg);
+      }
+    };
+    xhr.onerror=function(){
+      showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
       if(btn){btn.disabled=false;btn.textContent='アップロード';}
       if(progressWrap)progressWrap.style.display='none';
-    }
-  };
-  xhr.onerror=function(){
-    showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
+    };
+    xhr.send(f);
+  }).catch(function(){
+    showAlert('認証トークンの取得に失敗しました');
     if(btn){btn.disabled=false;btn.textContent='アップロード';}
     if(progressWrap)progressWrap.style.display='none';
-  };
-  xhr.send(f);
+  });
 }
 // ===== スタッフ書類アップロード =====
 function onStaffFileSelect(input){
@@ -2253,46 +2305,52 @@ function uploadStaffDocument(){
   var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
   var btn=document.getElementById('btn-staff-upload');
   if(btn){btn.disabled=true;btn.textContent='送信中...';}
-  var xhr=new XMLHttpRequest();
-  xhr.open('POST',uploadUrl);
-  xhr.setRequestHeader('Content-Type',f.type||'application/octet-stream');
-  xhr.onload=function(){
-    if(xhr.status===200){
-      var resp=JSON.parse(xhr.responseText);
-      var token=resp.downloadTokens||'';
-      var downloadURL=STORAGE_BASE+'/'+encodedPath+'?alt=media'+(token?'&token='+token:'');
-      var metadata={
-        title:renamedName,fileName:renamedName,fileType:ext,fileSize:f.size,
-        storageRef:storagePath,downloadURL:downloadURL,
-        uploadedAt:now2.toISOString(),uploadedBy:staffName,isStaffUpload:true,isActive:true
-      };
-      fetch(DB_DOCS+'/'+docId+'.json',{
-        method:'PUT',headers:{'Content-Type':'application/json'},
-        body:JSON.stringify(metadata)
-      }).then(function(){
-        staffUploadFile=null;
-        staffUploadMsg='送信しました';
-        render();
-        setTimeout(function(){staffUploadMsg=null;render();},3000);
-      }).catch(function(){
-        showAlert('メタデータの保存に失敗しました');
+  getAuthToken().then(function(tok){
+    var xhr=new XMLHttpRequest();
+    xhr.open('POST',uploadUrl);
+    xhr.setRequestHeader('Content-Type',f.type||'application/octet-stream');
+    xhr.setRequestHeader('Authorization','Bearer '+tok);
+    xhr.onload=function(){
+      if(xhr.status===200){
+        var resp=JSON.parse(xhr.responseText);
+        var token=resp.downloadTokens||'';
+        var downloadURL=STORAGE_BASE+'/'+encodedPath+'?alt=media'+(token?'&token='+token:'');
+        var metadata={
+          title:renamedName,fileName:renamedName,fileType:ext,fileSize:f.size,
+          storageRef:storagePath,downloadURL:downloadURL,
+          uploadedAt:now2.toISOString(),uploadedBy:staffName,isStaffUpload:true,isActive:true
+        };
+        authFetch(DB_DOCS+'/'+docId+'.json',{
+          method:'PUT',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(metadata)
+        }).then(function(){
+          staffUploadFile=null;
+          staffUploadMsg='送信しました';
+          render();
+          setTimeout(function(){staffUploadMsg=null;render();},3000);
+        }).catch(function(){
+          showAlert('メタデータの保存に失敗しました');
+          if(btn){btn.disabled=false;btn.textContent='送信する';}
+        });
+      } else {
+        var errMsg='アップロードに失敗しました（'+xhr.status+'）';
+        if(xhr.status===403||xhr.status===401)errMsg+='\nFirebase Storage のルールを確認してください';
+        showAlert(errMsg);
         if(btn){btn.disabled=false;btn.textContent='送信する';}
-      });
-    } else {
-      var errMsg='アップロードに失敗しました（'+xhr.status+'）';
-      if(xhr.status===403||xhr.status===401)errMsg+='\nFirebase Storage のルールを確認してください';
-      showAlert(errMsg);
+      }
+    };
+    xhr.onerror=function(){
+      showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
       if(btn){btn.disabled=false;btn.textContent='送信する';}
-    }
-  };
-  xhr.onerror=function(){
-    showAlert('アップロードに失敗しました\nネットワーク接続を確認してください');
+    };
+    xhr.send(f);
+  }).catch(function(){
+    showAlert('認証トークンの取得に失敗しました');
     if(btn){btn.disabled=false;btn.textContent='送信する';}
-  };
-  xhr.send(f);
+  });
 }
 function loadDocumentList(callback){
-  fetch(DB_DOCS+'.json')
+  authFetch(DB_DOCS+'.json')
     .then(function(r){return r.json();})
     .then(function(data){
       if(!data){if(callback)callback([]);return;}
@@ -2307,8 +2365,8 @@ function loadDocumentList(callback){
 function deleteDocument(docId){
   showConfirm('この資料を削除しますか？',function(){
     Promise.all([
-      fetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
-      fetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
+      authFetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+      authFetch(DB_DOCS+'/'+docId+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify("")})
     ]).then(function(){
       showAlert('削除しました',function(){setTab('documents');});
     }).catch(function(){
@@ -2372,7 +2430,7 @@ async function initFirebase() {
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid){localStorage.setItem("facilityToken",urlToken);}
     } else {
-      fetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
+      authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
     }
     // 管理者PIN: ハッシュ優先、旧平文フォールバック
     if(fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
