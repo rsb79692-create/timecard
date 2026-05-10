@@ -142,66 +142,66 @@ function listenFirebase() {
 </script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{background:#eef0f3;color:#1a2332;font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
+body{background:#eaecef;color:#0f172a;font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
 .wrap{max-width:420px;margin:0 auto;padding:10px 14px 40px;}
-.clock{font-size:2.1rem;font-family:monospace;color:#2d3a4a;letter-spacing:.04em;}
-.date-disp{font-size:.95rem;color:#2d3a4a;font-weight:700;margin-bottom:2px;}
-.label{font-size:.72rem;font-weight:700;letter-spacing:.12em;color:#8796a7;text-align:center;margin-bottom:8px;}
-button{border:none;border-radius:4px;font-weight:700;cursor:pointer;transition:opacity .12s;user-select:none;font-family:inherit;}
-button:active{opacity:.75;}
+.clock{font-size:2.6rem;font-family:monospace;color:#0f172a;letter-spacing:.02em;font-weight:900;}
+.date-disp{font-size:.9rem;color:#475569;font-weight:700;margin-bottom:2px;}
+.label{font-size:.72rem;font-weight:700;letter-spacing:.12em;color:#8496a7;text-align:center;margin-bottom:8px;}
+button{border:none;border-radius:2px;font-weight:700;cursor:pointer;user-select:none;font-family:inherit;}
+button:active{filter:brightness(.86);}
 /* あいうえおタブ */
 .yomi-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;}
-.yomi-tab{padding:6px 10px;border-radius:3px;font-size:.85rem;font-weight:700;border:1px solid transparent;}
-.yomi-on{background:#1d4ed8;color:#fff;border-color:#1d4ed8;}
-.yomi-off{background:#fff;color:#5b6b7c;border:1px solid #d0d5dd;}
+.yomi-tab{padding:5px 10px;border-radius:2px;font-size:.82rem;font-weight:700;border:1px solid transparent;}
+.yomi-on{background:#1e40af;color:#fff;border-color:#1e40af;}
+.yomi-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
 /* スタッフ2列グリッド */
 .staff-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
-.btn-staff{background:#fff;color:#1a2332;padding:14px 8px;font-size:1.2rem;font-weight:900;width:100%;border-radius:4px;border:1px solid #d0d5dd;box-shadow:none;}
-.btn-staff:active{background:#f0f5ff;}
+.btn-staff{background:#fff;color:#0f172a;padding:13px 8px;font-size:1.2rem;font-weight:900;width:100%;border-radius:2px;border:1px solid #adb5bd;}
+.btn-staff:active{background:#eff4ff;}
 /* 打刻 */
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px;}
-.btn-punch{padding:20px 10px;font-size:1.05rem;font-weight:900;color:#fff;line-height:1.4;border-radius:4px;}
-.btn-punch:disabled{opacity:.2;cursor:not-allowed;}
-.btn-in{background:#166534;} .btn-out{background:#991b1b;}
-.btn-bs{background:#92400e;} .btn-be{background:#1e3a8a;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
+.btn-punch{padding:18px 10px;font-size:1rem;font-weight:900;color:#fff;line-height:1.4;border-radius:2px;}
+.btn-punch:disabled{opacity:.18;cursor:not-allowed;}
+.btn-in{background:#1e40af;} .btn-out{background:#b91c1c;}
+.btn-bs{background:#374151;} .btn-be{background:#4b5563;}
 /* 共通 */
-.btn-admin{background:#e4e8ed;color:#5b6b7c;font-size:.83rem;padding:11px;width:100%;border-radius:4px;border:1px solid #d0d5dd;margin-top:8px;}
-.btn-back{background:#e4e8ed;color:#4b5875;font-size:.83rem;font-weight:700;padding:7px 14px;text-align:left;margin-bottom:10px;display:inline-block;border-radius:4px;border:1px solid #d0d5dd;cursor:pointer;font-family:inherit;}
-.btn-pin{background:#fff;color:#1a2332;padding:16px;font-size:1.4rem;font-weight:700;border-radius:4px;border:1px solid #d0d5dd;}
-.btn-pin-enter{background:#1d4ed8;color:#fff;padding:16px;font-size:1.2rem;font-weight:700;border-radius:4px;}
-.btn-pin-clear{background:#e4e8ed;color:#8796a7;padding:16px;font-size:1rem;border-radius:4px;border:1px solid #d0d5dd;}
+.btn-admin{background:#dde1e7;color:#475569;font-size:.83rem;padding:11px;width:100%;border-radius:2px;border:1px solid #adb5bd;margin-top:8px;}
+.btn-back{background:#dde1e7;color:#475569;font-size:.83rem;font-weight:700;padding:7px 14px;text-align:left;margin-bottom:10px;display:inline-block;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;}
+.btn-pin{background:#fff;color:#0f172a;padding:16px;font-size:1.4rem;font-weight:700;border-radius:2px;border:1px solid #adb5bd;}
+.btn-pin-enter{background:#1e40af;color:#fff;padding:16px;font-size:1.2rem;font-weight:700;border-radius:2px;}
+.btn-pin-clear{background:#dde1e7;color:#8496a7;padding:16px;font-size:1rem;border-radius:2px;border:1px solid #adb5bd;}
 .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
-.pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#1a2332;}
-.msg-ok{background:#edfaf4;border:1px solid #4ade80;border-radius:4px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:#166534;}
-.history{background:#fff;border-radius:4px;padding:14px;border:1px solid #d0d5dd;box-shadow:0 1px 3px rgba(0,0,0,.04);}
-.hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
-.hist-label{color:#8796a7;font-size:.78rem;font-weight:700;}
-.hist-worked{color:#1d4ed8;font-size:.78rem;font-weight:700;}
-.hist-row{display:flex;justify-content:space-between;font-size:.83rem;padding:6px 0;border-bottom:1px solid #e4e8ed;}
+.pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#0f172a;}
+.msg-ok{background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:#1e40af;}
+.history{background:#fff;border-radius:2px;padding:12px 14px;border:1px solid #adb5bd;}
+.hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
+.hist-label{color:#8496a7;font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.hist-worked{color:#1e40af;font-size:.88rem;font-weight:900;font-family:monospace;}
+.hist-row{display:flex;justify-content:space-between;font-size:.84rem;padding:5px 0;border-bottom:1px solid #ced4da;}
 .hist-row:last-child{border-bottom:none;}
-.c-in{color:#166534;} .c-out{color:#dc2626;} .c-brk{color:#92400e;}
+.c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;}
 /* 管理者 */
 .tab-row{display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;}
-.tab-btn{padding:7px 12px;border-radius:3px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
-.tab-on{background:#1d4ed8;color:#fff;border-color:#1d4ed8;}
-.tab-off{background:#fff;color:#5b6b7c;border:1px solid #d0d5dd;}
-.admin-card{background:#fff;border-radius:4px;padding:14px;margin-bottom:12px;border:1px solid #d0d5dd;box-shadow:0 1px 3px rgba(0,0,0,.04);}
-.admin-title{font-weight:700;font-size:.9rem;margin-bottom:10px;color:#2d3a4a;letter-spacing:.04em;padding-bottom:8px;border-bottom:1px solid #e4e8ed;}
-select,input[type=text],input[type=date],input[type=time]{background:#fff;color:#1a2332;border:1px solid #c8cfd8;border-radius:3px;padding:6px 10px;font-size:.83rem;font-family:inherit;outline:none;}
-select:focus,input:focus{border-color:#1d4ed8;box-shadow:0 0 0 2px rgba(29,78,216,.1);}
-.btn-export{background:#1d4ed8;color:#fff;padding:11px;font-size:.9rem;font-weight:700;border-radius:4px;width:100%;}
-.sum-row{display:flex;justify-content:space-between;padding:7px 8px;border-bottom:1px solid #e4e8ed;font-size:.84rem;align-items:center;}
-.sum-row:hover{background:#f4f7ff;}
-.staff-row{display:flex;justify-content:space-between;align-items:center;padding:7px 0;font-size:.83rem;border-bottom:1px solid #e4e8ed;}
-.btn-del{background:transparent;color:#b0bac9;font-size:.72rem;border-radius:3px;padding:3px 7px;border:1px solid #e4e8ed;}
-.empty{color:#b0bac9;font-size:.83rem;text-align:center;padding:20px 0;}
+.tab-btn{padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
+.tab-on{background:#1e40af;color:#fff;border-color:#1e40af;}
+.tab-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
+.admin-card{background:#fff;border-radius:2px;padding:14px;margin-bottom:10px;border:1px solid #adb5bd;}
+.admin-title{font-weight:700;font-size:.88rem;margin-bottom:10px;color:#0f172a;letter-spacing:.06em;padding-bottom:6px;border-bottom:2px solid #dee2e6;}
+select,input[type=text],input[type=date],input[type=time]{background:#fff;color:#0f172a;border:1px solid #adb5bd;border-radius:2px;padding:6px 10px;font-size:.83rem;font-family:inherit;outline:none;}
+select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,175,.12);}
+.btn-export{background:#1e40af;color:#fff;padding:10px;font-size:.9rem;font-weight:700;border-radius:2px;width:100%;}
+.sum-row{display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #ced4da;font-size:.84rem;align-items:center;}
+.sum-row:hover{background:#f0f4ff;}
+.staff-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.83rem;border-bottom:1px solid #ced4da;}
+.btn-del{background:transparent;color:#8496a7;font-size:.72rem;border-radius:2px;padding:3px 7px;border:1px solid #ced4da;}
+.empty{color:#8496a7;font-size:.83rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
-.hrm-row:hover{background:#f0f5ff!important;}
+.hrm-row:hover{background:#f0f4ff!important;}
 /* 管理者画面PC全画面対応 */
 .admin-mode{max-width:none!important;}
-.admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eef0f3;padding-bottom:10px;border-bottom:2px solid #c8cfd8;margin-bottom:14px;}
+.admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
 /* テーブル共通 */
-.time-cell:hover{background:rgba(29,78,216,.07);border-radius:2px;}
+.time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
 </style>
 </head>
 <body>
@@ -212,13 +212,13 @@ function showModal(opts){
   var ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
   var card=document.createElement("div");
-  card.style.cssText="background:#fff;border-radius:4px;padding:24px;max-width:340px;width:100%;box-shadow:0 4px 16px rgba(0,0,0,.15);";
-  if(opts.title){var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#1a1a1a;margin-bottom:12px;";ttl.textContent=opts.title;card.appendChild(ttl);}
-  var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#374151;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;";
+  if(opts.title){var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;";ttl.textContent=opts.title;card.appendChild(ttl);}
+  var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#0f172a;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
   var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
   function close(){if(ov.parentNode)document.body.removeChild(ov);}
-  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#e4e8ed;color:#4b5875;border:1px solid #d0d5dd;padding:11px;border-radius:4px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
-  var ok=document.createElement("button");ok.textContent="OK";ok.style.cssText="flex:1;background:#1d4ed8;color:#fff;border:none;padding:11px;border-radius:4px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
+  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
+  var ok=document.createElement("button");ok.textContent="OK";ok.style.cssText="flex:1;background:#1e40af;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
   card.appendChild(row);ov.appendChild(card);
   ov.onclick=function(e){if(e.target===ov){close();if(opts.onCancel)opts.onCancel();}};
   document.body.appendChild(ov);ok.focus();
@@ -358,8 +358,8 @@ function render(){
   if(viewerPending){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
-      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">しばらくお待ちください</div>'
       +'</div>';
     return;
   }
@@ -376,7 +376,7 @@ function render(){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">正しい閲覧URLをご利用ください</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">正しい閲覧URLをご利用ください</div>'
       +'</div>';
     return;
   }
@@ -384,8 +384,8 @@ function render(){
   if(adminUrlUsed&&!adminTokenValid&&!adminTokenInvalid){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
-      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">しばらくお待ちください</div>'
       +'</div>';
     return;
   }
@@ -394,7 +394,7 @@ function render(){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">管理者トークンが正しくありません</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">管理者トークンが正しくありません</div>'
       +'</div>';
     return;
   }
@@ -404,7 +404,7 @@ function render(){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">⏰</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このデモURLは期限切れです</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">管理者にお問い合わせください</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">管理者にお問い合わせください</div>'
       +'</div>';
     return;
   }
@@ -413,7 +413,7 @@ function render(){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">デモURLが正しくありません</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">デモURLが正しくありません</div>'
       +'</div>';
     return;
   }
@@ -421,8 +421,8 @@ function render(){
   if(demoUrlUsed&&!demoMode&&!demoExpired&&!demoInvalid){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
-      +'<div style="font-size:1.1rem;font-weight:900;color:#374151;margin-bottom:10px;">認証中…</div>'
-      +'<div style="font-size:.85rem;color:#9ca3af;">しばらくお待ちください</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">しばらくお待ちください</div>'
       +'</div>';
     return;
   }
@@ -435,7 +435,7 @@ function render(){
     var vMRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
-    var thS2="padding:10px 14px;text-align:left;font-size:.8rem;font-weight:700;color:#4b5875;white-space:nowrap;border-bottom:2px solid #c8cfd8;background:#eef0f3;position:sticky;top:0;";
+    var thS2="padding:10px 14px;text-align:left;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;position:sticky;top:0;z-index:1;";
     var DAYS_V=["日","月","火","水","木","金","土"];
     var vRows=vStaff.map(function(s){
       var nm=s.name;
@@ -445,13 +445,13 @@ function render(){
       var ot=Math.max(0,ms-wDays.length*8*3600000);
       var exp=viewerExpandedStaff===nm;
       var mainTr='<tr class="viewer-row" data-nm="'+nm+'" style="border-bottom:1px solid #f3f4f6;cursor:pointer;background:#fff;" onclick="toggleViewerExpand(\''+nm+'\')">'
-        +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(s.employeeId||"—")+'</td>'
+        +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;color:#475569;">'+(s.employeeId||"—")+'</td>'
         +'<td style="padding:10px 14px;font-size:.9rem;font-weight:700;">'
-        +'<span style="font-size:.7rem;color:#2563eb;margin-right:4px;">'+(exp?"▼":"▶")+'</span>'+nm+'</td>'
-        +'<td style="padding:10px 14px;font-size:.85rem;color:#374151;">'+(s.location||"—")+'</td>'
-        +'<td style="padding:10px 14px;font-size:.85rem;color:#374151;">'+(s.employmentType||"—")+'</td>'
+        +'<span style="font-size:.7rem;color:#1e40af;margin-right:4px;">'+(exp?"▼":"▶")+'</span>'+nm+'</td>'
+        +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.location||"—")+'</td>'
+        +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.employmentType||"—")+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;text-align:right;">'+wDays.length+'日</td>'
-        +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;text-align:right;color:#1d4ed8;">'+(toHM(ms)||"0:00")+'</td>'
+        +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;text-align:right;color:#1e40af;">'+(toHM(ms)||"0:00")+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;text-align:right;color:'+(ot>0?"#dc2626":"#8796a7")+'">'+(ot>0?toHM(ot):"—")+'</td>'
         +'</tr>';
       if(!exp)return mainTr;
@@ -470,35 +470,35 @@ function render(){
         var isW=dObj2.getDay()===0||dObj2.getDay()===6;
         dailyHtml+='<tr style="border-bottom:1px solid #e0f2fe;'+(isW?"opacity:.6;":"")+'">'
           +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;white-space:nowrap;color:'+(isW?"#9ca3af":"#374151")+';">'+dk2.slice(5)+'('+DAYS_V[dObj2.getDay()]+')</td>'
-          +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;color:#059669;">'+(cin2?cin2.time:"—")+'</td>'
+          +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;color:#1e40af;">'+(cin2?cin2.time:"—")+'</td>'
           +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;color:#dc2626;">'+(cout2?cout2.time:"—")+'</td>'
-          +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;text-align:right;color:#1d4ed8;">'+(ms2>0?toHM(ms2):"—")+'</td>'
+          +'<td style="padding:5px 10px;font-size:.78rem;font-family:monospace;text-align:right;color:#1e40af;">'+(ms2>0?toHM(ms2):"—")+'</td>'
           +'</tr>';
       }
       var detailTr='<tr><td colspan="7" style="padding:0;background:#eff6ff;border-bottom:2px solid #bfdbfe;">'
         +'<div style="padding:8px 32px 12px;">'
         +'<table style="border-collapse:collapse;min-width:300px;">'
         +'<thead><tr style="border-bottom:1px solid #bfdbfe;">'
-        +'<th style="padding:4px 10px;font-size:.72rem;color:#6b7280;text-align:left;font-weight:700;white-space:nowrap;">日付</th>'
-        +'<th style="padding:4px 10px;font-size:.72rem;color:#059669;text-align:left;font-weight:700;">出勤</th>'
+        +'<th style="padding:4px 10px;font-size:.72rem;color:#475569;text-align:left;font-weight:700;white-space:nowrap;">日付</th>'
+        +'<th style="padding:4px 10px;font-size:.72rem;color:#1e40af;text-align:left;font-weight:700;">出勤</th>'
         +'<th style="padding:4px 10px;font-size:.72rem;color:#dc2626;text-align:left;font-weight:700;">退勤</th>'
-        +'<th style="padding:4px 10px;font-size:.72rem;color:#1d4ed8;text-align:right;font-weight:700;">実働</th>'
+        +'<th style="padding:4px 10px;font-size:.72rem;color:#1e40af;text-align:right;font-weight:700;">実働</th>'
         +'</tr></thead>'
-        +'<tbody>'+(dailyHtml||'<tr><td colspan="4" style="padding:10px;color:#9ca3af;font-size:.8rem;">打刻データなし</td></tr>')+'</tbody>'
+        +'<tbody>'+(dailyHtml||'<tr><td colspan="4" style="padding:10px;color:#8496a7;font-size:.8rem;">打刻データなし</td></tr>')+'</tbody>'
         +'</table></div></td></tr>';
       return mainTr+detailTr;
     }).join("");
     app.innerHTML='<div class="admin-sticky-bar" style="padding:16px 24px 12px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">'
-      +'<div style="font-size:1.15rem;font-weight:900;color:#1a1a1a;">穂乃味　勤怠データ閲覧</div>'
+      +'<div style="font-size:1.15rem;font-weight:900;color:#0f172a;">穂乃味　勤怠データ閲覧</div>'
       +'<div style="display:flex;gap:8px;align-items:center;">'
-      +'<select id="viewer-month" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;font-family:inherit;background:#fff;">'+vMonthOpts+'</select>'
-      +'<button id="btn-viewer-csv-daily" style="background:#1d4ed8;color:#fff;border:none;padding:8px 14px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日次CSV</button>'
-      +'<button id="btn-viewer-csv" style="background:#1e3a8a;color:#fff;border:none;padding:8px 14px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
+      +'<select id="viewer-month" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+vMonthOpts+'</select>'
+      +'<button id="btn-viewer-csv-daily" style="background:#1e40af;color:#fff;border:none;padding:8px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日次CSV</button>'
+      +'<button id="btn-viewer-csv" style="background:#1e40af;color:#fff;border:none;padding:8px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
       +'</div></div>'
-      +'<div style="font-size:.72rem;color:#9ca3af;">閲覧専用モード・書き込み操作は無効</div>'
+      +'<div style="font-size:.72rem;color:#8496a7;">閲覧専用モード・書き込み操作は無効</div>'
       +'</div>'
-      +'<div style="overflow-x:auto;background:#fff;border:1px solid #d0d5dd;border-radius:3px;margin-top:16px;">'
+      +'<div style="overflow-x:auto;background:#fff;border:1px solid #adb5bd;border-radius:2px;margin-top:16px;">'
       +'<table style="width:100%;border-collapse:collapse;min-width:700px;">'
       +'<thead><tr>'
       +'<th style="'+thS2+'">社員番号</th>'
@@ -509,14 +509,14 @@ function render(){
       +'<th style="'+thS2+'text-align:right;">総労働時間</th>'
       +'<th style="'+thS2+'text-align:right;">残業時間</th>'
       +'</tr></thead>'
-      +'<tbody>'+(vRows||'<tr><td colspan="7" style="padding:20px;text-align:center;color:#9ca3af;">データがありません</td></tr>')+'</tbody>'
+      +'<tbody>'+(vRows||'<tr><td colspan="7" style="padding:20px;text-align:center;color:#8496a7;">データがありません</td></tr>')+'</tbody>'
       +'</table></div>'
       +'<div style="margin-top:24px;padding:0 4px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-      +'<div style="font-size:1rem;font-weight:900;color:#1a1a1a;">資料</div>'
-      +'<button id="btn-viewer-bulk-dl" style="background:#eff4ff;color:#1d4ed8;border:1px solid #c7d7fd;padding:5px 12px;border-radius:3px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;display:none;">📦 一括DL(ZIP)</button>'
+      +'<div style="font-size:1rem;font-weight:900;color:#0f172a;">資料</div>'
+      +'<button id="btn-viewer-bulk-dl" style="background:#eff4ff;color:#1e40af;border:1px solid #c7d7fd;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;display:none;">📦 一括DL(ZIP)</button>'
       +'</div>'
-      +'<div id="viewer-docs-section" style="color:#9ca3af;font-size:.85rem;text-align:center;padding:20px;">読み込み中...</div>'
+      +'<div id="viewer-docs-section" style="color:#8496a7;font-size:.85rem;text-align:center;padding:20px;">読み込み中...</div>'
       +'</div>';
     var vm=document.getElementById("viewer-month");
     if(vm)vm.onchange=function(){selMonth=vm.value;viewerExpandedStaff=null;render();};
@@ -576,14 +576,14 @@ function render(){
       var el=document.getElementById("viewer-docs-section");
       if(!el)return;
       var bulkBtn=document.getElementById("btn-viewer-bulk-dl");
-      if(!docs.length){el.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';return;}
+      if(!docs.length){el.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';return;}
       if(bulkBtn){
         bulkBtn.style.display='';
         bulkBtn.onclick=function(){
           showConfirm('全'+docs.length+'件の資料をZIPで一括ダウンロードします。よろしいですか？',function(){
             var ov2=document.createElement('div');
             ov2.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
-            ov2.innerHTML='<div style="background:#fff;border-radius:4px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#6b7280;">しばらくお待ちください</div></div>';
+            ov2.innerHTML='<div style="background:#fff;border-radius:2px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
             document.body.appendChild(ov2);
             var zip2=new JSZip();
             Promise.all(docs.map(function(d){
@@ -600,7 +600,7 @@ function render(){
                 ]);
               })).then(function(){
                 var secEl=document.getElementById('viewer-docs-section');
-                if(secEl)secEl.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
+                if(secEl)secEl.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
                 var bBtn=document.getElementById('btn-viewer-bulk-dl');
                 if(bBtn)bBtn.style.display='none';
               }).catch(function(){});
@@ -617,16 +617,16 @@ function render(){
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
         var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
         var safeName=(d.fileName||'').replace(/'/g,'&#39;');
-        return '<div style="border:1px solid #d0d5dd;border-radius:3px;padding:12px;margin-bottom:8px;background:#fff;">'
+        return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#fff;">'
           +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
           +'<span style="font-size:1.4rem;flex-shrink:0;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
           +'<div style="font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+d.title+'</div>'
-          +'<div style="font-size:.72rem;color:#9ca3af;margin-top:2px;">'+d.fileName+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
+          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">'+d.fileName+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
           +'</div></div>'
           +'<div style="display:flex;gap:8px;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:3px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+safeName+'\',\''+d.id+'\')" style="flex:1;background:#1d4ed8;color:#fff;border:none;border-radius:3px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
+          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+safeName+'\',\''+d.id+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>'
           +'</div>';
       }).join('');
@@ -640,7 +640,7 @@ function render(){
       app.innerHTML='<div class="center" style="padding-top:80px;padding-bottom:24px;">'
         +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
         +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このURLからは打刻できません</div>'
-        +'<div style="font-size:.85rem;color:#9ca3af;">正しい施設URLをご利用ください</div>'
+        +'<div style="font-size:.85rem;color:#8496a7;">正しい施設URLをご利用ください</div>'
         +'</div>'
         +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
       return;
@@ -669,11 +669,11 @@ function render(){
 
   // ── スタッフPIN認証 ──
   if(screen==="staffPin"){
-    var dots=staffPinInput?'●'.repeat(staffPinInput.length):'<span style="color:#d1d5db">────</span>';
+    var dots=staffPinInput?'●'.repeat(staffPinInput.length):'<span style="color:#c8ccd2">────</span>';
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="padding-top:20px;margin-bottom:24px;">'
       +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+staffName+'</div>'
-      +'<div style="color:#9ca3af;font-size:.9rem;">PINを入力してください</div>'
+      +'<div style="color:#8496a7;font-size:.9rem;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
       +(staffPinError?'<div style="color:#dc2626;text-align:center;font-size:.9rem;margin-bottom:10px;">PINが違います</div>':"")
@@ -690,12 +690,12 @@ function render(){
   if(screen==="staffPinNew"){
     var isConfirm=staffPinStep===2;
     var cur=isConfirm?staffPinConfirm:staffPinInput;
-    var dots2=cur?'●'.repeat(cur.length):'<span style="color:#d1d5db">────</span>';
+    var dots2=cur?'●'.repeat(cur.length):'<span style="color:#c8ccd2">────</span>';
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="padding-top:20px;margin-bottom:24px;">'
       +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+staffName+'</div>'
-      +'<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:3px;padding:10px 16px;margin-bottom:8px;font-size:.88rem;color:#92400e;">🔑 初回ログインです。<br>4桁のPINを設定してください。</div>'
-      +'<div style="color:#9ca3af;font-size:.88rem;">'+(isConfirm?"もう一度入力してください（確認）":"PINを入力してください（1回目）")+'</div>'
+      +'<div style="background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:10px 16px;margin-bottom:8px;font-size:.88rem;color:#1e40af;">🔑 初回ログインです。<br>4桁のPINを設定してください。</div>'
+      +'<div style="color:#8496a7;font-size:.88rem;">'+(isConfirm?"もう一度入力してください（確認）":"PINを入力してください（1回目）")+'</div>'
       +'</div>'
       +'<div class="pin-display">'+dots2+'</div>'
       +(staffPinError?'<div style="color:#dc2626;text-align:center;font-size:.9rem;margin-bottom:10px;">PINが一致しません。やり直してください</div>':"")
@@ -729,9 +729,9 @@ function render(){
       +(punchMsg
         ?'<div style="text-align:center;padding:36px 20px;">'
           +'<div style="font-size:3.5rem;margin-bottom:12px;">✅</div>'
-          +'<div style="font-size:1.2rem;font-weight:900;color:#059669;">打刻完了</div>'
-          +'<div style="font-size:.95rem;color:#374151;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
-          +'<div style="font-size:.78rem;color:#9ca3af;margin-top:18px;">まもなく画面が戻ります…</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:#1e40af;">打刻完了</div>'
+          +'<div style="font-size:.95rem;color:#0f172a;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
+          +'<div style="font-size:.78rem;color:#8496a7;margin-top:18px;">まもなく画面が戻ります…</div>'
           +'</div>'
         :'<div class="grid2">'
           +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
@@ -743,19 +743,19 @@ function render(){
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span>'+(worked?'<span class="hist-worked">実働 '+worked+'</span>':"")+'</div>'
       +histHTML+'</div>'
-      +'<div style="margin-top:16px;background:#fff;border-radius:4px;padding:16px;border:1px solid #d0d5dd;">'
+      +'<div style="margin-top:16px;background:#fff;border-radius:2px;padding:16px;border:1px solid #adb5bd;">'
       +'<div style="font-weight:700;font-size:.95rem;margin-bottom:12px;">📎 書類をアップロード</div>'
       +(staffUploadMsg
-        ?'<div style="background:#d1fae5;border:1px solid #10b981;border-radius:3px;padding:12px;text-align:center;font-weight:700;color:#065f46;font-size:.95rem;">✅ '+staffUploadMsg+'</div>'
-        :'<label for="staff-file-input" style="display:block;background:#f0f9ff;border:2px dashed #93c5fd;border-radius:3px;padding:16px;text-align:center;cursor:pointer;margin-bottom:10px;">'
+        ?'<div style="background:#d1fae5;border:1px solid #10b981;border-radius:2px;padding:12px;text-align:center;font-weight:700;color:#065f46;font-size:.95rem;">✅ '+staffUploadMsg+'</div>'
+        :'<label for="staff-file-input" style="display:block;background:#f0f9ff;border:2px dashed #93c5fd;border-radius:2px;padding:16px;text-align:center;cursor:pointer;margin-bottom:10px;">'
         +(staffUploadFile
-          ?'<div style="font-size:.9rem;color:#374151;font-weight:700;">📄 '+staffUploadFile.name+'</div><div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">タップで変更</div>'
-          :'<div style="font-size:1.8rem;margin-bottom:6px;">📷</div><div style="font-size:.9rem;font-weight:700;color:#374151;">カメラ撮影 or ファイルを選択</div><div style="font-size:.75rem;color:#9ca3af;margin-top:2px;">画像・PDF対応</div>'
+          ?'<div style="font-size:.9rem;color:#0f172a;font-weight:700;">📄 '+staffUploadFile.name+'</div><div style="font-size:.72rem;color:#8496a7;margin-top:4px;">タップで変更</div>'
+          :'<div style="font-size:1.8rem;margin-bottom:6px;">📷</div><div style="font-size:.9rem;font-weight:700;color:#0f172a;">カメラ撮影 or ファイルを選択</div><div style="font-size:.75rem;color:#8496a7;margin-top:2px;">画像・PDF対応</div>'
         )
         +'</label>'
         +'<input type="file" id="staff-file-input" style="display:none;" accept="image/*,application/pdf" capture="environment" onchange="onStaffFileSelect(this)">'
         +(staffUploadFile
-          ?'<button id="btn-staff-upload" onclick="uploadStaffDocument()" style="background:#059669;color:#fff;border:none;border-radius:4px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">送信する</button>'
+          ?'<button id="btn-staff-upload" onclick="uploadStaffDocument()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">送信する</button>'
           :''
         )
       )
@@ -765,13 +765,13 @@ function render(){
 
   // ── PIN ──
   if(screen==="pin"){
-    var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#d1d5db">────────</span>';
+    var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#c8ccd2">────────</span>';
     app.innerHTML='<div class="center" style="padding-top:40px;margin-bottom:28px;">'
       +'<div style="font-size:1.6rem;font-weight:900;">管理者認証</div>'
-      +'<div style="color:#9ca3af;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
+      +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
-      +(!adminPinReady()?'<div style="color:#d97706;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
+      +(!adminPinReady()?'<div style="color:#4b5563;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
       +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">⌫</button>'
@@ -795,7 +795,7 @@ function render(){
     for(var di=1;di<=daysInMonth;di++){allDates.push(year+"-"+pad(mon+1)+"-"+pad(di));}
     var DAYS=["日","月","火","水","木","金","土"];
     var totalMs=0,totalDays=0,totalOtMs=0;
-    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#4b5875;white-space:nowrap;border-bottom:2px solid #c8cfd8;background:#eef0f3;height:36px;";
+    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;height:32px;";
     var dayRows=allDates.map(function(dk,rowIdx){
       var dr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
       var cin=dr.find(function(r){return r.type==="clockIn";});
@@ -817,26 +817,26 @@ function render(){
       var workedColor=otMs>0?"#dc2626":"#1a2332";
       function tCell(rec,type){
         var time=rec?rec.time:"";var id=rec?rec.id:"";
-        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;color:'+(rec?"#374151":"#d1d5db")+'">'+(rec?time:"−")+'</span>';
-        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;cursor:pointer;color:'+(rec?"#374151":"#d1d5db")+';border-bottom:1px solid '+(rec?"#b0bac9":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>';
+        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>';
+        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>';
       }
       var brkText=(bs||be)?((bs?bs.time:"??:??")+"〜"+(be?be.time:"??:??")):"";
       var brkDisplay=locked2
-        ?'<span style="font-family:monospace;font-size:.8rem;color:'+(brkText?"#d97706":"#d1d5db")+'">'+(brkText||"−")+'</span>'
+        ?'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(brkText?"#4b5563":"#c8ccd2")+'">'+(brkText||"−")+'</span>'
         :'<span style="display:inline-flex;align-items:center;gap:2px;">'
           +tCell(bs,"breakStart")
-          +'<span style="font-size:.75rem;color:#d1d5db;">〜</span>'
+          +'<span style="font-size:.75rem;color:#c8ccd2;">〜</span>'
           +tCell(be,"breakEnd")
           +'</span>';
       var approveBtn=approved2
-        ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#e4e8ed;color:#5b6b7c;border:1px solid #d0d5dd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:3px;cursor:pointer;font-family:inherit;">引き戻し</button>'
-        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#1d4ed8;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:3px;cursor:pointer;font-family:inherit;">承認</button>':"");
-      return'<tr style="height:36px;border-bottom:1px solid #d0d5dd;background:'+bgRow+';">'
+        ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
+        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#1e40af;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">承認</button>':"");
+      return'<tr style="height:32px;border-bottom:1px solid #adb5bd;background:'+bgRow+';">'
         +'<td style="padding:0 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:0 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
-        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#d1d5db;">−</span>')+'</td>'
-        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#d1d5db;">−</span>')+'</td>'
-        +'<td style="padding:0 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#d1d5db;">−</span>')+'</td>'
+        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:0 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#c8ccd2;">−</span>')+'</td>'
         +'<td style="padding:0 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
         +'<td style="padding:0 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
         +'</tr>';
@@ -844,22 +844,22 @@ function render(){
     app.innerHTML=''
       // ① ヘッダー
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        +'<button style="background:#e4e8ed;color:#4b5875;font-size:.85rem;padding:7px 14px;border-radius:4px;border:1px solid #d0d5dd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
+        +'<button style="background:#dde1e7;color:#475569;font-size:.85rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
         +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
         +'<div style="display:flex;align-items:center;gap:8px;">'
-          +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #d0d5dd;border-radius:3px;">'+monOpts3+'</select>'
-          +'<button id="btn-bulk-approve-detail" style="background:#1d4ed8;color:#fff;border:none;padding:7px 14px;border-radius:4px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
+          +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #adb5bd;border-radius:2px;">'+monOpts3+'</select>'
+          +'<button id="btn-bulk-approve-detail" style="background:#1e40af;color:#fff;border:none;padding:7px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
       +'</div>'
       // ② サマリーバー
-      +'<div style="background:#fff;border-radius:3px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #d0d5dd;">'
+      +'<div style="background:#fff;border-radius:2px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #adb5bd;">'
         +'<div style="flex:1;text-align:center;border-right:1px solid #d0d5dd;">'
           +'<div style="font-size:.72rem;color:#8796a7;margin-bottom:2px;">出勤日数</div>'
           +'<div style="font-size:1.2rem;font-weight:900;color:#1a2332;">'+totalDays+'<span style="font-size:.8rem;font-weight:400;">日</span></div>'
         +'</div>'
         +'<div style="flex:1;text-align:center;border-right:1px solid #d0d5dd;">'
           +'<div style="font-size:.72rem;color:#8796a7;margin-bottom:2px;">総実働時間</div>'
-          +'<div style="font-size:1.2rem;font-weight:900;color:#1d4ed8;">'+(toHM(totalMs)||"0:00")+'</div>'
+          +'<div style="font-size:1.2rem;font-weight:900;color:#1e40af;">'+(toHM(totalMs)||"0:00")+'</div>'
         +'</div>'
         +'<div style="flex:1;text-align:center;">'
           +'<div style="font-size:.72rem;color:#8796a7;margin-bottom:2px;">残業時間</div>'
@@ -867,7 +867,7 @@ function render(){
         +'</div>'
       +'</div>'
       // ③ テーブル
-      +'<div style="background:#fff;border-radius:3px;border:1px solid #d0d5dd;overflow:hidden;">'
+      +'<div style="background:#fff;border-radius:2px;border:1px solid #adb5bd;overflow:hidden;">'
         +'<div style="overflow-x:auto;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:560px;">'
             +'<thead><tr>'
@@ -940,7 +940,7 @@ function render(){
     var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
     var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
     var titleP=csvPreviewType==="monthly"?"月次集計データ":"日次データ";
-    var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#4b5875;white-space:nowrap;border-bottom:2px solid #c8cfd8;background:#eef0f3;";
+    var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
     var theadHtmlP,tbodyHtmlP;
     if(csvPreviewType==="monthly"){
       theadHtmlP='<tr style="background:#f3f4f6;">'
@@ -958,13 +958,13 @@ function render(){
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
         var ot=Math.max(0,ms-days.length*8*3600000);
-        return'<tr class="csv-prev-row" data-empid="'+(s.employeeId||"")+'" data-nm="'+nm+'" data-loc="'+(s.location||"")+'" data-etype="'+(s.employmentType||"")+'" style="border-bottom:1px solid #d0d5dd;height:36px;background:'+(i%2===1?"#f7f8fa":"#fff")+';">'
+        return'<tr class="csv-prev-row" data-empid="'+(s.employeeId||"")+'" data-nm="'+nm+'" data-loc="'+(s.location||"")+'" data-etype="'+(s.employmentType||"")+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+(i%2===1?"#f7f8fa":"#fff")+';">'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#8796a7;">'+(s.employeeId||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+nm+'\',\'csvPreview\')" onmouseover="this.style.color=\'#1d4ed8\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+nm+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+nm+'\',\'csvPreview\')" onmouseover="this.style.color=\'#1e40af\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+nm+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+(s.location||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+(s.employmentType||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;">'+days.length+'日</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:#1d4ed8;">'+(toHM(ms)||"0:00")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:#1e40af;">'+(toHM(ms)||"0:00")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:'+(ot>0?"#dc2626":"#8796a7")+'">'+(ot>0?toHM(ot):"—")+'</td>'
           +'</tr>';
       }).join("");
@@ -997,35 +997,35 @@ function render(){
         var isSun=dow===0,isSat=dow===6;
         var rowBg=isSun?"#fff1f2":isSat?"#eff6ff":(i%2===1?"#f7f8fa":"#fff");
         var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
-        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #d0d5dd;height:36px;background:'+rowBg+';">'
+        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+rowBg+';">'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;white-space:nowrap;color:'+dayColor+';'+((isSun||isSat)?"font-weight:700;":"")+'">'
           +r.date+' ('+r.yobi+')</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#6b7280;">'+(r.empId||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#475569;">'+(r.empId||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+r.name+'\',\'csvPreview\')" onmouseover="this.style.color=\'#2563eb\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+r.name+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#059669;">'+r.cin+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#1e40af;">'+r.cin+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+r.cout+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:#1d4ed8;">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;color:#6b7280;">'+r.loc+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:#1e40af;">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#475569;">'+r.loc+'</td>'
           +'</tr>';
       }).join("");
     }
     var rowCountP=((tbodyHtmlP||"").match(/csv-prev-row/g)||[]).length;
     app.innerHTML='<div class="admin-sticky-bar" style="padding:16px 20px 12px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-      +'<div style="font-size:1.15rem;font-weight:900;color:#1a1a1a;">'+titleP+'</div>'
+      +'<div style="font-size:1.15rem;font-weight:900;color:#0f172a;">'+titleP+'</div>'
       +'<div style="display:flex;gap:8px;">'
-      +'<button id="btn-csv-preview-dl" style="background:#1d4ed8;color:#fff;border:none;padding:8px 20px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 CSV出力</button>'
-      +'<button onclick="screen=\'admin\';adminTab=\'export\';render();" style="background:#e4e8ed;color:#4b5875;border:1px solid #d0d5dd;padding:8px 20px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">← 戻る</button>'
+      +'<button id="btn-csv-preview-dl" style="background:#1e40af;color:#fff;border:none;padding:8px 20px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 CSV出力</button>'
+      +'<button onclick="screen=\'admin\';adminTab=\'export\';render();" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:8px 20px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">← 戻る</button>'
       +'</div></div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
-      +'<select id="csv-f-month" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;font-family:inherit;background:#fff;">'+prevMonthOpts+'</select>'
-      +'<input id="csv-f-id" type="text" placeholder="社員番号" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;width:100px;font-family:inherit;">'
-      +'<input id="csv-f-name" type="text" placeholder="氏名" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;width:110px;font-family:inherit;">'
-      +'<select id="csv-f-loc" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;font-family:inherit;background:#fff;">'+locOptsP+'</select>'
-      +'<select id="csv-f-type" style="padding:6px 10px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;font-family:inherit;background:#fff;">'+typeOptsP+'</select>'
-      +'<span id="csv-prev-count" style="font-size:.8rem;color:#6b7280;margin-left:4px;">全'+rowCountP+'件</span>'
+      +'<select id="csv-f-month" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+prevMonthOpts+'</select>'
+      +'<input id="csv-f-id" type="text" placeholder="社員番号" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;width:100px;font-family:inherit;">'
+      +'<input id="csv-f-name" type="text" placeholder="氏名" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;width:110px;font-family:inherit;">'
+      +'<select id="csv-f-loc" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+locOptsP+'</select>'
+      +'<select id="csv-f-type" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+typeOptsP+'</select>'
+      +'<span id="csv-prev-count" style="font-size:.8rem;color:#475569;margin-left:4px;">全'+rowCountP+'件</span>'
       +'</div></div>'
-      +'<div style="overflow-x:auto;background:#fff;border:1px solid #d0d5dd;border-radius:3px;margin-top:16px;">'
+      +'<div style="overflow-x:auto;background:#fff;border:1px solid #adb5bd;border-radius:2px;margin-top:16px;">'
       +'<table style="min-width:700px;width:100%;border-collapse:collapse;">'
       +'<thead>'+theadHtmlP+'</thead>'
       +'<tbody id="csv-prev-tbody">'+tbodyHtmlP+'</tbody>'
@@ -1102,32 +1102,32 @@ function render(){
         var locked=approved;
         function tCell(rec,type,label,color){
           var t=rec?rec.time:"--:--";
-          if(locked)return'<td style="padding:6px 4px;font-family:monospace;font-size:.85rem;text-align:center;color:'+(rec?"#374151":"#d1d5db")+';">'+t+'</td>';
+          if(locked)return'<td style="padding:4px 4px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';">'+t+'</td>';
           return'<td style="padding:6px 4px;text-align:center;">'
             +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="font-family:monospace;font-size:.85rem;color:'+(rec?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px solid #c8cfd8;padding-bottom:1px;">'+t+'</span>'
+            +'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+t+'</span>'
             +'</td>';
         }
-        return '<tr style="border-bottom:1px solid #d0d5dd;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';box-shadow:2px 0 4px rgba(0,0,0,.04);">'
-          +'<span style="color:#1d4ed8;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
-          +(worked?'<br><span style="font-size:.65rem;color:#1d4ed8;">'+worked+'</span>':"")
+        return '<tr style="border-bottom:1px solid #adb5bd;'+(approved?"background:#f0fdf4;":"")+'">'
+          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;">'
+          +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
+          +(worked?'<br><span style="font-size:.65rem;color:#1e40af;">'+worked+'</span>':"")
           +'</td>'
-          +tCell(cin,"clockIn","出","#059669")
+          +tCell(cin,"clockIn","出","#1e40af")
           +'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
           +(locked
             ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'
-            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="color:'+(bs?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px solid #c8cfd8;">'+(bs?bs.time:"--:--")+'</span>'
-            +'<span style="font-size:.75rem;">〜</span>'
-            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="color:'+(be?"#374151":"#d1d5db")+';cursor:pointer;border-bottom:1px solid #c8cfd8;">'+(be?be.time:"--:--")+'</span>')
+            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bs?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bs?bs.time:"--:--")+'</span>'
+            +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
+            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(be?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(be?be.time:"--:--")+'</span>')
           +'</td>'
           +tCell(cout,"clockOut","退","#dc2626")
           +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
-            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:4px;white-space:nowrap;">✓承認</div>'
-             +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:4px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
-            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:4px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
+            ?'<div style="background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #93c5fd;">✓承認</div>'
+             +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
+            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
           +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
@@ -1142,26 +1142,26 @@ function render(){
       var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
       tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
-        +'<button id="btn-date-prev" style="background:#e4e8ed;border:1px solid #d0d5dd;border-radius:3px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
-        +'<select id="sd-y" style="font-size:.9rem;border:1px solid #d0d5dd;border-radius:3px;padding:3px 4px;">'+sdYOpts+'</select>'
-        +'<select id="sd-m" style="font-size:.9rem;border:1px solid #d0d5dd;border-radius:3px;padding:3px 4px;">'+sdMOpts+'</select>'
-        +'<select id="sd-d" style="font-size:.9rem;border:1px solid #d0d5dd;border-radius:3px;padding:3px 4px;">'+sdDOpts+'</select>'
-        +'<button id="btn-date-next" style="background:#e4e8ed;border:1px solid #d0d5dd;border-radius:3px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
-        +'<span style="color:#9ca3af;font-size:.8rem;">'+staffList.length+'名</span>'
-        +'<span style="color:#9ca3af;font-size:.72rem;">※時刻をタップで編集</span>'
-        +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1d4ed8;color:#fff;border:none;padding:6px 14px;border-radius:3px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
+        +'<button id="btn-date-prev" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
+        +'<select id="sd-y" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdYOpts+'</select>'
+        +'<select id="sd-m" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdMOpts+'</select>'
+        +'<select id="sd-d" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdDOpts+'</select>'
+        +'<button id="btn-date-next" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
+        +'<span style="color:#8496a7;font-size:.8rem;">'+staffList.length+'名</span>'
+        +'<span style="color:#8496a7;font-size:.72rem;">※時刻をタップで編集</span>'
+        +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
-        +'<thead><tr style="border-bottom:2px solid #c8cfd8;background:#eef0f3;">'
-        +'<th style="text-align:left;font-size:.72rem;color:#4b5875;padding:4px;font-weight:700;position:sticky;left:0;background:#eef0f3;z-index:2;box-shadow:2px 0 4px rgba(0,0,0,.04);">氏名</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#059669;padding:4px;font-weight:700;">出勤</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#d97706;padding:4px;font-weight:700;">休憩</th>'
+        +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
+        +'<th style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;">氏名</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#8796a7;padding:4px;font-weight:700;">承認</th>'
         +'</tr></thead>'
         +'<tbody>'+sumRows+'</tbody></table>'
         +(delRecs.length?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
-          +'<div style="font-size:.72rem;color:#9ca3af;margin-bottom:4px;">削除済み</div>'
+          +'<div style="font-size:.72rem;color:#8496a7;margin-bottom:4px;">削除済み</div>'
           +delRecs.map(function(r){return '<div style="opacity:.4;font-size:.78rem;text-decoration:line-through;">'+r.staff+' '+TYPE_LABEL[r.type]+' '+r.time+'</div>';}).join("")
           +'</div>':"")
         +'</div>';
@@ -1177,13 +1177,13 @@ function render(){
         var sr=mRecsClean.filter(function(r){return r.staff===nm;});
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
-        return'<div class="sum-row"><span style="font-weight:700;flex:1;">'+nm+'</span><span style="color:#8796a7;font-size:.78rem;width:48px;text-align:center;">'+days.length+'日</span><span style="color:#1d4ed8;font-family:monospace;width:60px;text-align:right;">'+(toHM(ms)||"0:00")+'</span></div>';
+        return'<div class="sum-row"><span style="font-weight:700;flex:1;">'+nm+'</span><span style="color:#8796a7;font-size:.78rem;width:48px;text-align:center;">'+days.length+'日</span><span style="color:#1e40af;font-family:monospace;width:60px;text-align:right;">'+(toHM(ms)||"0:00")+'</span></div>';
       }).join(""):'<div class="empty">データがありません</div>';
       var monOpts=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-      var sumHeader='<div style="display:flex;justify-content:space-between;padding:6px 4px;border-bottom:2px solid #c8cfd8;margin-bottom:4px;">'
+      var sumHeader='<div style="display:flex;justify-content:space-between;padding:6px 4px;border-bottom:2px solid #adb5bd;margin-bottom:4px;">'
         +'<span style="font-size:.72rem;font-weight:700;color:#8796a7;flex:1;">名簿</span>'
-        +'<span style="font-size:.72rem;font-weight:700;color:#4b5875;width:48px;text-align:center;">勤務日数</span>'
-        +'<span style="font-size:.72rem;font-weight:700;color:#1d4ed8;width:60px;text-align:right;">総実働時間</span>'
+        +'<span style="font-size:.72rem;font-weight:700;color:#475569;width:48px;text-align:center;">勤務日数</span>'
+        +'<span style="font-size:.72rem;font-weight:700;color:#1e40af;width:60px;text-align:right;">総実働時間</span>'
         +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">CSV エクスポート</div>'
@@ -1201,19 +1201,19 @@ function render(){
       var allNames=[...new Set(records.map(function(r){return r.staff;}))].sort();
       var monOpts2=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
       var editRows=editRecs.map(function(r){
-        return '<div style="border:1px solid #d0d5dd;border-radius:3px;padding:10px;margin-bottom:8px;background:'+(r.editedFrom?"#fef9c3":"#fff")+'">'
+        return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:10px;margin-bottom:8px;background:'+(r.editedFrom?"#fef9c3":"#fff")+'">'
           +'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
           +'<span style="font-weight:700;">'+r.staff+'</span>'
-          +'<span style="font-size:.75rem;color:#9ca3af;">'+r.date+'</span>'
+          +'<span style="font-size:.75rem;color:#8496a7;">'+r.date+'</span>'
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
           +'<span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'" style="font-size:.85rem;font-weight:700;">'+TYPE_LABEL[r.type]+'</span>'
           +'<input type="time" class="edit-time" data-id="'+r.id+'" value="'+r.time+'" style="width:100px;">'
-          +(r.editedFrom?'<span style="color:#9ca3af;font-size:.7rem;">元:'+r.editedFrom+'</span>':"")
+          +(r.editedFrom?'<span style="color:#8496a7;font-size:.7rem;">元:'+r.editedFrom+'</span>':"")
           +'</div>'
           +'<div style="display:flex;gap:6px;margin-top:8px;">'
-          +'<button class="btn-save" data-id="'+r.id+'" style="background:#1d4ed8;color:#fff;border:none;padding:6px 14px;border-radius:3px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
-          +'<button class="btn-del-rec" data-id="'+r.id+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:3px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+          +'<button class="btn-save" data-id="'+r.id+'" style="background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+          +'<button class="btn-del-rec" data-id="'+r.id+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div></div>';
       }).join("");
       tc='<div class="admin-card">'
@@ -1242,28 +1242,28 @@ function render(){
       else tabFiltered=sorted;
       var allLocations=masterLocs.slice();
       var mf=function(label,id,type,ph){
-        return '<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">'+label+'</label>'
-          +'<input type="'+type+'" id="'+id+'" placeholder="'+ph+'" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>';
+        return '<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">'+label+'</label>'
+          +'<input type="'+type+'" id="'+id+'" placeholder="'+ph+'" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>';
       };
       var hrmRows=tabFiltered.map(function(s,i){
-        var sc=s.status==="退職"?"#dc2626":s.status==="休職"?"#d97706":"#059669";
+        var sc=s.status==="退職"?"#b91c1c":s.status==="休職"?"#475569":"#1e40af";
         var sl=s.status||"在籍";
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
         return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
-          +'<td style="padding:0 14px;font-size:13px;color:#9ca3af;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
+          +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
           +'<td style="padding:0 14px;overflow:hidden;">'
-          +'<div style="font-size:14px;font-weight:600;color:#111827;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispName+'</div>'
-          +'<div style="font-size:11px;color:#9ca3af;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispYomi+'</div>'
+          +'<div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispName+'</div>'
+          +'<div style="font-size:11px;color:#8496a7;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispYomi+'</div>'
           +'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location||'<span style="color:#d1d5db;">−</span>')+'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType||'<span style="color:#d1d5db;">−</span>')+'</td>'
+          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location||'<span style="color:#c8ccd2;">−</span>')+'</td>'
+          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType||'<span style="color:#c8ccd2;">−</span>')+'</td>'
           +'<td style="padding:0 14px;font-size:13px;">'
           +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+sl+'</span>'
-          +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px;">退職日: '+s.retireDate+'</div>':(s.hireDate?'<div style="font-size:11px;color:#9ca3af;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':""))
+          +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">退職日: '+s.retireDate+'</div>':(s.hireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':""))
           +'</td>'
           +'<td style="padding:0 14px;white-space:nowrap;">'
-          +'<button class="btn-hrm-edit" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
+          +'<button class="btn-hrm-edit" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
           +'<button class="btn-hrm-del" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</td>'
           +'</tr>';
@@ -1271,10 +1271,10 @@ function render(){
       var locOpts='<option value="">拠点（すべて）</option>'+allLocations.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
       var typeOpts='<option value="">雇用形態（すべて）</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
       var modalHtml='<div id="hrm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;">'
-        +'<div style="background:#fff;width:100%;max-width:520px;border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.15);">'
+        +'<div style="background:#fff;width:100%;max-width:520px;border-radius:2px;border:1px solid #adb5bd;">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid #e4e8ed;">'
         +'<span id="hrm-modal-title" style="font-size:16px;font-weight:700;color:#1a2332;">スタッフ編集</span>'
-        +'<button onclick="closeHrmModal()" style="background:#e4e8ed;border:1px solid #d0d5dd;width:32px;height:32px;border-radius:3px;font-size:18px;color:#4b5875;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+        +'<button onclick="closeHrmModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:32px;height:32px;border-radius:2px;font-size:18px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
         +'</div>'
         +'<input type="hidden" id="hrm-modal-orig">'
         +'<div style="padding:20px 24px;display:grid;grid-template-columns:1fr 1fr;gap:14px;">'
@@ -1283,28 +1283,28 @@ function render(){
         +mf("姓よみ","modal-lname-yomi","text","やまだ")
         +mf("名よみ","modal-fname-yomi","text","たろう")
         +mf("社員番号","modal-empid","text","001")
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">入社日</label><input type="text" id="modal-hiredate" placeholder="例：20261209" maxlength="10" inputmode="numeric" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;ime-mode:disabled;"></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">雇用形態</label>'
-        +'<select id="modal-emptype" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;">'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">入社日</label><input type="text" id="modal-hiredate" placeholder="例：20261209" maxlength="10" inputmode="numeric" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;ime-mode:disabled;"></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">雇用形態</label>'
+        +'<select id="modal-emptype" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("")+'</select></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">権限</label>'
-        +'<select id="modal-role" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;">'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">権限</label>'
+        +'<select id="modal-role" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["一般","管理者"].map(function(r){return'<option value="'+r+'">'+r+'</option>';}).join("")+'</select></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#6b7280;margin-bottom:5px;">状態</label>'
-        +'<select id="modal-status" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #d0d5dd;border-radius:3px;background:#fff;font-family:inherit;outline:none;">'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">状態</label>'
+        +'<select id="modal-status" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +["在籍","休職","退職"].map(function(v){return'<option value="'+v+'">'+v+'</option>';}).join("")+'</select></div>'
         +'</div>'
-        +'<div id="modal-pin-area" style="padding:0 24px 16px;font-size:13px;color:#6b7280;display:flex;align-items:center;gap:8px;min-height:36px;"></div>'
+        +'<div id="modal-pin-area" style="padding:0 24px 16px;font-size:13px;color:#475569;display:flex;align-items:center;gap:8px;min-height:36px;"></div>'
         +'<div style="display:flex;gap:10px;padding:16px 24px;border-top:1px solid #f3f4f6;">'
-        +'<button id="btn-modal-save" style="flex:1;background:#1d4ed8;color:#fff;border:none;padding:12px;border-radius:4px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
-        +'<button onclick="closeHrmModal()" style="flex:1;background:#e4e8ed;color:#4b5875;border:1px solid #d0d5dd;padding:12px;border-radius:4px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+        +'<button id="btn-modal-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:12px;border-radius:2px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<button onclick="closeHrmModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:12px;border-radius:2px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
         +'</div></div></div>';
-      tc='<div style="background:#fff;border:1px solid #d0d5dd;border-radius:4px;overflow:hidden;margin-bottom:16px;">'
+      tc='<div style="background:#fff;border:1px solid #adb5bd;border-radius:2px;overflow:hidden;margin-bottom:16px;">'
         +'<div style="display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid #f3f4f6;">'
-        +'<span style="font-size:16px;font-weight:700;color:#111827;">スタッフ管理</span>'
-        +'<button id="btn-hrm-add" style="background:#1d4ed8;color:#fff;border:none;padding:9px 18px;border-radius:3px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">＋ スタッフ追加</button>'
+        +'<span style="font-size:16px;font-weight:700;color:#0f172a;">スタッフ管理</span>'
+        +'<button id="btn-hrm-add" style="background:#1e40af;color:#fff;border:none;padding:9px 18px;border-radius:2px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">＋ スタッフ追加</button>'
         +'</div>'
         +'<div style="display:flex;gap:0;padding:0 20px;background:#f9fafb;border-bottom:1px solid #e5e7eb;">'
         +["在籍中","退職済み","すべて"].map(function(t){var on=staffHrmTab===t;return'<button class="hrm-tab-btn" data-tab="'+t+'" style="padding:12px 20px;font-size:13px;font-weight:700;background:none;border:none;border-bottom:3px solid '+(on?"#2563eb":"transparent")+';color:'+(on?"#2563eb":"#6b7280")+';cursor:pointer;font-family:inherit;border-radius:0;transform:none;">'+t+'</button>';}).join("")
@@ -1314,7 +1314,7 @@ function render(){
         +'<input id="srch-name" type="text" placeholder="🔍 氏名" style="width:140px;font-size:12px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-family:inherit;outline:none;">'
         +'<select id="srch-loc" style="font-size:12px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-family:inherit;outline:none;">'+locOpts+'</select>'
         +'<select id="srch-type" style="font-size:12px;padding:6px 10px;border:1px solid #e5e7eb;border-radius:6px;background:#f9fafb;font-family:inherit;outline:none;">'+typeOpts+'</select>'
-        +'<span style="margin-left:auto;font-size:12px;color:#6b7280;">全<strong id="hrm-count">'+tabFiltered.length+'</strong>件</span>'
+        +'<span style="margin-left:auto;font-size:12px;color:#475569;">全<strong id="hrm-count">'+tabFiltered.length+'</strong>件</span>'
         +'</div>'
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:860px;table-layout:fixed;">'
@@ -1334,7 +1334,7 @@ function render(){
     if(adminTab==="master"){
       var deptItems=masterDepts.map(function(d,i){
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
-          +'<span style="font-size:.9rem;color:#1a1a1a;">'+d+'</span>'
+          +'<span style="font-size:.9rem;color:#0f172a;">'+d+'</span>'
           +'<button class="btn-del-dept" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div>';
       }).join("");
@@ -1343,16 +1343,16 @@ function render(){
         var qrUrl="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data="+encodeURIComponent(facUrl);
         return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
           +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
-          +'<div><div style="font-size:.95rem;font-weight:700;color:#1a1a1a;">'+f.name+'</div>'
-          +'<div style="font-size:.75rem;color:#9ca3af;font-family:monospace;">'+(f.token||"トークンなし")+'</div></div>'
+          +'<div><div style="font-size:.95rem;font-weight:700;color:#0f172a;">'+f.name+'</div>'
+          +'<div style="font-size:.75rem;color:#8496a7;font-family:monospace;">'+(f.token||"トークンなし")+'</div></div>'
           +'<div style="display:flex;gap:6px;">'
-          +'<button class="btn-qr-loc" data-idx="'+i+'" style="background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">QR</button>'
+          +'<button class="btn-qr-loc" data-idx="'+i+'" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">QR</button>'
           +'<button class="btn-del-loc" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div></div>'
-          +'<div id="qr-panel-'+i+'" style="display:none;margin-top:10px;padding:12px;background:#f7f8fa;border-radius:3px;border:1px solid #d0d5dd;text-align:center;">'
+          +'<div id="qr-panel-'+i+'" style="display:none;margin-top:10px;padding:12px;background:#f1f3f5;border-radius:2px;border:1px solid #adb5bd;text-align:center;">'
           +'<img src="'+qrUrl+'" width="160" height="160" alt="QR" style="border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);">'
-          +'<div style="font-size:.7rem;color:#9ca3af;margin-top:6px;word-break:break-all;">'+facUrl+'</div>'
-          +'<button class="btn-print-qr" data-url="'+facUrl+'" data-name="'+f.name+'" style="margin-top:8px;background:#1d4ed8;color:#fff;border:none;padding:7px 20px;border-radius:3px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">印刷</button>'
+          +'<div style="font-size:.7rem;color:#8496a7;margin-top:6px;word-break:break-all;">'+facUrl+'</div>'
+          +'<button class="btn-print-qr" data-url="'+facUrl+'" data-name="'+f.name+'" style="margin-top:8px;background:#1e40af;color:#fff;border:none;padding:7px 20px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">印刷</button>'
           +'</div></div>';
       }).join("");
       tc='<div class="admin-card">'
@@ -1360,7 +1360,7 @@ function render(){
         +(deptItems||'<div class="empty">未登録</div>')
         +'<div style="display:flex;gap:8px;margin-top:12px;">'
         +'<input id="new-dept" type="text" placeholder="部門名を入力" style="flex:1;">'
-        +'<button id="btn-add-dept" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
+        +'<button id="btn-add-dept" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">追加</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">拠点トークン管理</div>'
@@ -1370,45 +1370,45 @@ function render(){
         +'<input id="new-loc-name" type="text" placeholder="拠点名（例: ナナイロ）" style="flex:1;">'
         +'<input id="new-loc-token" type="text" placeholder="トークン（例: nanairo1214）" style="flex:1;">'
         +'</div>'
-        +'<button id="btn-add-loc" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 拠点追加</button>'
+        +'<button id="btn-add-loc" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 拠点追加</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者PIN設定</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:12px;">状態: <strong style="color:'+(adminPinReady()?"#059669":"#dc2626")+';">'+(adminPinReady()?"設定済み（ハッシュ化済み）":"未設定（ログイン不可）")+'</strong></div>'
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">状態: <strong style="color:'+(adminPinReady()?"#1e40af":"#b91c1c")+';">'+(adminPinReady()?"設定済み（ハッシュ化済み）":"未設定（ログイン不可）")+'</strong></div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
-        +'<button id="btn-change-pin" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<button id="btn-change-pin" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_HASH?"#059669":(ADMIN_TOKEN?"#d97706":"#dc2626"))+';font-family:monospace;">'+(ADMIN_TOKEN_HASH?"設定済み（ハッシュ化済み）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_HASH?"#1e40af":(ADMIN_TOKEN?"#475569":"#b91c1c"))+';font-family:monospace;">'+(ADMIN_TOKEN_HASH?"設定済み（ハッシュ化済み）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
-        +'<button id="btn-change-token" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">閲覧専用トークン（労務士向け）</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(viewerTokenConfig?"#059669":"#dc2626")+';font-family:monospace;">'+(viewerTokenConfig||"未設定（閲覧URL使用不可）")+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(viewerTokenConfig?'?viewer='+viewerTokenConfig+' でアクセス可':'設定がないと閲覧URLは使用不可')+'</div>'
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(viewerTokenConfig?"#1e40af":"#b91c1c")+';font-family:monospace;">'+(viewerTokenConfig||"未設定（閲覧URL使用不可）")+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(viewerTokenConfig?'?viewer='+viewerTokenConfig+' でアクセス可':'設定がないと閲覧URLは使用不可')+'</div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-viewer-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
-        +'<button id="btn-change-viewer-token" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<button id="btn-change-viewer-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">デモアクセス管理</div>'
         +(demoAccessConfig
-          ?'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">トークン: <strong style="color:#059669;font-family:monospace;">'+demoAccessConfig.token+'</strong></div>'
-           +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:8px;">有効期限: <strong style="color:#059669;font-family:monospace;">'+demoAccessConfig.expireDate+'</strong></div>'
-           +'<div style="font-size:.75rem;color:#9ca3af;margin-bottom:10px;word-break:break-all;">デモURL: https://rsb79692-create.github.io/timecard/?demo='+encodeURIComponent(demoAccessConfig.token)+'</div>'
-           +'<button id="btn-demo-disable" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:6px 16px;border-radius:3px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:12px;">無効化</button>'
-          :'<div style="color:#9ca3af;font-size:.85rem;margin-bottom:12px;">デモアクセス未設定</div>'
+          ?'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">トークン: <strong style="color:#1e40af;font-family:monospace;">'+demoAccessConfig.token+'</strong></div>'
+           +'<div style="font-size:.85rem;color:#475569;margin-bottom:8px;">有効期限: <strong style="color:#1e40af;font-family:monospace;">'+demoAccessConfig.expireDate+'</strong></div>'
+           +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:10px;word-break:break-all;">デモURL: https://rsb79692-create.github.io/timecard/?demo='+encodeURIComponent(demoAccessConfig.token)+'</div>'
+           +'<button id="btn-demo-disable" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:6px 16px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:12px;">無効化</button>'
+          :'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">デモアクセス未設定</div>'
         )
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
         +'<input id="new-demo-token" type="text" placeholder="デモトークン（例: demo20260430）" style="flex:1;">'
         +'<input id="new-demo-expire" type="text" placeholder="有効期限（yyyymmdd）" maxlength="8" inputmode="numeric" style="width:130px;">'
         +'</div>'
-        +'<button id="btn-save-demo" style="background:#1d4ed8;color:#fff;border:none;padding:8px 16px;border-radius:3px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">設定・更新</button>'
+        +'<button id="btn-save-demo" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">設定・更新</button>'
         +'</div>'
     }
 
@@ -1424,21 +1424,21 @@ function render(){
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
         var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
         var safeName=(d.fileName||'').replace(/'/g,'&#39;');
-        return '<div style="border:1px solid #d0d5dd;border-radius:3px;padding:12px;margin-bottom:8px;background:#f7f8fa;">'
+        return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#f1f3f5;">'
           +'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">'
           +'<span style="font-size:1.5rem;flex-shrink:0;margin-top:2px;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
           +'<div style="font-weight:700;font-size:.92rem;">'+d.title+'</div>'
-          +'<div style="font-size:.72rem;color:#9ca3af;margin-top:2px;word-break:break-all;">'
-          +(showUploader?'提出者: <b style="color:#374151;">'+d.uploadedBy+'</b> &nbsp;':'')
+          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;word-break:break-all;">'
+          +(showUploader?'提出者: <b style="color:#0f172a;">'+d.uploadedBy+'</b> &nbsp;':'')
           +d.fileName+' ('+sizeStr+') &nbsp;'+date+'</div>'
-          +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#6b7280;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
+          +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#475569;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
           +'</div>'
           +'</div>'
           +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:3px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeName+'\')" style="flex:1;background:#1d4ed8;color:#fff;border:none;border-radius:3px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
-          +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:3px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
+          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeName+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
+          +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
           +'</div>'
           +'</div>';
       }
@@ -1452,8 +1452,8 @@ function render(){
           +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
           +'<div class="admin-title" style="margin-bottom:0;">アップロード済み（'+adminDocs.length+'件）</div>'
           +'<div style="display:flex;gap:6px;">'
-          +'<button onclick="bulkDownloadDocuments()" style="background:#eff4ff;color:#1d4ed8;border:1px solid #c7d7fd;padding:5px 12px;border-radius:3px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL(ZIP)</button>'
-          +'<button onclick="bulkDeleteDocuments()" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:5px 12px;border-radius:3px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括削除</button>'
+          +'<button onclick="bulkDownloadDocuments()" style="background:#eff4ff;color:#1e40af;border:1px solid #c7d7fd;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括DL(ZIP)</button>'
+          +'<button onclick="bulkDeleteDocuments()" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">一括削除</button>'
           +'</div>'
           +'</div>'
           +adminDocs.map(function(d){return renderDocItem(d,false);}).join('')
@@ -1470,26 +1470,26 @@ function render(){
         +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">📤 資料アップロード</div>'
-        +'<div id="doc-drop-area" style="border:2px dashed #c8cfd8;border-radius:3px;padding:24px;text-align:center;cursor:pointer;background:#f7f8fa;transition:border-color .2s,background .2s;margin-bottom:12px;"'
+        +'<div id="doc-drop-area" style="border:2px dashed #adb5bd;border-radius:2px;padding:24px;text-align:center;cursor:pointer;background:#f1f3f5;transition:border-color .2s,background .2s;margin-bottom:12px;"'
         +' onclick="document.getElementById(\'doc-file-input\').click()"'
-        +' ondragover="event.preventDefault();this.style.borderColor=\'#1d4ed8\';this.style.background=\'#eff4ff\';"'
-        +' ondragleave="this.style.borderColor=\'#c8cfd8\';this.style.background=\'#f7f8fa\';"'
+        +' ondragover="event.preventDefault();this.style.borderColor=\'#1e40af\';this.style.background=\'#eff4ff\';"'
+        +' ondragleave="this.style.borderColor=\'#adb5bd\';this.style.background=\'#f7f8fa\';"'
         +' ondrop="handleDocDrop(event);">'
         +'<div style="font-size:2rem;margin-bottom:8px;">📁</div>'
-        +'<div style="font-size:.9rem;font-weight:700;color:#374151;margin-bottom:4px;">ファイルをドロップ または クリックして選択</div>'
-        +'<div style="font-size:.75rem;color:#9ca3af;">PDF / Excel / Word / 画像（最大20MB）</div>'
+        +'<div style="font-size:.9rem;font-weight:700;color:#0f172a;margin-bottom:4px;">ファイルをドロップ または クリックして選択</div>'
+        +'<div style="font-size:.75rem;color:#8496a7;">PDF / Excel / Word / 画像（最大20MB）</div>'
         +'</div>'
         +'<input type="file" id="doc-file-input" style="display:none;" accept=".pdf,.xlsx,.xls,.docx,.doc,.png,.jpg,.jpeg" onchange="onDocFileSelect(this)">'
-        +'<div id="doc-file-info" style="display:none;background:#f0fdf4;border:1px solid #d1fae5;border-radius:3px;padding:8px 12px;margin-bottom:10px;font-size:.85rem;color:#374151;"></div>'
-        +'<input type="text" id="doc-title" placeholder="タイトル（必須）" style="width:100%;margin-bottom:8px;padding:10px 12px;border:1px solid #d0d5dd;border-radius:3px;font-size:.9rem;font-family:inherit;box-sizing:border-box;background:#fff;outline:none;">'
-        +'<textarea id="doc-memo" placeholder="メモ（任意）" rows="2" style="width:100%;margin-bottom:12px;padding:10px 12px;border:1px solid #d0d5dd;border-radius:3px;font-size:.85rem;font-family:inherit;resize:none;box-sizing:border-box;background:#fff;outline:none;display:block;"></textarea>'
+        +'<div id="doc-file-info" style="display:none;background:#f0fdf4;border:1px solid #d1fae5;border-radius:2px;padding:8px 12px;margin-bottom:10px;font-size:.85rem;color:#0f172a;"></div>'
+        +'<input type="text" id="doc-title" placeholder="タイトル（必須）" style="width:100%;margin-bottom:8px;padding:10px 12px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;box-sizing:border-box;background:#fff;outline:none;">'
+        +'<textarea id="doc-memo" placeholder="メモ（任意）" rows="2" style="width:100%;margin-bottom:12px;padding:10px 12px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;resize:none;box-sizing:border-box;background:#fff;outline:none;display:block;"></textarea>'
         +'<div id="doc-progress-wrap" style="display:none;margin-bottom:10px;">'
-        +'<div style="background:#e4e8ed;border-radius:2px;height:6px;overflow:hidden;">'
-        +'<div id="doc-progress-bar" style="height:6px;width:0%;background:#1d4ed8;border-radius:2px;transition:width .2s;"></div>'
+        +'<div style="background:#dde1e7;border-radius:2px;height:6px;overflow:hidden;">'
+        +'<div id="doc-progress-bar" style="height:6px;width:0%;background:#1e40af;border-radius:2px;transition:width .2s;"></div>'
         +'</div>'
-        +'<div id="doc-progress-text" style="font-size:.78rem;color:#1d4ed8;margin-top:4px;text-align:center;">0%</div>'
+        +'<div id="doc-progress-text" style="font-size:.78rem;color:#1e40af;margin-top:4px;text-align:center;">0%</div>'
         +'</div>'
-        +'<button id="btn-doc-upload" style="background:#1d4ed8;color:#fff;border:none;padding:13px;border-radius:4px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">アップロード</button>'
+        +'<button id="btn-doc-upload" style="background:#1e40af;color:#fff;border:none;padding:13px;border-radius:2px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">アップロード</button>'
         +'</div>'
         +docListHtml
         +staffDocListHtml;
@@ -1498,7 +1498,7 @@ function render(){
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
-      +'<button style="background:#e4e8ed;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:4px;border:1px solid #d0d5dd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
+      +'<button style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
       +'<div class="tab-row" style="margin-bottom:0;">'
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
@@ -1928,7 +1928,7 @@ function openHrmEdit(nm){
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
-    pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+(nm&&staffPins[nm]?'設定済み':"未設定")+'</strong>';
+    pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+(nm&&staffPins[nm]?'設定済み':"未設定")+'</strong>';
     if(nm&&staffPins[nm]){
       var pr=document.createElement("button");
       pr.textContent="リセット";
@@ -1936,7 +1936,7 @@ function openHrmEdit(nm){
       pr.onclick=function(){
         showConfirm(nm+"のPINをリセットしますか？",function(){
           delete staffPins[nm];saveData("tc5_pins",staffPins);
-          pinDiv.innerHTML='<span style="color:#9ca3af;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">未設定</strong>';
+          pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">未設定</strong>';
         });
       };
       pinDiv.appendChild(pr);
@@ -2102,7 +2102,7 @@ function viewerDownloadAndDelete(url,fileName,docId){
           if(wrap&&wrap.parentNode)wrap.parentNode.removeChild(wrap);
         });
         if(!secEl.querySelector('div[style*="border:1px solid"]')){
-          secEl.innerHTML='<div style="color:#9ca3af;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
+          secEl.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
           var bBtn=document.getElementById('btn-viewer-bulk-dl');
           if(bBtn)bBtn.style.display='none';
         }
@@ -2142,11 +2142,11 @@ function previewFile(url,fileType,fileName){
   var hdr=document.createElement('div');
   hdr.style.cssText='display:flex;justify-content:space-between;align-items:center;padding:12px 16px;border-bottom:1px solid #e5e7eb;flex-shrink:0;gap:8px;';
   var ttl=document.createElement('div');
-  ttl.style.cssText='font-size:.88rem;font-weight:700;color:#374151;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+  ttl.style.cssText='font-size:.88rem;font-weight:700;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
   ttl.textContent=fileName;
   var closeBtn=document.createElement('button');
   closeBtn.textContent='✕';
-  closeBtn.style.cssText='background:#e4e8ed;border:1px solid #d0d5dd;font-size:1.1rem;cursor:pointer;color:#4b5875;padding:6px 10px;border-radius:3px;flex-shrink:0;font-family:inherit;';
+  closeBtn.style.cssText='background:#dde1e7;border:1px solid #adb5bd;font-size:1.1rem;cursor:pointer;color:#475569;padding:6px 10px;border-radius:2px;flex-shrink:0;font-family:inherit;';
   closeBtn.onclick=function(){if(ov.parentNode)document.body.removeChild(ov);};
   hdr.appendChild(ttl);hdr.appendChild(closeBtn);box.appendChild(hdr);
   var content=document.createElement('div');
@@ -2183,9 +2183,9 @@ function bulkDownloadDocuments(){
   showConfirm('全'+docList.length+'件の資料をZIPで一括ダウンロードします。よろしいですか？',function(){
     var ov=document.createElement('div');
     ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
-    ov.innerHTML='<div style="background:#fff;border-radius:4px;padding:24px 32px;text-align:center;">'
+    ov.innerHTML='<div style="background:#fff;border-radius:2px;padding:24px 32px;text-align:center;">'
       +'<div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div>'
-      +'<div style="font-size:.85rem;color:#6b7280;">しばらくお待ちください</div></div>';
+      +'<div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
     document.body.appendChild(ov);
     var zip=new JSZip();
     Promise.all(docList.map(function(d){
