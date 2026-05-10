@@ -27,11 +27,9 @@ function saveToFirebase(key, val) {
   }).catch(function(e){console.error("FB save error:", e);});
 }
 
-function loadFromFirebase(callback) {
-  fetch(FB_URL + ".json")
-    .then(function(r){return r.json();})
-    .then(function(data){callback(data||{});})
-    .catch(function(e){console.error("FB load error:", e);callback({});});
+// 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
+function fetchJson(url) {
+  return fetch(url).then(function(r){return r.json();}).catch(function(){return null;});
 }
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
@@ -170,7 +168,8 @@ var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
 var viewerInvalid=false;
 var viewerTokenConfig=""; // Firebase config/viewerTokenから読み込む
-var ADMIN_TOKEN=""; // Firebase config/adminTokenから読み込む（固定初期値なし）
+var ADMIN_TOKEN=""; // Firebase config/adminToken（旧形式・移行用フォールバック）
+var ADMIN_TOKEN_HASH=""; // Firebase config/adminTokenHash（SHA-256ハッシュ、推奨）
 var adminParam=new URLSearchParams(location.search).get("admin");
 var adminUrlUsed=adminParam!==null;
 var adminTokenValid=false;
@@ -224,7 +223,7 @@ function calcMs(rs){
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
-var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/viewerToken"];
+var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/adminTokenHash","config/viewerToken"];
 function saveData(k,v){
   if(SENSITIVE_KEYS.indexOf(k)<0){
     try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
@@ -1298,8 +1297,8 @@ function render(){
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
-        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN?"#059669":"#dc2626")+';font-family:monospace;">'+(ADMIN_TOKEN||"未設定（URLログイン不可）")+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' でPINなしアクセス可':'設定がないと管理者URLログインは使用不可')+'</div>'
+        +'<div style="font-size:.85rem;color:#6b7280;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_HASH?"#059669":(ADMIN_TOKEN?"#d97706":"#dc2626"))+';font-family:monospace;">'+(ADMIN_TOKEN_HASH?"設定済み（ハッシュ化済み）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#9ca3af;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#2563eb;color:#fff;border:none;padding:8px 16px;border-radius:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
@@ -1737,15 +1736,15 @@ function render(){
     if(changeTokenBtn)changeTokenBtn.onclick=function(){
       var v=(document.getElementById("new-admin-token")?.value||"").trim();
       if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
-      ADMIN_TOKEN=v;
-      fetch(FB_URL+"/config/adminToken.json",{
-        method:"PUT",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(v)
-      }).then(function(){showAlert("管理者トークンを更新しました");})
-        .catch(function(){showAlert("Firebase保存に失敗しました");});
-      document.getElementById("new-admin-token").value="";
-      render();
+      hashPin(v).then(function(h){
+        ADMIN_TOKEN="";ADMIN_TOKEN_HASH=h;
+        fetch(FB_URL+"/config/adminTokenHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
+          .then(function(){return fetch(FB_URL+"/config/adminToken.json",{method:"DELETE"});})
+          .then(function(){showAlert("管理者トークンを更新しました（ハッシュ化済み）");})
+          .catch(function(){showAlert("Firebase保存に失敗しました");});
+        document.getElementById("new-admin-token").value="";
+        render();
+      });
     };
     // 閲覧専用トークン変更
     var changeViewerTokenBtn=document.getElementById("btn-change-viewer-token");
@@ -2335,69 +2334,92 @@ setInterval(function(){
 },1000);
 
 
+// ===== Firebase 起動時データ取得（個別パス・root bulk read 廃止 - Phase 2-A）=====
+async function initFirebase() {
+  try {
+    var results=await Promise.all([
+      fetchJson(FB_URL+"/tc5_staff.json"),
+      fetchJson(FB_URL+"/tc5_records.json"),
+      fetchJson(FB_URL+"/tc5_approvals.json"),
+      fetchJson(FB_URL+"/tc5_pins.json"),
+      fetchJson(FB_URL+"/tc_master_depts.json"),
+      fetchJson(FB_URL+"/master/locations.json"),
+      fetchJson(FB_URL+"/config/adminPinHash.json"),
+      fetchJson(FB_URL+"/config/adminPin.json"),
+      fetchJson(FB_URL+"/config/adminTokenHash.json"),
+      fetchJson(FB_URL+"/config/adminToken.json"),
+      fetchJson(FB_URL+"/config/viewerToken.json"),
+      fetchJson(FB_URL+"/config/demoAccess.json"),
+    ]);
+    var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
+    var fbDepts=results[4],fbLocations=results[5];
+    var fbAdminPinHash=results[6],fbAdminPin=results[7];
+    var fbAdminTokenHash=results[8],fbAdminToken=results[9];
+    var fbViewerToken=results[10],fbDemoAccess=results[11];
+
+    if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
+    if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
+    if(fbApprovals){approvals=fbApprovals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
+    if(fbPins){staffPins=fbPins;}
+    if(fbDepts){masterDepts=Array.isArray(fbDepts)?fbDepts:Object.values(fbDepts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
+    if(fbLocations){
+      var locs=Array.isArray(fbLocations)?fbLocations:Object.values(fbLocations);
+      masterFacilities=locs;
+      localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
+      masterLocs=masterFacilities.map(function(f){return f.name;});
+      VALID_TOKENS=buildValidTokens();
+      tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+      facilityName=VALID_TOKENS[effectiveToken]||"";
+      if(urlToken&&tokenValid){localStorage.setItem("facilityToken",urlToken);}
+    } else {
+      fetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
+    }
+    // 管理者PIN: ハッシュ優先、旧平文フォールバック
+    if(fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
+    else if(fbAdminPin){ADMIN_PIN=fbAdminPin;}
+    // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
+    if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
+    else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
+    // 閲覧専用トークン・デモ
+    if(fbViewerToken){viewerTokenConfig=fbViewerToken;}
+    if(fbDemoAccess){demoAccessConfig=fbDemoAccess;}
+    // 管理者URLトークン認証（hash比較優先、旧平文フォールバック）
+    if(adminUrlUsed){
+      var authOk=false;
+      if(ADMIN_TOKEN_HASH){authOk=((await hashPin(adminParam||""))===ADMIN_TOKEN_HASH);}
+      else if(ADMIN_TOKEN){authOk=(adminParam===ADMIN_TOKEN);}
+      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";}
+      else{adminTokenValid=false;adminTokenInvalid=true;}
+    }
+    // 閲覧専用トークン認証
+    if(viewerPending){
+      if(viewerTokenConfig&&viewerParam===viewerTokenConfig){viewerMode=true;viewerInvalid=false;}
+      else{viewerMode=false;viewerInvalid=true;}
+      viewerPending=false;
+    }
+    if(demoUrlUsed){
+      if(!demoAccessConfig||!demoAccessConfig.token||demoParam!==demoAccessConfig.token){demoInvalid=true;}
+      else{
+        var dn=new Date();var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
+        if(dTodayStr>demoAccessConfig.expireDate){demoExpired=true;}
+        else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";}
+      }
+    }
+    var validFacTabs=masterFacilities.map(function(f){return f.name;}).concat(["すべて"]);
+    if(validFacTabs.indexOf(yomiTab)<0){yomiTab=facilityName||"すべて";}
+    listenFirebase();
+    render();
+  } catch(e) {
+    console.error("FB init error:",e);
+    render();
+  }
+}
+
 // まず即座にレンダリング（Firebaseを待たない）
 render();
 
-// その後Firebaseからデータを取得して再レンダリング
-loadFromFirebase(function(data) {
-  if(data.tc5_records){records=Array.isArray(data.tc5_records)?data.tc5_records:Object.values(data.tc5_records);localStorage.setItem("tc5_records",JSON.stringify(records));}
-  if(data.tc5_staff){staffList=Array.isArray(data.tc5_staff)?data.tc5_staff:Object.values(data.tc5_staff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
-  if(data.tc5_approvals){approvals=data.tc5_approvals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
-  if(data.tc5_pins){staffPins=data.tc5_pins;} // localStorageには保存しない
-  if(data.tc_master_depts){masterDepts=Array.isArray(data.tc_master_depts)?data.tc_master_depts:Object.values(data.tc_master_depts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
-  if(data.master && data.master.locations){
-    var locs=Array.isArray(data.master.locations)?data.master.locations:Object.values(data.master.locations);
-    masterFacilities=locs;
-    localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
-    masterLocs=masterFacilities.map(function(f){return f.name;});
-    VALID_TOKENS=buildValidTokens();
-    tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
-    facilityName=VALID_TOKENS[effectiveToken]||"";
-    if(urlToken&&tokenValid){localStorage.setItem("facilityToken",urlToken);}
-  } else {
-    fetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
-  }
-  // 管理者PIN: ハッシュ優先、旧平文フォールバック（localStorageには保存しない）
-  if(data.config && data.config.adminPinHash){ADMIN_PIN_HASH=data.config.adminPinHash;ADMIN_PIN="";}
-  else if(data.config && data.config.adminPin){ADMIN_PIN=data.config.adminPin;}
-  // 管理者トークン: 固定値なし、Firebaseのみ（localStorageには保存しない）
-  if(data.config && data.config.adminToken){ADMIN_TOKEN=data.config.adminToken;}
-  // 閲覧専用トークン
-  if(data.config && data.config.viewerToken){viewerTokenConfig=data.config.viewerToken;}
-  if(data.config && data.config.demoAccess){demoAccessConfig=data.config.demoAccess;}
-  // 管理者URLトークン認証
-  if(adminUrlUsed){
-    if(ADMIN_TOKEN&&adminParam===ADMIN_TOKEN){
-      adminTokenValid=true;adminTokenInvalid=false;
-      isAdminAuthenticated=true;
-      screen="admin";adminTab="records";
-    } else {
-      adminTokenValid=false;adminTokenInvalid=true;
-    }
-  }
-  // 閲覧専用トークン認証（Firebase読込後に確定）
-  if(viewerPending){
-    if(viewerTokenConfig&&viewerParam===viewerTokenConfig){viewerMode=true;viewerInvalid=false;}
-    else{viewerMode=false;viewerInvalid=true;}
-    viewerPending=false;
-  }
-  if(demoUrlUsed){
-    var dc=data.config&&data.config.demoAccess;
-    if(!dc||!dc.token||demoParam!==dc.token){
-      demoInvalid=true;
-    } else {
-      var dn=new Date();
-      var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
-      if(dTodayStr>dc.expireDate){demoExpired=true;}
-      else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";}
-    }
-  }
-  // yomiTabが現在の拠点一覧にない場合はfacilityNameにフォールバック
-  var validFacTabs=masterFacilities.map(function(f){return f.name;}).concat(["すべて"]);
-  if(validFacTabs.indexOf(yomiTab)<0){yomiTab=facilityName||"すべて";}
-  listenFirebase();
-  render();
-});
+// その後Firebaseから個別パスで取得して再レンダリング
+initFirebase();
 </script>
 <script>
 if ('serviceWorker' in navigator) {
