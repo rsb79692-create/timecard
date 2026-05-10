@@ -59,9 +59,8 @@ async function getAuthToken(){
 
 async function authFetch(url,opts){
   var tok=await getAuthToken();
-  opts=opts||{};
-  var headers=Object.assign({"Authorization":"Bearer "+tok},opts.headers||{});
-  return fetch(url,Object.assign({},opts,{headers:headers}));
+  var authUrl=url+(url.indexOf('?')>=0?'&':'?')+'auth='+tok;
+  return fetch(authUrl,opts||{});
 }
 
 function saveToFirebase(key, val) {
