@@ -73,20 +73,36 @@ function saveToFirebase(key, val) {
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
 function saveRecord(rec) {
+  var url = FB_URL + "/tc5_records/" + rec.id + ".json";
+  console.log("[saveRecord] called:", rec.id, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
-  authFetch(FB_URL + "/tc5_records/" + rec.id + ".json", {
+  authFetch(url, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(rec)
-  }).catch(function(e){console.error("FB saveRecord error:", e);});
+  }).then(function(res){
+    if(!res.ok){
+      res.text().then(function(t){console.error("[saveRecord] HTTP", res.status, rec.id, t);});
+    } else {
+      console.log("[saveRecord] OK:", rec.id);
+    }
+  }).catch(function(e){console.error("[saveRecord] network error:", e);});
 }
 function patchRecord(id, partial) {
+  var url = FB_URL + "/tc5_records/" + id + ".json";
+  console.log("[patchRecord] called:", id, partial, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
-  authFetch(FB_URL + "/tc5_records/" + id + ".json", {
+  authFetch(url, {
     method: "PATCH",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(partial)
-  }).catch(function(e){console.error("FB patchRecord error:", e);});
+  }).then(function(res){
+    if(!res.ok){
+      res.text().then(function(t){console.error("[patchRecord] HTTP", res.status, id, t);});
+    } else {
+      console.log("[patchRecord] OK:", id);
+    }
+  }).catch(function(e){console.error("[patchRecord] network error:", e);});
 }
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
@@ -1957,6 +1973,7 @@ function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;})
 function doPunch(type){
   if(!tokenValid)return;
   var d=new Date();
+  console.log("[doPunch start]", staffName, type, fmtDateKey(d));
   var nr={id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
