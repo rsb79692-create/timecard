@@ -151,7 +151,7 @@ button{border:none;border-radius:2px;font-weight:700;cursor:pointer;user-select:
 button:active{filter:brightness(.86);}
 /* あいうえおタブ */
 .yomi-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;}
-.yomi-tab{padding:5px 10px;border-radius:2px;font-size:.82rem;font-weight:700;border:1px solid transparent;}
+.yomi-tab{padding:5px 10px;border-radius:5px;font-size:.82rem;font-weight:700;border:1px solid transparent;}
 .yomi-on{background:#1e40af;color:#fff;border-color:#1e40af;}
 .yomi-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
 /* スタッフ2列グリッド */
@@ -173,27 +173,27 @@ button:active{filter:brightness(.86);}
 .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
 .pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#0f172a;}
 .msg-ok{background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:#1e40af;}
-.history{background:#fff;border-radius:2px;padding:12px 14px;border:1px solid #adb5bd;}
+.history{background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;}
 .hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
 .hist-label{color:#8496a7;font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
 .hist-worked{color:#1e40af;font-size:.88rem;font-weight:900;font-family:monospace;}
-.hist-row{display:flex;justify-content:space-between;font-size:.84rem;padding:5px 0;border-bottom:1px solid #ced4da;}
+.hist-row{display:flex;justify-content:space-between;font-size:.84rem;padding:7px 0;border-bottom:1px solid #e9ecef;}
 .hist-row:last-child{border-bottom:none;}
 .c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;}
 /* 管理者 */
 .tab-row{display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;}
-.tab-btn{padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
+.tab-btn{padding:6px 12px;border-radius:5px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
 .tab-on{background:#1e40af;color:#fff;border-color:#1e40af;}
 .tab-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
-.admin-card{background:#fff;border-radius:2px;padding:14px;margin-bottom:10px;border:1px solid #adb5bd;}
-.admin-title{font-weight:700;font-size:.88rem;margin-bottom:10px;color:#0f172a;letter-spacing:.06em;padding-bottom:6px;border-bottom:2px solid #dee2e6;}
+.admin-card{background:#fff;border-radius:2px;padding:16px;margin-bottom:10px;border:1px solid #adb5bd;}
+.admin-title{font-weight:700;font-size:.88rem;margin-bottom:10px;color:#0f172a;letter-spacing:.06em;padding-bottom:6px;border-bottom:1px solid #e9ecef;}
 select,input[type=text],input[type=date],input[type=time]{background:#fff;color:#0f172a;border:1px solid #adb5bd;border-radius:2px;padding:6px 10px;font-size:.83rem;font-family:inherit;outline:none;}
 select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,175,.12);}
 .btn-export{background:#1e40af;color:#fff;padding:10px;font-size:.9rem;font-weight:700;border-radius:2px;width:100%;}
-.sum-row{display:flex;justify-content:space-between;padding:6px 8px;border-bottom:1px solid #ced4da;font-size:.84rem;align-items:center;}
+.sum-row{display:flex;justify-content:space-between;padding:8px 8px;border-bottom:1px solid #e9ecef;font-size:.84rem;align-items:center;}
 .sum-row:hover{background:#f0f4ff;}
-.staff-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;font-size:.83rem;border-bottom:1px solid #ced4da;}
-.btn-del{background:transparent;color:#8496a7;font-size:.72rem;border-radius:2px;padding:3px 7px;border:1px solid #ced4da;}
+.staff-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;font-size:.83rem;border-bottom:1px solid #e9ecef;}
+.btn-del{background:transparent;color:#8496a7;font-size:.72rem;border-radius:2px;padding:3px 7px;border:1px solid #e9ecef;}
 .empty{color:#8496a7;font-size:.83rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
 .hrm-row:hover{background:#f0f4ff!important;}
@@ -795,7 +795,7 @@ function render(){
     for(var di=1;di<=daysInMonth;di++){allDates.push(year+"-"+pad(mon+1)+"-"+pad(di));}
     var DAYS=["日","月","火","水","木","金","土"];
     var totalMs=0,totalDays=0,totalOtMs=0;
-    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;height:32px;";
+    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;height:38px;";
     var dayRows=allDates.map(function(dk,rowIdx){
       var dr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
       var cin=dr.find(function(r){return r.type==="clockIn";});
@@ -810,7 +810,7 @@ function render(){
       var dow=dObj.getDay();
       var yobi=DAYS[dow];
       var isSun=dow===0,isSat=dow===6;
-      var bgRow=approved2?"#f0fdf4":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#f7f8fa":"#fff");
+      var bgRow=approved2?"#f0fdf4":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#fafafa":"#fff");
       var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
       var hasData=dr.length>0;
       var otMs=Math.max(0,ms-8*3600000);
@@ -831,7 +831,7 @@ function render(){
       var approveBtn=approved2
         ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
         :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#1e40af;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">承認</button>':"");
-      return'<tr style="height:32px;border-bottom:1px solid #adb5bd;background:'+bgRow+';">'
+      return'<tr style="height:40px;border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
         +'<td style="padding:0 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:0 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
         +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
@@ -853,11 +853,11 @@ function render(){
       +'</div>'
       // ② サマリーバー
       +'<div style="background:#fff;border-radius:2px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #adb5bd;">'
-        +'<div style="flex:1;text-align:center;border-right:1px solid #d0d5dd;">'
+        +'<div style="flex:1;text-align:center;border-right:1px solid #dee2e6;">'
           +'<div style="font-size:.72rem;color:#8796a7;margin-bottom:2px;">出勤日数</div>'
           +'<div style="font-size:1.2rem;font-weight:900;color:#1a2332;">'+totalDays+'<span style="font-size:.8rem;font-weight:400;">日</span></div>'
         +'</div>'
-        +'<div style="flex:1;text-align:center;border-right:1px solid #d0d5dd;">'
+        +'<div style="flex:1;text-align:center;border-right:1px solid #dee2e6;">'
           +'<div style="font-size:.72rem;color:#8796a7;margin-bottom:2px;">総実働時間</div>'
           +'<div style="font-size:1.2rem;font-weight:900;color:#1e40af;">'+(toHM(totalMs)||"0:00")+'</div>'
         +'</div>'
@@ -1109,7 +1109,7 @@ function render(){
             +'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+t+'</span>'
             +'</td>';
         }
-        return '<tr style="border-bottom:1px solid #adb5bd;'+(approved?"background:#f0fdf4;":"")+'">'
+        return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(worked?'<br><span style="font-size:.65rem;color:#1e40af;">'+worked+'</span>':"")
