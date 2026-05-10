@@ -1,0 +1,8 @@
+{
+  "rules": {
+    "honomi": {
+      ".read": "auth != null",
+      ".write": "auth != null"
+    }
+  }
+}
