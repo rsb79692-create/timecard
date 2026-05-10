@@ -71,6 +71,27 @@ function saveToFirebase(key, val) {
   }).catch(function(e){console.error("FB save error:", e);});
 }
 
+// ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
+function saveRecord(rec) {
+  localStorage.setItem("tc5_records", JSON.stringify(records));
+  authFetch(FB_URL + "/tc5_records/" + rec.id + ".json", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(rec)
+  }).catch(function(e){console.error("FB saveRecord error:", e);});
+}
+function patchRecord(id, partial) {
+  localStorage.setItem("tc5_records", JSON.stringify(records));
+  authFetch(FB_URL + "/tc5_records/" + id + ".json", {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(partial)
+  }).catch(function(e){console.error("FB patchRecord error:", e);});
+}
+function softDeleteRecord(id) {
+  patchRecord(id, {deleted: true});
+}
+
 // 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
 function fetchJson(url) {
   return authFetch(url).then(function(r){return r.json();}).catch(function(){return null;});
@@ -877,13 +898,13 @@ function render(){
         var d=new Date(date);d.setHours(hh,mm,0,0);
         if(id){
           var rec=records.find(function(r){return r.id===id;});
-          if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();}
+          if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
         } else {
           var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-          if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();}
-          else{records.push({id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
+          if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();saveRecord(exist);}
+          else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
         }
-        saveData("tc5_records",records);render();
+        render();
       };
     });
     return;
@@ -1503,14 +1524,13 @@ function render(){
       var d=new Date(date);d.setHours(parts[0],parts[1],0,0);
       if(id){
         var rec=records.find(function(r){return r.id===id;});
-        if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();}
+        if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
       } else {
         // 既存の同日同スタッフ同種別を確認
         var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
-        if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();}
-        else{records.push({id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true});}
+        if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();saveRecord(exist);}
+        else{var nr={id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
       }
-      saveData("tc5_records",records);
     }
     document.querySelectorAll(".sel-hour,.sel-min").forEach(function(el){
       el.onchange=function(){saveTimeSelect(el);};
@@ -1570,8 +1590,8 @@ function render(){
       if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
       var parts=time.split(":");
       var ts=new Date(date);ts.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
-      records.push({id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true});
-      saveData("tc5_records",records);render();
+      var nr={id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
+      records.push(nr);saveRecord(nr);render();
     };
 
     // 時刻保存
@@ -1586,7 +1606,7 @@ function render(){
         var parts=inp.value.split(":");
         var d=new Date(rec.date);d.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
         rec.time=inp.value;rec.timestamp=d.toISOString();
-        saveData("tc5_records",records);render();
+        saveRecord(rec);render();
       };
     });
 
@@ -1595,7 +1615,7 @@ function render(){
       b.onclick=function(){
         showConfirm("削除しますか？\n元データは勤怠一覧で確認できます",function(){
           var rec=records.find(function(r){return r.id===b.dataset.id;});
-          if(rec){rec.deleted=true;saveData("tc5_records",records);render();}
+          if(rec){rec.deleted=true;softDeleteRecord(rec.id);render();}
         });
       };
     });
@@ -1675,8 +1695,14 @@ function render(){
         if(!s)return;
         if(newN!==orig){
           if(staffList.find(function(x){return x.name===newN&&x!==s;})){showAlert("同名のスタッフが既に存在します");return;}
+          var renamedIds=records.filter(function(r){return r.staff===orig;}).map(function(r){return r.id;});
           records.forEach(function(r){if(r.staff===orig)r.staff=newN;});
-          saveData("tc5_records",records);
+          localStorage.setItem("tc5_records",JSON.stringify(records));
+          renamedIds.forEach(function(rid){
+            authFetch(FB_URL+"/tc5_records/"+rid+".json",{
+              method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({staff:newN})
+            }).catch(function(e){console.error("FB patchRecord error:",e);});
+          });
           var na={};Object.keys(approvals).forEach(function(k){na[k.replace("__"+orig,"__"+newN)]=approvals[k];});
           approvals=na;saveData("tc5_approvals",approvals);
           if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
@@ -1931,8 +1957,8 @@ function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;})
 function doPunch(type){
   if(!tokenValid)return;
   var d=new Date();
-  records.push({id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()});
-  saveData("tc5_records",records);
+  var nr={id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){punchMsg=null;staffName=null;screen="home";render();},1500);
