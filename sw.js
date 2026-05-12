@@ -1,10 +1,11 @@
-const CACHE_NAME = 'timecard-v3';
+const CACHE_NAME = 'timecard-v4';
 const OFFLINE_URLS = [
   '/timecard/',
   '/timecard/index.html',
   '/timecard/manifest.json',
-  '/timecard/icon-192.png',
-  '/timecard/icon-512.png'
+  '/timecard/icon-192-v2.png',
+  '/timecard/icon-512-v2.png',
+  '/timecard/apple-touch-icon-v2.png'
 ];
 
 self.addEventListener('install', function(event) {
