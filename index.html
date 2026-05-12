@@ -241,13 +241,20 @@ if(!masterFacilities.length){masterFacilities=DEFAULT_FACILITIES.slice();}
 function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f.token)t[f.token]=f.name;});return t;}
 var VALID_TOKENS=buildValidTokens();
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
+// Hash fallback: #token=all, #token=xxx, bare #all / #xxx
+if(!urlToken){var _h=location.hash.replace(/^#/,"");if(_h){var _hToken=new URLSearchParams(_h).get("token")||"";if(!_hToken&&!/[&=]/.test(_h)){_hToken=_h;}if(_hToken){urlToken=_hToken;}}}
+console.log("[TC]","query:",(new URLSearchParams(location.search).get("token")||"-"),"hash:",(location.hash||"-"));
 var isAllToken=(urlToken==="all");
-if(urlToken&&!isAllToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
-  localStorage.setItem("facilityToken",urlToken);
-}
+// Persist — all: tc_url_token="all" + facilityToken削除; facility: 両キー保存
+if(isAllToken){localStorage.setItem("tc_url_token","all");localStorage.removeItem("facilityToken");}
+else if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){localStorage.setItem("facilityToken",urlToken);localStorage.setItem("tc_url_token",urlToken);}
+// Restore: tc_url_token を facilityToken より優先
+if(!urlToken){var _saved=localStorage.getItem("tc_url_token")||"";if(_saved){urlToken=_saved;isAllToken=(urlToken==="all");if(isAllToken){localStorage.removeItem("facilityToken");}}}
+console.log("[TC]","restored:",(urlToken||"-"),"isAllToken:",isAllToken);
 var effectiveToken=isAllToken?"":urlToken||localStorage.getItem("facilityToken")||"";
 var tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
 var facilityName=VALID_TOKENS[effectiveToken]||"";
+console.log("[TC]","effectiveToken:",(effectiveToken||"-"),"facilityName:",(facilityName||"-"),"tokenValid:",tokenValid);
 var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
@@ -356,6 +363,7 @@ function getKanaRow(s){
 function filteredStaff(){
   var active=staffList.filter(function(s){return s.status!=="退職"&&s.status!=="休職";});
   if(!isAllToken&&facilityName){active=active.filter(function(s){return (s.location||"")===facilityName;});}
+  console.log("[TC]","filteredStaff件数:",active.length,"isAllToken:",isAllToken,"facilityName:",(facilityName||"-"));
   if(yomiTab==="すべて"){
     return active.sort(function(a,b){return (a.yomi||a.name||"").localeCompare(b.yomi||b.name||"","ja");});
   }
