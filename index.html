@@ -241,11 +241,12 @@ if(!masterFacilities.length){masterFacilities=DEFAULT_FACILITIES.slice();}
 function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f.token)t[f.token]=f.name;});return t;}
 var VALID_TOKENS=buildValidTokens();
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
-if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
+var isAllToken=(urlToken==="all");
+if(urlToken&&!isAllToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){
   localStorage.setItem("facilityToken",urlToken);
 }
-var effectiveToken=urlToken||localStorage.getItem("facilityToken")||"";
-var tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+var effectiveToken=isAllToken?"":urlToken||localStorage.getItem("facilityToken")||"";
+var tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
 var facilityName=VALID_TOKENS[effectiveToken]||"";
 var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerPending=viewerParam!==null; // Firebase認証待ち
@@ -323,7 +324,7 @@ var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageに�
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
-var adminTab="records",yomiTab=facilityName||"すべて";
+var adminTab="records",yomiTab="すべて";
 var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
@@ -339,13 +340,27 @@ var staffUploadFile=null;var staffUploadMsg=null;
 var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=masterFacilities.map(function(f){return f.name;});
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
+var KANA_ROWS=["あ行","か行","さ行","た行","な行","は行","ま行","や行","ら行","わ行","その他"];
+function getKanaRow(s){
+  var str=(s.yomi||s.name||"").replace(/[\s　]/g,"");
+  if(!str)return "その他";
+  var c=str.charAt(0);
+  var code=c.charCodeAt(0);
+  if(code>=0x30A1&&code<=0x30F6)c=String.fromCharCode(code-0x60);
+  var map={"あ行":"あいうえお","か行":"かきくけこ","さ行":"さしすせそ","た行":"たちつてと",
+            "な行":"なにぬねの","は行":"はひふへほ","ま行":"まみむめも","や行":"やゆよ",
+            "ら行":"らりるれろ","わ行":"わをん"};
+  for(var r in map){if(map[r].indexOf(c)>=0)return r;}
+  return "その他";
+}
 function filteredStaff(){
   var active=staffList.filter(function(s){return s.status!=="退職"&&s.status!=="休職";});
+  if(!isAllToken&&facilityName){active=active.filter(function(s){return (s.location||"")===facilityName;});}
   if(yomiTab==="すべて"){
-    return active.sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    return active.sort(function(a,b){return (a.yomi||a.name||"").localeCompare(b.yomi||b.name||"","ja");});
   }
-  return active.filter(function(s){return (s.location||"")===yomiTab;})
-    .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+  return active.filter(function(s){return getKanaRow(s)===yomiTab;})
+    .sort(function(a,b){return (a.yomi||a.name||"").localeCompare(b.yomi||b.name||"","ja");});
 }
 
 // ===== レンダリング =====
@@ -647,14 +662,15 @@ function render(){
     }
     var list=filteredStaff();
     var activeStaff=staffList.filter(function(s){return s.status!=="退職"&&s.status!=="休職";});
-    var usedLocs=activeStaff.map(function(s){return s.location||"";}).filter(Boolean);
-    var facTabs=masterFacilities.filter(function(f){return usedLocs.indexOf(f.name)>=0;});
-    var tabsHTML=facTabs.map(function(f){
-      return '<button class="yomi-tab '+(yomiTab===f.name?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+f.name+'\')">'+f.name+'</button>';
-    }).join("")
-    +'<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>';
+    if(!isAllToken&&facilityName){activeStaff=activeStaff.filter(function(s){return (s.location||"")===facilityName;});}
+    var usedRows=KANA_ROWS.filter(function(r){return activeStaff.some(function(s){return getKanaRow(s)===r;});});
+    var tabsHTML='<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>'
+    +usedRows.map(function(r){
+      return '<button class="yomi-tab '+(yomiTab===r?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r+'\')">'+r+'</button>';
+    }).join("");
     var staffHTML=list.length?list.map(function(s){
-      return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+'</button>';
+      var locLabel=s.location?'<div style="font-size:.6rem;color:#8496a7;font-weight:400;margin-top:2px;">'+s.location+'</div>':"";
+      return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+s.name+locLabel+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
     app.innerHTML='<div class="center" style="margin-bottom:10px;padding-top:4px;">'
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
@@ -1977,7 +1993,10 @@ function doPunch(type){
   if(!tokenValid)return;
   var d=new Date();
   console.log("[doPunch start]", staffName, type, fmtDateKey(d));
+  var _so=staffList.find(function(s){return s.name===staffName;})||{};
+  var _fn=(_so.location)||facilityName||"";
   var nr={id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  if(_fn)nr.facilityName=_fn;
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
@@ -2075,7 +2094,7 @@ function saveFacilities(){
   localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
   masterLocs=masterFacilities.map(function(f){return f.name;});
   VALID_TOKENS=buildValidTokens();
-  tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+  tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
   facilityName=VALID_TOKENS[effectiveToken]||"";
   authFetch(FB_URL+"/master/locations.json",{
     method:"PUT",headers:{"Content-Type":"application/json"},
@@ -2472,9 +2491,9 @@ async function initFirebase() {
       localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
       masterLocs=masterFacilities.map(function(f){return f.name;});
       VALID_TOKENS=buildValidTokens();
-      tokenValid=Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
+      tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
       facilityName=VALID_TOKENS[effectiveToken]||"";
-      if(urlToken&&tokenValid){localStorage.setItem("facilityToken",urlToken);}
+      if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
     } else {
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
     }
@@ -2509,8 +2528,7 @@ async function initFirebase() {
         else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";}
       }
     }
-    var validFacTabs=masterFacilities.map(function(f){return f.name;}).concat(["すべて"]);
-    if(validFacTabs.indexOf(yomiTab)<0){yomiTab=facilityName||"すべて";}
+    if(KANA_ROWS.concat(["すべて"]).indexOf(yomiTab)<0){yomiTab="すべて";}
     listenFirebase();
     render();
   } catch(e) {
