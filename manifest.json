@@ -3,8 +3,8 @@
   "short_name": "タイムカード",
   "start_url": "/timecard/",
   "display": "standalone",
-  "background_color": "#f5f0eb",
-  "theme_color": "#c0632a",
+  "background_color": "#1565C0",
+  "theme_color": "#1976D2",
   "orientation": "portrait",
   "icons": [
     {
@@ -15,6 +15,11 @@
     {
       "src": "icon-512.png",
       "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "apple-touch-icon.png",
+      "sizes": "180x180",
       "type": "image/png"
     }
   ]
