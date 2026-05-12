@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timecard-v2';
+const CACHE_NAME = 'timecard-v3';
 const OFFLINE_URLS = [
   '/timecard/',
   '/timecard/index.html',
@@ -30,6 +30,14 @@ self.addEventListener('activate', function(event) {
 
 self.addEventListener('fetch', function(event) {
   if (event.request.method !== 'GET') return;
+  // HTML(ナビゲーション)は常にネットワーク取得 — HTTPキャッシュをバイパス
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(new Request(event.request, {cache: 'no-store'}))
+        .catch(function() { return caches.match(event.request); })
+    );
+    return;
+  }
   event.respondWith(
     fetch(event.request).catch(function() {
       return caches.match(event.request);
