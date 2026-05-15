@@ -1555,6 +1555,7 @@ function render(){
     if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
 
     // 勤怠一覧タブ：時刻セルのインライン編集
+    console.log("[admin time-cell handler attached]", document.querySelectorAll(".time-cell").length, "cells, tab:", adminTab);
     document.querySelectorAll(".time-cell").forEach(function(el){
       el.onclick=function(){
         var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;

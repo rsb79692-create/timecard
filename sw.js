@@ -1,4 +1,4 @@
-const CACHE_NAME = 'timecard-v4';
+const CACHE_NAME = 'timecard-v5';
 const OFFLINE_URLS = [
   '/timecard/',
   '/timecard/index.html',
