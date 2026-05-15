@@ -1554,6 +1554,79 @@ function render(){
     var bdNext=document.getElementById("btn-date-next");
     if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
 
+    // 勤怠一覧タブ：時刻セルのインライン編集
+    document.querySelectorAll(".time-cell").forEach(function(el){
+      el.onclick=function(){
+        var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
+        var cur=el.textContent.trim();
+        if(cur==="--:--"||cur==="−")cur="";
+        if(el.querySelector("input"))return;
+        var origText=el.textContent,origStyle=el.getAttribute("style")||"";
+        var typeName=TYPE_LABEL[type]||type;
+        var saving=false;
+        var wrap=document.createElement("div");
+        wrap.style.cssText="display:inline-flex;align-items:center;gap:3px;";
+        var inp=document.createElement("input");
+        inp.type="time";inp.value=cur;
+        inp.style.cssText="width:72px;font-size:.85rem;font-family:monospace;border:1px solid #1e40af;border-radius:2px;padding:2px 3px;background:#eff4ff;outline:none;";
+        var btnOk=document.createElement("button");
+        btnOk.textContent="✓";btnOk.title="保存";
+        btnOk.style.cssText="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
+        var btnCnl=document.createElement("button");
+        btnCnl.textContent="✕";btnCnl.title="キャンセル";
+        btnCnl.style.cssText="background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
+        wrap.appendChild(inp);wrap.appendChild(btnOk);wrap.appendChild(btnCnl);
+        el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
+        el.appendChild(wrap);
+        inp.focus();
+        function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
+        function save(){
+          var val=inp.value.trim();
+          if(!val&&!id){cancel();return;}
+          var parts=val?val.split(":"):[null,null];
+          var hh=val?parseInt(parts[0]):NaN,mm=val?parseInt(parts[1]):NaN;
+          if(val&&(isNaN(hh)||isNaN(mm)||hh>23||mm>59)){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
+          var newTime=val?pad(hh)+":"+pad(mm):"";
+          var oldTime=cur||"（未打刻）";
+          saving=true;
+          if(newTime===""&&id){
+            showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
+              var rec=records.find(function(r){return r.id===id;});
+              if(rec){console.log("[管理者修正] 削除:",snm,date,typeName,"元時刻:",rec.time);rec.deleted=true;softDeleteRecord(rec.id);}
+              render();
+            },function(){saving=false;cancel();});
+          } else if(newTime){
+            showConfirm(snm+"さんの "+typeName+" を "+newTime+" に修正します。\n（"+date+"）\nよろしいですか？",function(){
+              var d2=new Date(date);d2.setHours(hh,mm,0,0);
+              if(id){
+                var rec=records.find(function(r){return r.id===id;});
+                if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
+              } else {
+                var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+                if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
+                else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true};records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
+              }
+              render();
+            },function(){saving=false;cancel();});
+          } else {
+            saving=false;cancel();
+          }
+        }
+        btnOk.addEventListener("mousedown",function(e){e.preventDefault();});
+        btnCnl.addEventListener("mousedown",function(e){e.preventDefault();});
+        btnOk.addEventListener("click",save);
+        btnCnl.addEventListener("click",cancel);
+        inp.addEventListener("keydown",function(e){
+          if(e.key==="Enter"){e.preventDefault();save();}
+          if(e.key==="Escape"){e.preventDefault();cancel();}
+        });
+        inp.addEventListener("blur",function(){
+          if(saving)return;
+          setTimeout(function(){if(el.querySelector("input"))cancel();},300);
+        });
+      };
+    });
+
     // 時・分セレクトが変わったら即保存
     function saveTimeSelect(el){
       var id=el.dataset.id;
