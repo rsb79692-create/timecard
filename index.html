@@ -380,11 +380,12 @@ function render(){
   var app=document.getElementById("app");
   var isAdminScreen=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode);
   app.className=isAdminScreen?"wrap admin-mode":"wrap";
-  // 管理者画面はPC幅(1100px)でレンダリング、それ以外はスマホ向けviewportに戻す
+  // 管理者画面: device-width のまま min-width:1100px で window を横スクロール → sticky が機能する
+  // ※ width=1100 にするとlayout viewport=1100px になり overflow が消えて sticky が無効になるため禁止
   var vpMeta=document.querySelector('meta[name="viewport"]');
   if(vpMeta){
     vpMeta.setAttribute("content", isAdminScreen
-      ? "width=1100, initial-scale=1.0"
+      ? "width=device-width, initial-scale=1.0"
       : "width=device-width, initial-scale=1.0, maximum-scale=1.0");
   }
 
