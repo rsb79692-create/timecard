@@ -1,7 +1,6 @@
-const CACHE_NAME = 'timecard-v5';
+const CACHE_NAME = 'timecard-v6';
+// index.html は navigate fetch ハンドラで常に network-first のため除外
 const OFFLINE_URLS = [
-  '/timecard/',
-  '/timecard/index.html',
   '/timecard/manifest.json',
   '/timecard/icon-192-v2.png',
   '/timecard/icon-512-v2.png',
