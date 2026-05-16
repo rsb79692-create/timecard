@@ -161,7 +161,7 @@ button:active{filter:brightness(.86);}
 .btn-staff:active{background:#eff4ff;}
 /* 打刻 */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
-.btn-punch{padding:18px 10px;font-size:1rem;font-weight:900;color:#fff;line-height:1.4;border-radius:2px;}
+.btn-punch{padding:18px 10px;font-size:1.3rem;font-weight:900;color:#fff;line-height:1.4;border-radius:2px;}
 .btn-punch:disabled{opacity:.18;cursor:not-allowed;}
 .btn-in{background:#1e40af;} .btn-out{background:#b91c1c;}
 .btn-bs{background:#374151;} .btn-be{background:#4b5563;}
@@ -176,9 +176,9 @@ button:active{filter:brightness(.86);}
 .msg-ok{background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:#1e40af;}
 .history{background:#fff;border-radius:2px;padding:16px;border:1px solid #adb5bd;}
 .hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-.hist-label{color:#8496a7;font-size:1.1rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
-.hist-worked{color:#1e40af;font-size:1rem;font-weight:900;font-family:monospace;}
-.hist-row{display:flex;justify-content:space-between;font-size:1rem;padding:10px 0;line-height:1.6;border-bottom:1px solid #e9ecef;}
+.hist-label{color:#8496a7;font-size:1.4rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.hist-worked{color:#1e40af;font-size:1.1rem;font-weight:900;font-family:monospace;}
+.hist-row{display:flex;justify-content:space-between;font-size:1.15rem;padding:12px 0;line-height:1.8;border-bottom:1px solid #e9ecef;}
 .hist-row:last-child{border-bottom:none;}
 .c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;}
 /* 管理者 */
@@ -746,7 +746,7 @@ function render(){
     var cbe=last==="breakStart";
     var worked=toHM(calcMs(tr));
     var histHTML=tr.length?tr.map(function(r){
-      return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;">'+r.time+'</span></div>';
+      return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;font-weight:600;">'+r.time+'</span></div>';
     }).join(""):'<div class="empty" style="padding:12px 0;">まだ打刻がありません</div>';
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
