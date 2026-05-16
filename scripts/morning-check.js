@@ -125,6 +125,12 @@ async function fetchRTDB(path, idToken) {
 
 // ===== LINE Push 送信 =====
 async function sendLineMessage(text) {
+  // 宛先は先頭1文字と長さのみ表示（値はログに出さない）
+  const toPrefix = LINE_TO.charAt(0);
+  const toLength = LINE_TO.length;
+  console.log("[LINE] Push送信開始");
+  console.log(`[LINE] to prefix=${toPrefix} length=${toLength}`);
+
   const payload = JSON.stringify({
     to: LINE_TO,
     messages: [{ type: "text", text }],
@@ -135,15 +141,20 @@ async function sendLineMessage(text) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + LINE_TOKEN, // ログ出力禁止
+        "Authorization": "Bearer " + LINE_TOKEN, // 値はログに出さない
       },
     },
     payload
   );
+
+  console.log(`[LINE] response status=${res.status}`);
+  console.log(`[LINE] response body=${JSON.stringify(res.body)}`);
+
   if (res.status !== 200) {
-    throw new Error("LINE Push 失敗: HTTP " + res.status + " " + JSON.stringify(res.body));
+    console.error("[LINE] Push送信失敗");
+    throw new Error("LINE Push 失敗: HTTP " + res.status);
   }
-  console.log("[LINE] Push 送信成功");
+  console.log("[LINE] Push送信成功");
 }
 
 // ===== メイン =====
