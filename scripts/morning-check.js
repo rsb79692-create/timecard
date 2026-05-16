@@ -31,6 +31,8 @@ const LINE_TOKEN   = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁�
 const LINE_TO_ENV  = (process.env.LINE_TO_ID || "").trim();
 // 空 または "temp" のとき自動取得モード
 const LINE_TO_AUTO = !LINE_TO_ENV || LINE_TO_ENV === "temp";
+// testNotify=true のとき未確認施設に関わらず強制送信
+const TEST_NOTIFY  = (process.env.TEST_NOTIFY || "").trim().toLowerCase() === "true";
 
 // ===== DEFAULT_FACILITIES（index.html と同じ内容） =====
 const DEFAULT_FACILITIES = [
@@ -83,6 +85,18 @@ function getNowJST() {
   const h   = String(jst.getUTCHours()).padStart(2, "0");
   const min = String(jst.getUTCMinutes()).padStart(2, "0");
   return `${y}/${m}/${d} ${h}:${min}`;
+}
+
+// ===== JST 現在時刻文字列 YYYY/MM/DD HH:mm:ss（テスト通知用） =====
+function getNowJSTWithSeconds() {
+  const jst = new Date(Date.now() + 9 * 60 * 60 * 1000);
+  const y   = jst.getUTCFullYear();
+  const m   = String(jst.getUTCMonth() + 1).padStart(2, "0");
+  const d   = String(jst.getUTCDate()).padStart(2, "0");
+  const h   = String(jst.getUTCHours()).padStart(2, "0");
+  const min = String(jst.getUTCMinutes()).padStart(2, "0");
+  const sec = String(jst.getUTCSeconds()).padStart(2, "0");
+  return `${y}/${m}/${d} ${h}:${min}:${sec}`;
 }
 
 // ===== Firebase Anonymous Auth =====
@@ -258,16 +272,29 @@ async function main() {
     `[CHECK] 未確認施設 ${unconfirmed.length} 件: ${unconfirmed.length > 0 ? unconfirmed.join(", ") : "なし"}`
   );
 
-  // 7. 未確認が 0 件なら通知せず終了
+  // 7. テスト通知モード（TEST_NOTIFY=true）
+  if (TEST_NOTIFY) {
+    console.log("[TEST] testNotify=true — テスト通知を強制送信");
+    const targetIds = await resolveTargetIds();
+    const testMessage =
+      "【穂乃味タイムカード】\nテスト通知\n\n" +
+      "LINE通知設定は正常です。\n\n" +
+      `送信時刻：${getNowJSTWithSeconds()}`;
+    await sendLineMessage(targetIds, testMessage);
+    console.log("[DONE] テスト通知完了");
+    return;
+  }
+
+  // 8. 未確認が 0 件なら通知せず終了
   if (unconfirmed.length === 0) {
     console.log("[OK] 未確認施設なし — LINE通知スキップ");
     return;
   }
 
-  // 8. 送信先 ID を解決（自動 or 手動）
+  // 9. 送信先 ID を解決（自動 or 手動）
   const targetIds = await resolveTargetIds();
 
-  // 9. LINE 通知本文
+  // 10. LINE 通知本文
   const nowStr = getNowJST();
   const facilityLines = unconfirmed.map((n) => `・${n}`).join("\n");
   const message =
@@ -277,7 +304,7 @@ async function main() {
     facilityLines + "\n\n" +
     "シフトミス・遅刻・事故の可能性があります。確認してください。";
 
-  // 10. 送信
+  // 11. 送信
   await sendLineMessage(targetIds, message);
   console.log("[DONE] 処理完了");
 }

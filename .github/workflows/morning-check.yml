@@ -5,6 +5,15 @@ on:
     # JST 07:00 = UTC 22:00 (前日)
     - cron: "0 22 * * *"
   workflow_dispatch:
+    inputs:
+      testNotify:
+        description: "テスト通知を強制送信する（true = 未確認施設に関わらず通知）"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
 
 jobs:
   morning-check:
@@ -24,4 +33,5 @@ jobs:
           LINE_TO_ID: ${{ secrets.LINE_TO_ID }}
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
         run: node scripts/morning-check.js
