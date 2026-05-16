@@ -384,6 +384,84 @@ function filteredStaff(){
     .sort(function(a,b){return (a.yomi||a.name||"").localeCompare(b.yomi||b.name||"","ja");});
 }
 
+// ===== 時刻セル インライン編集ハンドラー（勤怠一覧・個人別共通） =====
+function attachTimeCellHandlers(){
+  document.querySelectorAll(".time-cell").forEach(function(el){
+    el.onclick=function(){
+      var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
+      var cur=el.textContent.trim();
+      if(cur==="--:--"||cur==="−")cur="";
+      if(el.querySelector("input"))return;
+      var origText=el.textContent,origStyle=el.getAttribute("style")||"";
+      var typeName=TYPE_LABEL[type]||type;
+      var saving=false;
+      var wrap=document.createElement("div");
+      wrap.style.cssText="display:inline-flex;align-items:center;gap:3px;";
+      var inp=document.createElement("input");
+      inp.type="time";inp.value=cur;
+      inp.style.cssText="width:72px;font-size:.85rem;font-family:monospace;border:1px solid #1e40af;border-radius:2px;padding:2px 3px;background:#eff4ff;outline:none;";
+      var btnOk=document.createElement("button");
+      btnOk.textContent="設定";btnOk.title="保存";
+      btnOk.style.cssText="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
+      var btnCnl=document.createElement("button");
+      btnCnl.textContent="✕";btnCnl.title="キャンセル";
+      btnCnl.style.cssText="background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
+      wrap.appendChild(inp);wrap.appendChild(btnOk);wrap.appendChild(btnCnl);
+      el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
+      el.appendChild(wrap);
+      inp.focus();
+      try{ if(inp.showPicker) inp.showPicker(); } catch(e){}
+      function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
+      function save(){
+        var val=inp.value.trim();
+        if(!val&&!id){cancel();return;}
+        var parts=val?val.split(":"):[null,null];
+        var hh=val?parseInt(parts[0]):NaN,mm=val?parseInt(parts[1]):NaN;
+        if(val&&(isNaN(hh)||isNaN(mm)||hh>23||mm>59)){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
+        var newTime=val?pad(hh)+":"+pad(mm):"";
+        var oldTime=cur||"（未打刻）";
+        saving=true;
+        if(newTime===""&&id){
+          showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
+            var rec=records.find(function(r){return r.id===id;});
+            if(rec){console.log("[管理者修正] 削除:",snm,date,typeName,"元時刻:",rec.time);rec.deleted=true;softDeleteRecord(rec.id);}
+            render();
+          },function(){saving=false;cancel();});
+        } else if(newTime){
+          var d2=new Date(date);d2.setHours(hh,mm,0,0);
+          var nowIso=new Date().toISOString();
+          if(id){
+            var rec=records.find(function(r){return r.id===id;});
+            if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
+          } else {
+            var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+            if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
+            else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
+          }
+          render();
+        } else {
+          saving=false;cancel();
+        }
+      }
+      btnOk.addEventListener("mousedown",function(e){e.preventDefault();});
+      btnCnl.addEventListener("mousedown",function(e){e.preventDefault();});
+      btnOk.addEventListener("click",save);
+      btnCnl.addEventListener("click",cancel);
+      inp.addEventListener("keydown",function(e){
+        if(e.key==="Enter"){e.preventDefault();save();}
+        if(e.key==="Escape"){e.preventDefault();cancel();}
+      });
+      inp.addEventListener("blur",function(){
+        if(saving)return;
+        setTimeout(function(){if(el.querySelector("input"))cancel();},300);
+      });
+      inp.addEventListener("change",function(){
+        if(inp.value&&inp.value!==cur)save();
+      });
+    };
+  });
+}
+
 // ===== レンダリング =====
 function render(){
   var now=new Date();
@@ -858,8 +936,10 @@ function render(){
       var workedColor=otMs>0?"#dc2626":"#1a2332";
       function tCell(rec,type){
         var time=rec?rec.time:"";var id=rec?rec.id:"";
-        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>';
-        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>';
+        var badge=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type])
+          ?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;margin-left:2px;">修正</span>':"";
+        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge;
+        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge;
       }
       var brkText=(bs||be)?((bs?bs.time:"??:??")+"〜"+(be?be.time:"??:??")):"";
       var brkDisplay=locked2
@@ -943,30 +1023,7 @@ function render(){
         showAlert(unapprovedDates.length+"件承認しました",function(){render();});
       });
     };
-    document.querySelectorAll(".time-cell").forEach(function(el){
-      el.onclick=function(){
-        var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
-        var cur=el.textContent==="−"?"":el.textContent;
-        var val=prompt("時刻を入力（例：08:30）\n"+TYPE_LABEL[type]+" / "+snm+" / "+date,cur);
-        if(val===null)return;
-        val=val.trim();
-        if(!/^\d{1,2}:\d{2}$/.test(val)){showAlert("形式が違います（例：08:30）");return;}
-        var parts=val.split(":");
-        var hh=parseInt(parts[0]),mm=parseInt(parts[1]);
-        if(hh>23||mm>59){showAlert("時刻が正しくありません");return;}
-        var newTime=pad(hh)+":"+pad(mm);
-        var d=new Date(date);d.setHours(hh,mm,0,0);
-        if(id){
-          var rec=records.find(function(r){return r.id===id;});
-          if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
-        } else {
-          var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-          if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();saveRecord(exist);}
-          else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
-        }
-        render();
-      };
-    });
+    attachTimeCellHandlers();
     return;
   }
 
@@ -1581,81 +1638,7 @@ function render(){
     }
 
     // 勤怠一覧タブ：時刻セルのインライン編集
-    console.log("[admin time-cell handler attached]", document.querySelectorAll(".time-cell").length, "cells, tab:", adminTab);
-    document.querySelectorAll(".time-cell").forEach(function(el){
-      el.onclick=function(){
-        var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
-        var cur=el.textContent.trim();
-        if(cur==="--:--"||cur==="−")cur="";
-        if(el.querySelector("input"))return;
-        var origText=el.textContent,origStyle=el.getAttribute("style")||"";
-        var typeName=TYPE_LABEL[type]||type;
-        var saving=false;
-        var wrap=document.createElement("div");
-        wrap.style.cssText="display:inline-flex;align-items:center;gap:3px;";
-        var inp=document.createElement("input");
-        inp.type="time";inp.value=cur;
-        inp.style.cssText="width:72px;font-size:.85rem;font-family:monospace;border:1px solid #1e40af;border-radius:2px;padding:2px 3px;background:#eff4ff;outline:none;";
-        var btnOk=document.createElement("button");
-        btnOk.textContent="設定";btnOk.title="保存";
-        btnOk.style.cssText="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
-        var btnCnl=document.createElement("button");
-        btnCnl.textContent="✕";btnCnl.title="キャンセル";
-        btnCnl.style.cssText="background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
-        wrap.appendChild(inp);wrap.appendChild(btnOk);wrap.appendChild(btnCnl);
-        el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
-        el.appendChild(wrap);
-        inp.focus();
-        try{ if(inp.showPicker) inp.showPicker(); } catch(e){}
-        function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
-        function save(){
-          var val=inp.value.trim();
-          if(!val&&!id){cancel();return;}
-          var parts=val?val.split(":"):[null,null];
-          var hh=val?parseInt(parts[0]):NaN,mm=val?parseInt(parts[1]):NaN;
-          if(val&&(isNaN(hh)||isNaN(mm)||hh>23||mm>59)){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
-          var newTime=val?pad(hh)+":"+pad(mm):"";
-          var oldTime=cur||"（未打刻）";
-          saving=true;
-          if(newTime===""&&id){
-            showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
-              var rec=records.find(function(r){return r.id===id;});
-              if(rec){console.log("[管理者修正] 削除:",snm,date,typeName,"元時刻:",rec.time);rec.deleted=true;softDeleteRecord(rec.id);}
-              render();
-            },function(){saving=false;cancel();});
-          } else if(newTime){
-            var d2=new Date(date);d2.setHours(hh,mm,0,0);
-            var nowIso=new Date().toISOString();
-            if(id){
-              var rec=records.find(function(r){return r.id===id;});
-              if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
-            } else {
-              var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-              if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
-              else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
-            }
-            render();
-          } else {
-            saving=false;cancel();
-          }
-        }
-        btnOk.addEventListener("mousedown",function(e){e.preventDefault();});
-        btnCnl.addEventListener("mousedown",function(e){e.preventDefault();});
-        btnOk.addEventListener("click",save);
-        btnCnl.addEventListener("click",cancel);
-        inp.addEventListener("keydown",function(e){
-          if(e.key==="Enter"){e.preventDefault();save();}
-          if(e.key==="Escape"){e.preventDefault();cancel();}
-        });
-        inp.addEventListener("blur",function(){
-          if(saving)return;
-          setTimeout(function(){if(el.querySelector("input"))cancel();},300);
-        });
-        inp.addEventListener("change",function(){
-          if(inp.value&&inp.value!==cur)save();
-        });
-      };
-    });
+    attachTimeCellHandlers();
 
     // 時・分セレクトが変わったら即保存
     function saveTimeSelect(el){
