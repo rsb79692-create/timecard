@@ -1,44 +1,76 @@
-# LINE_TO_ID の取得方法
+# LINE_TO_ID の取得方法 / 自動取得モード解説
 
-`LINE_TO_ID` は LINE Messaging API の Push メッセージ送信先を指定する ID です。  
-個人ユーザー・グループ・トークルームの3種類があり、それぞれ形式が異なります。
+## TL;DR — 最速セットアップ
+
+**LINE_TO_ID は設定しなくてもよい（推奨）。**  
+Bot を友だち追加した全員へ自動で通知されます。
+
+必要な GitHub Secret は 3 つだけです:
+
+| Secret 名 | 値 |
+|-----------|---|
+| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Developers のチャネルアクセストークン |
+| `FIREBASE_API_KEY` | Firebase ウェブ API キー |
+| `FIREBASE_DATABASE_URL` | `https://honomi-timecard-default-rtdb.asia-southeast1.firebasedatabase.app/honomi` |
+
+`LINE_TO_ID` を登録しない（または値を `temp` にする）と **自動取得モード** になります。
 
 ---
 
-## 1. 送信先の種類と ID 形式
+## 自動取得モードの仕組み
 
-| 種類 | ID 形式 | 説明 |
-|------|---------|------|
-| 個人ユーザー | `U` + 32文字 | 友だち追加したユーザーの userId |
-| グループ | `C` + 32文字 | Bot が参加しているグループの groupId |
-| トークルーム | `R` + 32文字 | Bot が参加しているトークルームの roomId |
+`LINE_TO_ID` が未設定または `temp` のとき、`morning-check.js` は以下を実行します。
 
----
-
-## 2. userId（個人）の取得方法
-
-### 方法A: LINE Developers コンソールで確認（テスト用）
-
-1. [LINE Developers](https://developers.line.biz/) へログイン
-2. 対象チャネル → **Messaging API 設定** → **Your user ID** を確認
-3. これは Bot 管理者自身の userId です
-
-### 方法B: Webhook で受け取る（本番向け）
-
-Bot のチャネルに Webhook URL を設定し、ユーザーがメッセージを送ってきたとき  
-`event.source.userId` を取得します。
-
-簡易確認手順（ローカル不要 / ngrok 使用例）:
-
-```bash
-# ngrok をインストール済みの場合
-ngrok http 3000
+```
+LINE Messaging API
+GET https://api.line.me/v2/bot/followers/ids
+→ Bot を友だち追加したユーザーの userId 一覧を取得
+→ 全員へ multicast で一括送信
 ```
 
-Webhook を受け取るだけの最小サーバー（Node.js）:
+- Webhook サーバー・ngrok・手動 ID 確認は**不要**です
+- フォロワーが増えても自動的に全員へ届きます
+- フォロワーが 0 人の場合はエラーになります（Bot を友だち追加してください）
+
+---
+
+## 必要な前提条件
+
+| 条件 | 説明 |
+|------|------|
+| Bot を友だち追加 | 通知を受け取りたい人が LINE で Bot を友だち追加している |
+| プラン確認 | Followers API はほぼ全プランで使用可能（Messaging API チャネル） |
+
+---
+
+## LINE_TO_ID を手動指定したい場合
+
+特定の個人またはグループにだけ送りたいときは `LINE_TO_ID` を設定します。
+
+| 送信先 | ID の形式 | 取得方法 |
+|--------|---------|---------|
+| 個人ユーザー | `U` + 32文字 | 下記「方法A」参照 |
+| グループ | `C` + 32文字 | 下記「方法B」参照 |
+
+### 方法A: 管理者自身の userId（最速）
+
+1. [LINE Developers](https://developers.line.biz/) にログイン
+2. 対象チャネル → **Messaging API 設定** → **Your user ID** を確認
+3. その値を `LINE_TO_ID` に登録する
+
+これで Bot 管理者だけに通知が届きます。
+
+### 方法B: グループへの送信
+
+1. LINE でグループを作成し、Bot チャネルを招待する
+2. グループ内でメッセージを1件送る
+3. Webhook で `event.source.groupId`（`C` から始まる ID）を取得する
+4. その値を `LINE_TO_ID` に登録する
+
+Webhook で groupId を取得する最小コード（ローカルで一時的に動かすだけ）:
 
 ```js
-// get-line-id.js
+// get-line-id.js（一時利用。本番コードには含めない）
 const http = require("http");
 http.createServer((req, res) => {
   let body = "";
@@ -47,9 +79,9 @@ http.createServer((req, res) => {
     try {
       const j = JSON.parse(body);
       (j.events || []).forEach((e) => {
-        console.log("userId  :", e.source.userId);
-        console.log("groupId :", e.source.groupId);
-        console.log("roomId  :", e.source.roomId);
+        if (e.source.groupId)  console.log("groupId :", e.source.groupId);
+        if (e.source.roomId)   console.log("roomId  :", e.source.roomId);
+        if (e.source.userId)   console.log("userId  :", e.source.userId);
       });
     } catch (_) {}
     res.end("OK");
@@ -57,55 +89,50 @@ http.createServer((req, res) => {
 }).listen(3000, () => console.log("listening on :3000"));
 ```
 
-1. `node get-line-id.js` を起動
-2. ngrok の URL を LINE Developers の Webhook URL に設定
-3. LINE で Bot にメッセージを送る
-4. コンソールに userId / groupId が表示される
-
-### 方法C: LINE Notify の代替（個人通知のみ）
-
-個人への通知だけで十分な場合、LINE Notify（`https://notify-api.line.me/api/notify`）を使うと  
-userId 不要でトークンだけで送信できます。  
-ただし LINE Notify は 2025年3月末でサービス終了済みのため、本番利用は Messaging API を推奨。
+ID が取得できたら `get-line-id.js` は削除して構いません。
 
 ---
 
-## 3. groupId（グループ）の取得方法
-
-1. LINE でグループを作成し、Bot（チャネル）を招待する
-2. グループ内でメッセージを送る
-3. Webhook の `event.source.groupId` を取得する
-
----
-
-## 4. GitHub Secrets への登録
+## GitHub Secrets への登録手順
 
 ```
 リポジトリ → Settings → Secrets and variables → Actions → New repository secret
+```
 
-Name  : LINE_TO_ID
-Value : Uxxxxxxxxxx...（取得した userId または groupId）
+| Secret 名 | 自動モード | 手動指定モード |
+|-----------|-----------|--------------|
+| `LINE_CHANNEL_ACCESS_TOKEN` | 必須 | 必須 |
+| `FIREBASE_API_KEY` | 必須 | 必須 |
+| `FIREBASE_DATABASE_URL` | 必須 | 必須 |
+| `LINE_TO_ID` | 不要 | 任意（設定すると優先される） |
+
+---
+
+## morning-check.js の動作フロー
+
+```
+起動
+  ↓
+必須 Secrets チェック（LINE_TOKEN / FB_API_KEY / FB_DB_URL）
+  ↓ 不足あり → エラー出力して終了 (exit 1)
+  ↓ 問題なし
+Firebase Anonymous Auth → RTDB から records・施設マスタ取得
+  ↓
+本日の clockIn を集計 → 未確認施設を抽出
+  ↓ 未確認なし → "未確認施設なし" を出力して正常終了 (exit 0)
+  ↓ 未確認あり
+LINE_TO_ID が設定済み? → YES → その ID へ push (1件)
+             ↓ NO（または "temp"）
+Followers API で全フォロワー取得 → multicast で一括送信
+  ↓
+正常終了 (exit 0)
 ```
 
 ---
 
-## 5. 注意事項
+## 注意事項
 
-- userId を取得するには、そのユーザーが事前に Bot を **友だち追加** している必要があります
-- Push API は **友だち追加済みのユーザー** または **Bot が参加しているグループ** にのみ送信できます
-- LINE_CHANNEL_ACCESS_TOKEN はこのファイルに記載しないでください
-- Webhook サーバーを本番コードに含める必要はありません（ID 取得後は不要）
-
----
-
-## 6. LINE_TO_ID 未設定時の挙動
-
-`morning-check.js` は起動時に必要な Secrets を検証します。  
-`LINE_TO_ID` が未設定の場合、以下のメッセージを出力して **終了コード 1** で停止します。
-
-```
-[ERROR] 以下の GitHub Secret が未設定です: LINE_TO_ID
-```
-
-GitHub Actions のジョブは失敗（❌）として記録されます。  
-LINE へのメッセージ送信は行われません。
+- `LINE_CHANNEL_ACCESS_TOKEN` は絶対にログへ出力しない（スクリプト内で保証済み）
+- `LINE_TO_ID` に `temp` を設定しても自動取得モードとして動作する
+- Bot がどのユーザーにも友だち追加されていない場合、自動モードはエラーになる
+- Channel secret は今回のスクリプトでは使わない（Push/Multicast には不要）
