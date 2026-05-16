@@ -334,6 +334,7 @@ var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
 var adminTab="records",yomiTab="すべて";
+var showBreakColumn=false;
 var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
@@ -1148,17 +1149,17 @@ function render(){
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
-          +(worked?'<br><span style="font-size:.65rem;color:#1e40af;">'+worked+'</span>':"")
           +'</td>'
           +tCell(cin,"clockIn","出","#1e40af")
-          +'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
+          +(showBreakColumn?'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
           +(locked
             ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'
             :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bs?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bs?bs.time:"--:--")+'</span>'
             +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
             +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(be?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(be?be.time:"--:--")+'</span>')
-          +'</td>'
+          +'</td>':"")
           +tCell(cout,"clockOut","退","#dc2626")
+          +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
           +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
             ?'<div style="background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #93c5fd;">✓承認</div>'
@@ -1185,14 +1186,16 @@ function render(){
         +'<button id="btn-date-next" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
         +'<span style="color:#8496a7;font-size:.8rem;">'+staffList.length+'名</span>'
         +'<span style="color:#8496a7;font-size:.72rem;">※時刻をタップで編集</span>'
+        +'<button onclick="showBreakColumn=!showBreakColumn;render();" style="background:'+(showBreakColumn?"#374151":"#dde1e7")+';color:'+(showBreakColumn?"#fff":"#475569")+';border:1px solid #adb5bd;padding:4px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(showBreakColumn?"休憩非表示":"休憩表示")+'</button>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
         +'<th style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>'
+        +(showBreakColumn?'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>':"")
         +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
+        +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">勤務時間</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#8796a7;padding:4px;font-weight:700;">承認</th>'
         +'</tr></thead>'
         +'<tbody>'+sumRows+'</tbody></table>'
