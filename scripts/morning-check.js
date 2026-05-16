@@ -49,6 +49,10 @@ const DEFAULT_FACILITIES = [
   "ミュゲ貝塚", "ミュゲ春木", "ミュゲの泉", "ハルイロ",
 ];
 
+// ===== 朝打刻通知から除外する施設 =====
+// ハーベストは朝5:55通知の対象外（打刻機能・管理画面は通常通り）
+const NOTIFY_EXCLUDE = ["ハーベスト"];
+
 // ===== HTTPS リクエストヘルパー =====
 function httpRequest(url, options, body) {
   return new Promise((resolve, reject) => {
@@ -268,6 +272,9 @@ async function main() {
   } catch (e) {
     console.warn(`[WARN]  master/locations 取得失敗 → DEFAULT_FACILITIES を使用: ${e.message}`);
   }
+
+  // ── 朝通知除外施設を取り除く ──
+  facilities = facilities.filter((name) => !NOTIFY_EXCLUDE.includes(name));
 
   console.log(`[FAC]   通知対象施設 ${facilities.length} 件:`);
   facilities.forEach((name, i) => {
