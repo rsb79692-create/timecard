@@ -1641,6 +1641,9 @@ function render(){
           if(saving)return;
           setTimeout(function(){if(el.querySelector("input"))cancel();},300);
         });
+        inp.addEventListener("change",function(){
+          if(inp.value&&inp.value!==cur)save();
+        });
       };
     });
 
