@@ -1490,19 +1490,15 @@ function render(){
       }).join("");
       var locItems=masterFacilities.map(function(f,i){
         var facUrl="https://rsb79692-create.github.io/timecard/?token="+encodeURIComponent(f.token||"");
-        var qrUrl="https://api.qrserver.com/v1/create-qr-code/?size=160x160&data="+encodeURIComponent(facUrl);
         return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
           +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
           +'<div><div style="font-size:.95rem;font-weight:700;color:#0f172a;">'+f.name+'</div>'
           +'<div style="font-size:.75rem;color:#8496a7;font-family:monospace;">'+(f.token||"トークンなし")+'</div></div>'
-          +'<div style="display:flex;gap:6px;">'
-          +'<button class="btn-qr-loc" data-idx="'+i+'" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">QR</button>'
           +'<button class="btn-del-loc" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
-          +'</div></div>'
-          +'<div id="qr-panel-'+i+'" style="display:none;margin-top:10px;padding:12px;background:#f1f3f5;border-radius:2px;border:1px solid #adb5bd;text-align:center;">'
-          +'<img src="'+qrUrl+'" width="160" height="160" alt="QR" style="border:4px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,.1);">'
-          +'<div style="font-size:.7rem;color:#8496a7;margin-top:6px;word-break:break-all;">'+facUrl+'</div>'
-          +'<button class="btn-print-qr" data-url="'+facUrl+'" data-name="'+f.name+'" style="margin-top:8px;background:#1e40af;color:#fff;border:none;padding:7px 20px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">印刷</button>'
+          +'</div>'
+          +'<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">'
+          +'<div style="font-size:.72rem;color:#475569;font-family:monospace;word-break:break-all;flex:1;">'+facUrl+'</div>'
+          +'<button class="btn-copy-url" data-url="'+facUrl+'" style="flex-shrink:0;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">コピー</button>'
           +'</div></div>';
       }).join("");
       tc='<div class="admin-card">'
@@ -2133,27 +2129,17 @@ function render(){
         });
       };
     });
-    document.querySelectorAll(".btn-qr-loc").forEach(function(b){
+    document.querySelectorAll(".btn-copy-url").forEach(function(b){
       b.onclick=function(){
-        var idx=parseInt(b.dataset.idx);
-        var panel=document.getElementById("qr-panel-"+idx);
-        if(panel){panel.style.display=panel.style.display==="none"?"block":"none";}
-      };
-    });
-    document.querySelectorAll(".btn-print-qr").forEach(function(b){
-      b.onclick=function(){
-        var url=b.dataset.url,name=b.dataset.name;
-        var qrSrc="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data="+encodeURIComponent(url);
-        var win=window.open("","_blank","width=420,height=560");
-        win.document.write('<!DOCTYPE html><html><head><title>'+name+'</title>'
-          +'<style>body{text-align:center;font-family:sans-serif;padding:30px;}h2{font-size:1.3rem;margin-bottom:16px;}p{font-size:.72rem;color:#888;margin-top:10px;word-break:break-all;max-width:300px;margin-left:auto;margin-right:auto;}</style>'
-          +'</head><body>'
-          +'<h2>'+name+'</h2>'
-          +'<img src="'+qrSrc+'" width="200" height="200">'
-          +'<p>'+url+'</p>'
-          +'<script>window.onload=function(){window.print();window.close();}<\/script>'
-          +'</body></html>');
-        win.document.close();
+        var url=b.dataset.url;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){
+            var orig=b.textContent;b.textContent="コピーしました";
+            setTimeout(function(){b.textContent=orig;},1500);
+          }).catch(function(){showAlert("コピーできませんでした。\n\n"+url);});
+        } else {
+          showAlert("以下のURLをコピーしてください。\n\n"+url);
+        }
       };
     });
     // 管理者PIN変更
