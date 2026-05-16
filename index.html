@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -198,8 +198,15 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 .empty{color:#8496a7;font-size:.83rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
 .hrm-row:hover{background:#f0f4ff!important;}
-/* 管理者画面PC全画面対応 */
-.admin-mode{max-width:none!important;min-width:1100px;padding-left:24px;padding-right:24px;}
+/* 管理者画面：PC(768px以上)は広幅、スマホは画面幅に収める */
+.admin-mode{max-width:none!important;}
+@media (min-width:768px){
+  .admin-mode{min-width:1100px;padding-left:24px;padding-right:24px;}
+}
+@media (max-width:767px){
+  .admin-mode{min-width:0;width:100%;padding-left:8px;padding-right:8px;}
+  .sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
+}
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
@@ -380,14 +387,7 @@ function render(){
   var app=document.getElementById("app");
   var isAdminScreen=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode);
   app.className=isAdminScreen?"wrap admin-mode":"wrap";
-  // 管理者画面: device-width のまま min-width:1100px で window を横スクロール → sticky が機能する
-  // ※ width=1100 にするとlayout viewport=1100px になり overflow が消えて sticky が無効になるため禁止
-  var vpMeta=document.querySelector('meta[name="viewport"]');
-  if(vpMeta){
-    vpMeta.setAttribute("content", isAdminScreen
-      ? "width=device-width, initial-scale=1.0"
-      : "width=device-width, initial-scale=1.0, maximum-scale=1.0");
-  }
+
 
   // ── 閲覧トークン認証待ち（Firebase読込中）──
   if(viewerPending){
@@ -481,7 +481,7 @@ function render(){
       var exp=viewerExpandedStaff===nm;
       var mainTr='<tr class="viewer-row" data-nm="'+nm+'" style="border-bottom:1px solid #f3f4f6;cursor:pointer;background:#fff;" onclick="toggleViewerExpand(\''+nm+'\')">'
         +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;color:#475569;">'+(s.employeeId||"—")+'</td>'
-        +'<td style="padding:10px 14px;font-size:.9rem;font-weight:700;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+        +'<td class="sticky-name-col" style="padding:10px 14px;font-size:.9rem;font-weight:700;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
         +'<span style="font-size:.7rem;color:#1e40af;margin-right:4px;">'+(exp?"▼":"▶")+'</span>'+nm+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.location||"—")+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.employmentType||"—")+'</td>'
@@ -537,7 +537,7 @@ function render(){
       +'<table style="width:100%;border-collapse:collapse;min-width:700px;">'
       +'<thead><tr>'
       +'<th style="'+thS2+'">社員番号</th>'
-      +'<th style="'+thS2+'left:0;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
+      +'<th class="sticky-name-col" style="'+thS2+'left:0;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
       +'<th style="'+thS2+'">拠点</th>'
       +'<th style="'+thS2+'">雇用形態</th>'
       +'<th style="'+thS2+'text-align:right;">勤務日数</th>'
@@ -1148,7 +1148,7 @@ function render(){
             +'</td>';
         }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +'</td>'
           +tCell(cin,"clockIn","出","#1e40af")
@@ -1192,7 +1192,7 @@ function render(){
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
-        +'<th style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
+        +'<th class="sticky-name-col" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
         +(showBreakColumn?'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>':"")
         +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
