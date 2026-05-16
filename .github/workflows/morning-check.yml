@@ -2,12 +2,22 @@ name: 朝出勤確認 LINE通知
 
 on:
   schedule:
-    # JST 07:00 = UTC 22:00 (前日)
+    # JST 05:55 = UTC 20:55 (前日)
     - cron: "55 20 * * *"
   workflow_dispatch:
     inputs:
       testNotify:
-        description: "テスト通知を強制送信する（チェックON = 未確認施設に関わらず通知）"
+        description: "テスト通知を強制送信する（Firebase スキップ）"
+        required: false
+        default: false
+        type: boolean
+      targetDate:
+        description: "判定対象日 yyyy-mm-dd（空欄 = JST 今日）"
+        required: false
+        default: ""
+        type: string
+      dryRun:
+        description: "dryRun=true にすると LINE 送信せず判定ログだけ出す"
         required: false
         default: false
         type: boolean
@@ -31,4 +41,6 @@ jobs:
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
           TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
+          TARGET_DATE: ${{ github.event.inputs.targetDate || '' }}
+          DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
         run: node scripts/morning-check.js
