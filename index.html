@@ -1625,6 +1625,91 @@ function render(){
         +staffDocListHtml;
     }
 
+    if(adminTab==="support"){
+      var supRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var supCinRecs=supRecs.filter(function(r){
+        return r.type==="clockIn"&&(
+          r.isSupportWork===true||
+          (r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility)
+        );
+      });
+      var supDetails=supCinRecs.map(function(cin){
+        var dateRecs=supRecs.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});
+        var cout=dateRecs.find(function(r){return r.type==="clockOut";});
+        var ms=calcMs(dateRecs);
+        return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",
+          inTime:cin.time,outTime:cout?cout.time:"未退勤",ms:ms,wageType:cin.wageType||""};
+      }).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
+      var supSumMap={};
+      supDetails.forEach(function(d){
+        var key=d.staff+"__"+d.home+"__"+d.work;
+        if(!supSumMap[key])supSumMap[key]={staff:d.staff,home:d.home,work:d.work,days:0,ms:0,firstDate:"",lastDate:""};
+        var sm2=supSumMap[key];sm2.days++;sm2.ms+=d.ms;
+        if(!sm2.firstDate||d.date<sm2.firstDate)sm2.firstDate=d.date;
+        if(!sm2.lastDate||d.date>sm2.lastDate)sm2.lastDate=d.date;
+      });
+      var supSummary=Object.keys(supSumMap).map(function(k){return supSumMap[k];})
+        .sort(function(a,b){return(a.staff+a.work)<(b.staff+b.work)?-1:1;});
+      var monOptsSup=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var _th='padding:6px 8px;font-weight:700;white-space:nowrap;text-align:';
+      var _td='padding:6px 8px;text-align:';
+      var supSumHtml=supSummary.length
+        ?'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
+          +'<thead><tr style="background:#eaecef;">'
+          +'<th style="'+_th+'left;">氏名</th><th style="'+_th+'left;">登録施設</th><th style="'+_th+'left;">応援先施設</th>'
+          +'<th style="'+_th+'right;">日数</th><th style="'+_th+'right;">合計時間</th>'
+          +'<th style="'+_th+'center;">初回</th><th style="'+_th+'center;">最終</th>'
+          +'</tr></thead><tbody>'
+          +supSummary.map(function(s){
+            return'<tr style="border-bottom:1px solid #f3f4f6;">'
+              +'<td style="'+_td+'left;font-weight:700;">'+s.staff+'</td>'
+              +'<td style="'+_td+'left;color:#6b7280;">'+s.home+'</td>'
+              +'<td style="'+_td+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 4px;font-weight:700;">'+s.work+'</span></td>'
+              +'<td style="'+_td+'right;font-family:monospace;font-weight:700;">'+s.days+'日</td>'
+              +'<td style="'+_td+'right;font-family:monospace;color:#1e40af;">'+(s.ms>0?toHM(s.ms):"0:00")+'</td>'
+              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+s.firstDate+'</td>'
+              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+s.lastDate+'</td>'
+              +'</tr>';
+          }).join("")+'</tbody></table></div>'
+        :'<div class="empty" style="padding:20px 0;">この月の応援勤務はありません</div>';
+      var _th2='padding:5px 6px;font-weight:700;white-space:nowrap;text-align:';
+      var _td2='padding:5px 6px;white-space:nowrap;text-align:';
+      var supDetHtml=supDetails.length
+        ?'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.78rem;">'
+          +'<thead><tr style="background:#eaecef;">'
+          +'<th style="'+_th2+'left;">日付</th><th style="'+_th2+'left;">氏名</th>'
+          +'<th style="'+_th2+'left;">登録施設</th><th style="'+_th2+'left;">応援先施設</th>'
+          +'<th style="'+_th2+'center;">出勤</th><th style="'+_th2+'center;">退勤</th>'
+          +'<th style="'+_th2+'right;">時間</th><th style="'+_th2+'center;">賃金種別</th>'
+          +'</tr></thead><tbody>'
+          +supDetails.map(function(d){
+            return'<tr style="border-bottom:1px solid #f3f4f6;">'
+              +'<td style="'+_td2+'left;font-family:monospace;">'+d.date+'</td>'
+              +'<td style="'+_td2+'left;font-weight:700;">'+d.staff+'</td>'
+              +'<td style="'+_td2+'left;color:#6b7280;">'+d.home+'</td>'
+              +'<td style="'+_td2+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">'+d.work+'</span></td>'
+              +'<td style="'+_td2+'center;font-family:monospace;color:#1e40af;">'+d.inTime+'</td>'
+              +'<td style="'+_td2+'center;font-family:monospace;font-size:.75rem;color:'+(d.outTime==="未退勤"?"#dc2626":"#0f172a")+';">'+d.outTime+'</td>'
+              +'<td style="'+_td2+'right;font-family:monospace;">'+(d.ms>0?toHM(d.ms):"—")+'</td>'
+              +'<td style="'+_td2+'center;font-size:.7rem;color:#6b7280;">'+d.wageType+'</td>'
+              +'</tr>';
+          }).join("")+'</tbody></table></div>'
+        :"";
+      tc='<div class="admin-card">'
+        +'<div class="admin-title">🏃 応援集計</div>'
+        +'<select id="sel-month-sup" style="width:100%;margin-bottom:12px;">'+monOptsSup+'</select>'
+        +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;">'
+        +'<button class="btn-export" id="btn-sup-csv-sum" style="width:auto;padding:10px 20px;">📥 集計CSV</button>'
+        +'<button class="btn-export" id="btn-sup-csv-det" style="width:auto;padding:10px 20px;">📥 明細CSV</button>'
+        +'</div>'
+        +'<div style="font-weight:700;font-size:.82rem;color:#475569;margin-bottom:8px;">'
+        +'応援勤務集計（'+selMonth+'）'+(supSummary.length?'　'+supSummary.length+'名':'')+'</div>'
+        +supSumHtml+'</div>'
+        +(supDetails.length
+          ?'<div class="admin-card"><div class="admin-title">応援勤務明細</div>'+supDetHtml+'</div>'
+          :"");
+    }
+
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
@@ -1636,6 +1721,7 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="staff"?"tab-on":"tab-off")+'" onclick="setTab(\'staff\')">スタッフ管理</button>'
       +'<button class="tab-btn '+(adminTab==="master"?"tab-on":"tab-off")+'" onclick="setTab(\'master\')">マスター管理</button>'
       +'<button class="tab-btn '+(adminTab==="documents"?"tab-on":"tab-off")+'" onclick="setTab(\'documents\')">資料管理</button>'
+      +'<button class="tab-btn '+(adminTab==="support"?"tab-on":"tab-off")+'" onclick="setTab(\'support\')">応援集計</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -1738,6 +1824,29 @@ function render(){
     // CSV月次
     var csvM=document.getElementById("btn-csv-monthly");
     if(csvM)csvM.onclick=function(){csvPreviewType="monthly";screen="csvPreview";render();};
+
+    // 応援集計タブ
+    var supSelM=document.getElementById("sel-month-sup");
+    if(supSelM)supSelM.onchange=function(){selMonth=supSelM.value;render();};
+    var supCsvSum=document.getElementById("btn-sup-csv-sum");
+    if(supCsvSum)supCsvSum.onclick=function(){
+      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
+      var sdT=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",ms:calcMs(dr)};});
+      var smT={};
+      sdT.forEach(function(d){var k=d.staff+"__"+d.home+"__"+d.work;if(!smT[k])smT[k]={staff:d.staff,home:d.home,work:d.work,days:0,ms:0,firstDate:"",lastDate:""};var s=smT[k];s.days++;s.ms+=d.ms;if(!s.firstDate||d.date<s.firstDate)s.firstDate=d.date;if(!s.lastDate||d.date>s.lastDate)s.lastDate=d.date;});
+      var rows=Object.keys(smT).map(function(k){return smT[k];}).sort(function(a,b){return(a.staff+a.work)<(b.staff+b.work)?-1:1;});
+      var hdrS="氏名,登録施設,応援先施設,応援日数,応援時間合計,最初の応援日,最後の応援日";
+      dlCSV(hdrS+"\n"+rows.map(function(r){return[r.staff,r.home,r.work,r.days,toHM(r.ms)||"0:00",r.firstDate,r.lastDate].join(",");}).join("\n"),"穂乃味_応援集計_"+selMonth+".csv");
+    };
+    var supCsvDet=document.getElementById("btn-sup-csv-det");
+    if(supCsvDet)supCsvDet.onclick=function(){
+      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
+      var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
+      var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
+      dlCSV(hdrD+"\n"+sdD.map(function(d){return[d.date,d.staff,d.home,d.work,d.inTime,d.outTime,d.ms>0?toHM(d.ms):"",d.wageType].join(",");}).join("\n"),"穂乃味_応援明細_"+selMonth+".csv");
+    };
 
     // 打刻追加
     var addRecBtn=document.getElementById("btn-add-rec");
