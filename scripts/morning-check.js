@@ -1,11 +1,7 @@
 /**
- * morning-check.js — Phase 2-D rev.2
- * 朝出勤未確認施設を Firebase RTDB から取得し LINE へ Push/Multicast 通知する
+ * morning-check.js — Phase 2-D rev.5
+ * 朝出勤未確認施設を Firebase RTDB から取得し LINE へ Push 通知する
  * GitHub Actions から実行。Node.js 標準モジュールのみ（npm install 不要）。
- *
- * LINE_TO_ID の扱い:
- *   - 設定済み（userId / groupId）: その宛先へ push
- *   - 未設定 or "temp"           : Followers API でフォロワー全員へ multicast（自動モード）
  */
 
 "use strict";
@@ -13,7 +9,6 @@
 const https = require("https");
 
 // ===== Secrets バリデーション =====
-// LINE_TO_ID は省略可能（未設定/"temp" → 自動取得モード）
 const REQUIRED_SECRETS = [
   "LINE_CHANNEL_ACCESS_TOKEN",
   "FIREBASE_API_KEY",
@@ -25,12 +20,18 @@ if (missing.length) {
   process.exit(1);
 }
 
-const FB_API_KEY   = process.env.FIREBASE_API_KEY;
-const FB_DB_URL    = process.env.FIREBASE_DATABASE_URL;
-const LINE_TOKEN   = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁止
-const LINE_TO_ENV  = (process.env.LINE_TO_ID || "").trim();
-// 空 または "temp" のとき自動取得モード
-const LINE_TO_AUTO = !LINE_TO_ENV || LINE_TO_ENV === "temp";
+// LINE_TO_ID: 必須。未設定または "temp" の場合は明確なエラーで停止。
+const LINE_TO_ENV = (process.env.LINE_TO_ID || "").trim();
+if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
+  console.error("[ERROR] LINE_TO_ID が未設定です");
+  console.error("GitHub Secrets → LINE_TO_ID を設定してください");
+  process.exit(1);
+}
+
+const FB_API_KEY  = process.env.FIREBASE_API_KEY;
+const FB_DB_URL   = process.env.FIREBASE_DATABASE_URL;
+const LINE_TOKEN  = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁止
+const LINE_TO     = LINE_TO_ENV;
 // testNotify=true のとき未確認施設に関わらず強制送信
 const TEST_NOTIFY = process.env.TEST_NOTIFY === "true";
 
@@ -122,95 +123,27 @@ async function fetchRTDB(path, idToken) {
   return res.body;
 }
 
-// ===== LINE Followers API — フォロワー全員の userId を取得 =====
-async function getFollowerIds() {
-  const ids = [];
-  let cursor = null;
-  do {
-    const url = "https://api.line.me/v2/bot/followers/ids"
-      + (cursor ? `?start=${encodeURIComponent(cursor)}` : "");
-    const res = await httpRequest(url, {
-      headers: { "Authorization": "Bearer " + LINE_TOKEN }, // トークンはログに出さない
-    });
-    if (res.status !== 200) {
-      throw new Error(
-        "Followers API 失敗: HTTP " + res.status + " " + JSON.stringify(res.body)
-      );
-    }
-    (res.body.userIds || []).forEach((id) => ids.push(id));
-    cursor = res.body.next || null;
-  } while (cursor);
-  return ids;
-}
-
-// ===== 送信先 ID を解決（自動 or 手動） =====
-async function resolveTargetIds() {
-  if (!LINE_TO_AUTO) {
-    console.log("[LINE] LINE_TO_ID 指定済み → 固定宛先を使用");
-    return [LINE_TO_ENV];
-  }
-  console.log("[LINE] LINE_TO_ID 未設定 → Followers API で自動取得");
-  const ids = await getFollowerIds();
-  console.log(`[LINE] フォロワー数: ${ids.length}`);
-  if (ids.length === 0) {
-    throw new Error(
-      "Followers API でフォロワーが見つかりません。Bot を友だち追加してください。"
-    );
-  }
-  return ids;
-}
-
-// ===== LINE メッセージ送信（1件: push / 複数: multicast） =====
-async function sendLineMessage(targetIds, text) {
-  if (targetIds.length === 1) {
-    // push API
-    const payload = JSON.stringify({
-      to: targetIds[0],
-      messages: [{ type: "text", text }],
-    });
-    const res = await httpRequest(
-      "https://api.line.me/v2/bot/message/push",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": "Bearer " + LINE_TOKEN,
-        },
+// ===== LINE Push 送信 =====
+async function sendLineMessage(text) {
+  const payload = JSON.stringify({
+    to: LINE_TO,
+    messages: [{ type: "text", text }],
+  });
+  const res = await httpRequest(
+    "https://api.line.me/v2/bot/message/push",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + LINE_TOKEN, // ログ出力禁止
       },
-      payload
-    );
-    if (res.status !== 200) {
-      throw new Error("LINE Push 失敗: HTTP " + res.status + " " + JSON.stringify(res.body));
-    }
-    console.log("[LINE] Push 送信成功 (1件)");
-  } else {
-    // multicast API（最大 500 件／回）
-    // 500 件超えの場合は 500 件ずつ分割して送信
-    for (let i = 0; i < targetIds.length; i += 500) {
-      const batch = targetIds.slice(i, i + 500);
-      const payload = JSON.stringify({
-        to: batch,
-        messages: [{ type: "text", text }],
-      });
-      const res = await httpRequest(
-        "https://api.line.me/v2/bot/message/multicast",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + LINE_TOKEN,
-          },
-        },
-        payload
-      );
-      if (res.status !== 200) {
-        throw new Error(
-          "LINE Multicast 失敗: HTTP " + res.status + " " + JSON.stringify(res.body)
-        );
-      }
-      console.log(`[LINE] Multicast 送信成功 (${batch.length}件)`);
-    }
+    },
+    payload
+  );
+  if (res.status !== 200) {
+    throw new Error("LINE Push 失敗: HTTP " + res.status + " " + JSON.stringify(res.body));
   }
+  console.log("[LINE] Push 送信成功");
 }
 
 // ===== メイン =====
@@ -222,12 +155,11 @@ async function main() {
   if (TEST_NOTIFY) {
     console.log("[TEST] testNotify=true");
     console.log("[TEST] テスト通知送信開始");
-    const targetIds = await resolveTargetIds();
     const testMessage =
       "【穂乃味タイムカード】\nテスト通知\n\n" +
       "LINE通知設定は正常です。\n\n" +
       `送信時刻：${getNowJSTWithSeconds()}`;
-    await sendLineMessage(targetIds, testMessage);
+    await sendLineMessage(testMessage);
     console.log("[DONE] テスト通知完了");
     return;
   }
@@ -295,10 +227,7 @@ async function main() {
     return;
   }
 
-  // 8. 送信先 ID を解決（自動 or 手動）
-  const targetIds = await resolveTargetIds();
-
-  // 9. LINE 通知本文
+  // 8. LINE 通知本文
   const nowStr = getNowJST();
   const facilityLines = unconfirmed.map((n) => `・${n}`).join("\n");
   const message =
@@ -308,8 +237,8 @@ async function main() {
     facilityLines + "\n\n" +
     "シフトミス・遅刻・事故の可能性があります。確認してください。";
 
-  // 10. 送信
-  await sendLineMessage(targetIds, message);
+  // 9. 送信
+  await sendLineMessage(message);
   console.log("[DONE] 処理完了");
 }
 
