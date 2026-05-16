@@ -1596,6 +1596,7 @@ function render(){
         el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
         el.appendChild(wrap);
         inp.focus();
+        try{ if(inp.showPicker) inp.showPicker(); } catch(e){}
         function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
         function save(){
           var val=inp.value.trim();
