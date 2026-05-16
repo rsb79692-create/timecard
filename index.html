@@ -841,10 +841,13 @@ function render(){
     var tr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var last=tr.length?tr[tr.length-1].type:null;
-    var ci=!last||last==="clockOut";
-    var co=last==="clockIn"||last==="breakEnd";
-    var cbs=last==="clockIn"||last==="breakEnd";
-    var cbe=last==="breakStart";
+    var _xCin=tr.find(function(r){return r.type==="clockIn";});
+    var _xCout=tr.find(function(r){return r.type==="clockOut";});
+    var _done=!!(_xCin&&_xCout);
+    var ci=!_xCin;
+    var co=!!(_xCin&&!_xCout&&(last==="clockIn"||last==="breakEnd"));
+    var cbs=!_done&&(last==="clockIn"||last==="breakEnd");
+    var cbe=!_done&&last==="breakStart";
     var worked=toHM(calcMs(tr));
     var _pso=staffList.find(function(s){return s.name===staffName;})||{};
     var _hf2=(_pso.location)||facilityName||"";
@@ -865,19 +868,26 @@ function render(){
           +'<div style="font-size:.95rem;color:#0f172a;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
           +'<div style="font-size:.78rem;color:#8496a7;margin-top:18px;">まもなく画面が戻ります…</div>'
           +'</div>'
-        :(_pso.canSupportWork
-          ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
-            +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
-            +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
-            +masterLocs.map(function(l){return'<option value="'+l+'"'+(selectedWorkFacility===l?" selected":"")+'>'+l+'</option>';}).join("")
-            +'</select></div>'
-          :"")
-         +'<div class="grid2">'
-          +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
-          +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
-          +'<button class="btn-punch btn-bs" '+(cbs?"":"disabled")+' onclick="doPunch(\'breakStart\')">☕<br>休憩開始</button>'
-          +'<button class="btn-punch btn-be" '+(cbe?"":"disabled")+' onclick="doPunch(\'breakEnd\')">▶<br>休憩終了</button>'
-          +'</div>'
+        :_done
+          ?'<div style="text-align:center;padding:20px 16px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;margin:0 0 12px;">'
+            +'<div style="font-size:.95rem;font-weight:900;color:#166534;margin-bottom:12px;">本日の打刻は完了しています</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:4px;">出勤 '+_xCin.time+'</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:12px;">退勤 '+_xCout.time+'</div>'
+            +'<div style="font-size:.75rem;color:#4b5563;">修正が必要な場合は管理者へ連絡してください。</div>'
+            +'</div>'
+          :(_pso.canSupportWork
+            ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
+              +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
+              +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
+              +masterLocs.map(function(l){return'<option value="'+l+'"'+(selectedWorkFacility===l?" selected":"")+'>'+l+'</option>';}).join("")
+              +'</select></div>'
+            :"")
+           +'<div class="grid2">'
+            +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
+            +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
+            +'<button class="btn-punch btn-bs" '+(cbs?"":"disabled")+' onclick="doPunch(\'breakStart\')">☕<br>休憩開始</button>'
+            +'<button class="btn-punch btn-be" '+(cbe?"":"disabled")+' onclick="doPunch(\'breakEnd\')">▶<br>休憩終了</button>'
+            +'</div>'
       )
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span>'+(worked?'<span class="hist-worked">実働 '+worked+'</span>':"")+'</div>'
@@ -2331,12 +2341,31 @@ function _execPunch(type,d){
   render();
 }
 function doPunch(type){
+  // A. 既存チェック
   if(!tokenValid)return;
   var d=new Date();
   console.log("[doPunch start]", staffName, type, fmtDateKey(d));
+  // B. 当日・当該スタッフ・未削除レコード取得
+  var _today=fmtDateKey(d);
+  var _dr=records.filter(function(r){return r.staff===staffName&&r.date===_today&&!r.deleted;});
+  var _dCin=_dr.find(function(r){return r.type==="clockIn";});
+  var _dCout=_dr.find(function(r){return r.type==="clockOut";});
+  // C. 二重打刻・出勤なし退勤チェック
+  if(type==="clockIn"&&_dCin){
+    showAlert("本日の出勤はすでに打刻済みです。\n\n出勤 "+_dCin.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
+    return;
+  }
+  if(type==="clockOut"&&_dCout){
+    showAlert("本日の退勤はすでに打刻済みです。\n\n退勤 "+_dCout.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
+    return;
+  }
+  if(type==="clockOut"&&!_dCin){
+    showAlert("本日の出勤打刻がありません。\n\n先に出勤を打刻してください。");
+    return;
+  }
+  // D. 出勤→退勤の短時間警告チェック
   if(type==="clockOut"){
-    var _sr=records.filter(function(r){return r.staff===staffName&&r.date===fmtDateKey(d)&&!r.deleted;});
-    _sr.sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+    var _sr=_dr.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var _lr=_sr[_sr.length-1];
     if(_lr&&_lr.type==="clockIn"){
       var _em=Math.floor((d-new Date(_lr.timestamp))/60000);
@@ -2351,6 +2380,7 @@ function doPunch(type){
       }
     }
   }
+  // E. 通常保存処理
   _execPunch(type,d);
 }
 
