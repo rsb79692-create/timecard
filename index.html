@@ -174,11 +174,11 @@ button:active{filter:brightness(.86);}
 .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
 .pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#0f172a;}
 .msg-ok{background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:#1e40af;}
-.history{background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;}
-.hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;}
-.hist-label{color:#8496a7;font-size:.75rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
-.hist-worked{color:#1e40af;font-size:.88rem;font-weight:900;font-family:monospace;}
-.hist-row{display:flex;justify-content:space-between;font-size:.84rem;padding:7px 0;border-bottom:1px solid #e9ecef;}
+.history{background:#fff;border-radius:2px;padding:16px;border:1px solid #adb5bd;}
+.hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
+.hist-label{color:#8496a7;font-size:1.1rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.hist-worked{color:#1e40af;font-size:1rem;font-weight:900;font-family:monospace;}
+.hist-row{display:flex;justify-content:space-between;font-size:1rem;padding:10px 0;line-height:1.6;border-bottom:1px solid #e9ecef;}
 .hist-row:last-child{border-bottom:none;}
 .c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;}
 /* 管理者 */
@@ -771,19 +771,19 @@ function render(){
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span>'+(worked?'<span class="hist-worked">実働 '+worked+'</span>':"")+'</div>'
       +histHTML+'</div>'
-      +'<div style="margin-top:16px;background:#fff;border-radius:2px;padding:16px;border:1px solid #adb5bd;">'
-      +'<div style="font-weight:700;font-size:.95rem;margin-bottom:12px;">📎 書類をアップロード</div>'
+      +'<div style="margin-top:8px;background:#fff;border-radius:2px;padding:10px;border:1px solid #adb5bd;">'
+      +'<div style="font-weight:700;font-size:.8rem;margin-bottom:8px;">📎 書類をアップロード</div>'
       +(staffUploadMsg
         ?'<div style="background:#d1fae5;border:1px solid #10b981;border-radius:2px;padding:12px;text-align:center;font-weight:700;color:#065f46;font-size:.95rem;">✅ '+staffUploadMsg+'</div>'
-        :'<label for="staff-file-input" style="display:block;background:#f0f9ff;border:2px dashed #93c5fd;border-radius:2px;padding:16px;text-align:center;cursor:pointer;margin-bottom:10px;">'
+        :'<label for="staff-file-input" style="display:block;background:#f0f9ff;border:2px dashed #93c5fd;border-radius:2px;padding:10px;text-align:center;cursor:pointer;margin-bottom:6px;">'
         +(staffUploadFile
-          ?'<div style="font-size:.9rem;color:#0f172a;font-weight:700;">📄 '+staffUploadFile.name+'</div><div style="font-size:.72rem;color:#8496a7;margin-top:4px;">タップで変更</div>'
-          :'<div style="font-size:1.8rem;margin-bottom:6px;">📷</div><div style="font-size:.9rem;font-weight:700;color:#0f172a;">カメラ撮影 or ファイルを選択</div><div style="font-size:.75rem;color:#8496a7;margin-top:2px;">画像・PDF対応</div>'
+          ?'<div style="font-size:.8rem;color:#0f172a;font-weight:700;">📄 '+staffUploadFile.name+'</div><div style="font-size:.7rem;color:#8496a7;margin-top:4px;">タップで変更</div>'
+          :'<div style="font-size:1.3rem;margin-bottom:4px;">📷</div><div style="font-size:.8rem;font-weight:700;color:#0f172a;">カメラ撮影 or ファイルを選択</div><div style="font-size:.7rem;color:#8496a7;margin-top:2px;">画像・PDF対応</div>'
         )
         +'</label>'
         +'<input type="file" id="staff-file-input" style="display:none;" accept="image/*,application/pdf" capture="environment" onchange="onStaffFileSelect(this)">'
         +(staffUploadFile
-          ?'<button id="btn-staff-upload" onclick="uploadStaffDocument()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">送信する</button>'
+          ?'<button id="btn-staff-upload" onclick="uploadStaffDocument()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">送信する</button>'
           :''
         )
       )
