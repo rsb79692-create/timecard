@@ -479,7 +479,7 @@ function render(){
       var exp=viewerExpandedStaff===nm;
       var mainTr='<tr class="viewer-row" data-nm="'+nm+'" style="border-bottom:1px solid #f3f4f6;cursor:pointer;background:#fff;" onclick="toggleViewerExpand(\''+nm+'\')">'
         +'<td style="padding:10px 14px;font-size:.85rem;font-family:monospace;color:#475569;">'+(s.employeeId||"—")+'</td>'
-        +'<td style="padding:10px 14px;font-size:.9rem;font-weight:700;">'
+        +'<td style="padding:10px 14px;font-size:.9rem;font-weight:700;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
         +'<span style="font-size:.7rem;color:#1e40af;margin-right:4px;">'+(exp?"▼":"▶")+'</span>'+nm+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.location||"—")+'</td>'
         +'<td style="padding:10px 14px;font-size:.85rem;color:#0f172a;">'+(s.employmentType||"—")+'</td>'
@@ -531,11 +531,11 @@ function render(){
       +'</div></div>'
       +'<div style="font-size:.72rem;color:#8496a7;">閲覧専用モード・書き込み操作は無効</div>'
       +'</div>'
-      +'<div style="overflow-x:auto;background:#fff;border:1px solid #adb5bd;border-radius:2px;margin-top:16px;">'
+      +'<div style="background:#fff;border:1px solid #adb5bd;border-radius:2px;margin-top:16px;">'
       +'<table style="width:100%;border-collapse:collapse;min-width:700px;">'
       +'<thead><tr>'
       +'<th style="'+thS2+'">社員番号</th>'
-      +'<th style="'+thS2+'">氏名</th>'
+      +'<th style="'+thS2+'left:0;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
       +'<th style="'+thS2+'">拠点</th>'
       +'<th style="'+thS2+'">雇用形態</th>'
       +'<th style="'+thS2+'text-align:right;">勤務日数</th>'
@@ -1146,7 +1146,7 @@ function render(){
             +'</td>';
         }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;">'
+          +'<td style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(worked?'<br><span style="font-size:.65rem;color:#1e40af;">'+worked+'</span>':"")
           +'</td>'
@@ -1176,7 +1176,7 @@ function render(){
       var sdYOpts=sdAllYears.map(function(y){return'<option value="'+y+'"'+(y===sdY?' selected':'')+'>'+y+'年</option>';}).join('');
       var sdMOpts=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMo?' selected':'')+'>'+m+'月</option>';}).join('');
       var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
-      tc='<div class="admin-card" style="padding:8px 6px;overflow-x:auto;">'
+      tc='<div class="admin-card" style="padding:8px 6px;">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<button id="btn-date-prev" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
         +'<select id="sd-y" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdYOpts+'</select>'
@@ -1189,7 +1189,7 @@ function render(){
         +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
-        +'<th style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;">氏名</th>'
+        +'<th style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>'
         +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
