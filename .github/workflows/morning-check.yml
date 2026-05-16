@@ -7,13 +7,10 @@ on:
   workflow_dispatch:
     inputs:
       testNotify:
-        description: "テスト通知を強制送信する（true = 未確認施設に関わらず通知）"
+        description: "テスト通知を強制送信する（チェックON = 未確認施設に関わらず通知）"
         required: false
-        default: "false"
-        type: choice
-        options:
-          - "false"
-          - "true"
+        default: false
+        type: boolean
 
 jobs:
   morning-check:
