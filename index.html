@@ -1214,6 +1214,15 @@ function render(){
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
+          +(cin&&cin.homeFacility!==undefined
+            ?'<div style="font-size:.6rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
+              +(cin.isSupportWork
+                ?'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">応援</span> '
+                +'<span style="color:#374151;">'+cin.homeFacility+'→'+cin.workFacility+'</span>'
+                :'<span style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:2px;padding:0 3px;">通常</span> '
+                +'<span style="color:#374151;">'+(cin.workFacility||"−")+'</span>')
+              +'</div>'
+            :"")
           +'</td>'
           +tCell(cin,"clockIn","出","#1e40af")
           +(showBreakColumn?'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
@@ -2095,6 +2104,7 @@ function doPunch(type){
   var _fn=(_so.location)||facilityName||"";
   var nr={id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
   if(_fn)nr.facilityName=_fn;
+  if(type==="clockIn"){nr.homeFacility=_fn;nr.workFacility=_fn;nr.isSupportWork=false;nr.wageType="normal";}
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
