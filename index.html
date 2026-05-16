@@ -463,6 +463,15 @@ function attachTimeCellHandlers(){
   });
 }
 
+// ===== 朝出勤確認ヘルパー =====
+function getMorningUnconfirmedFacilities(){
+  var today=fmtDateKey(new Date());
+  var checked={};
+  records.filter(function(r){return r.type==="clockIn"&&r.date===today&&!r.deleted;})
+    .forEach(function(r){var fac=r.workFacility||r.facilityName||"";if(fac)checked[fac]=true;});
+  return masterFacilities.map(function(f){return f.name;}).filter(function(nm){return !checked[nm];});
+}
+
 // ===== レンダリング =====
 function render(){
   var now=new Date();
@@ -1710,6 +1719,72 @@ function render(){
           :"");
     }
 
+    if(adminTab==="morning"){
+      var todayKey=fmtDateKey(new Date());
+      var nowStr=new Date().toLocaleTimeString("ja-JP",{hour:"2-digit",minute:"2-digit"});
+      var todayCins=records.filter(function(r){return r.type==="clockIn"&&r.date===todayKey&&!r.deleted;});
+      var facMap={};
+      todayCins.forEach(function(r){
+        var fac=r.workFacility||r.facilityName||"";
+        if(!fac)return;
+        if(!facMap[fac])facMap[fac]=[];
+        facMap[fac].push(r);
+      });
+      var facRows=masterFacilities.map(function(f){
+        var recs=facMap[f.name]||[];
+        var ok=recs.length>0;
+        var sorted=ok?recs.slice().sort(function(a,b){return a.time<b.time?-1:1;}):[];
+        return{name:f.name,ok:ok,count:recs.length,firstTime:ok?sorted[0].time:"",names:recs.map(function(r){return r.staff;}).join("・")};
+      });
+      var okCount=facRows.filter(function(r){return r.ok;}).length;
+      var ngCount=facRows.length-okCount;
+      var summaryHtml='<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">'
+        +'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px 14px;">'
+        +'<div style="font-size:.7rem;color:#0369a1;font-weight:700;margin-bottom:4px;">対象日</div>'
+        +'<div style="font-size:.9rem;font-weight:900;font-family:monospace;color:#0f172a;">'+todayKey+'</div></div>'
+        +'<div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;padding:10px 14px;">'
+        +'<div style="font-size:.7rem;color:#0369a1;font-weight:700;margin-bottom:4px;">確認施設数</div>'
+        +'<div style="font-size:.9rem;font-weight:900;color:#0f172a;">'+facRows.length+'施設</div></div>'
+        +'<div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;">'
+        +'<div style="font-size:.7rem;color:#15803d;font-weight:700;margin-bottom:4px;">✅ OK</div>'
+        +'<div style="font-size:1.1rem;font-weight:900;color:#15803d;">'+okCount+'施設</div></div>'
+        +'<div style="background:'+(ngCount>0?"#fff1f2":"#f0fdf4")+';border:1px solid '+(ngCount>0?"#fecdd3":"#bbf7d0")+';border-radius:6px;padding:10px 14px;">'
+        +'<div style="font-size:.7rem;color:'+(ngCount>0?"#be123c":"#15803d")+';font-weight:700;margin-bottom:4px;">'+(ngCount>0?"⚠️ 未確認":"✅ 全施設OK")+'</div>'
+        +'<div style="font-size:1.1rem;font-weight:900;color:'+(ngCount>0?"#be123c":"#15803d")+';">'+ngCount+'施設</div></div>'
+        +'</div>';
+      var facTableHtml='<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
+        +'<thead><tr style="background:#eaecef;">'
+        +'<th style="padding:7px 8px;text-align:left;font-weight:700;white-space:nowrap;">施設名</th>'
+        +'<th style="padding:7px 8px;text-align:center;font-weight:700;white-space:nowrap;">状態</th>'
+        +'<th style="padding:7px 8px;text-align:right;font-weight:700;white-space:nowrap;">人数</th>'
+        +'<th style="padding:7px 8px;text-align:center;font-weight:700;white-space:nowrap;">初回出勤</th>'
+        +'<th style="padding:7px 8px;text-align:left;font-weight:700;">出勤者</th>'
+        +'</tr></thead><tbody>'
+        +facRows.map(function(f){
+          var bg=f.ok?"":"#fff5f5";
+          var bdColor=f.ok?"#f3f4f6":"#fecdd3";
+          var badge=f.ok
+            ?'<span style="background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;border-radius:4px;padding:1px 8px;font-weight:700;font-size:.78rem;">✅ OK</span>'
+            :'<span style="background:#fff1f2;color:#be123c;border:1px solid #fecdd3;border-radius:4px;padding:1px 8px;font-weight:700;font-size:.78rem;">⚠ 未確認</span>';
+          return'<tr style="border-bottom:1px solid '+bdColor+';background:'+bg+';">'
+            +'<td style="padding:8px 8px;font-weight:700;">'+f.name+'</td>'
+            +'<td style="padding:8px 8px;text-align:center;">'+badge+'</td>'
+            +'<td style="padding:8px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(f.ok?"#0f172a":"#c8ccd2")+'">'+(f.ok?f.count+'人':"—")+'</td>'
+            +'<td style="padding:8px 8px;text-align:center;font-family:monospace;color:#1e40af;">'+(f.firstTime||"—")+'</td>'
+            +'<td style="padding:8px 8px;font-size:.78rem;color:#475569;">'+(f.names||"—")+'</td>'
+            +'</tr>';
+        }).join("")
+        +'</tbody></table></div>';
+      tc='<div class="admin-card">'
+        +'<div class="admin-title">🌅 朝出勤確認</div>'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
+        +'<div style="font-size:.78rem;color:#8496a7;">最終確認：'+nowStr+'</div>'
+        +'<button id="btn-morning-refresh" style="background:#1e40af;color:#fff;border:none;padding:7px 16px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🔄 最新状態に更新</button>'
+        +'</div>'
+        +summaryHtml
+        +facTableHtml+'</div>';
+    }
+
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
@@ -1722,6 +1797,7 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="master"?"tab-on":"tab-off")+'" onclick="setTab(\'master\')">マスター管理</button>'
       +'<button class="tab-btn '+(adminTab==="documents"?"tab-on":"tab-off")+'" onclick="setTab(\'documents\')">資料管理</button>'
       +'<button class="tab-btn '+(adminTab==="support"?"tab-on":"tab-off")+'" onclick="setTab(\'support\')">応援集計</button>'
+      +'<button class="tab-btn '+(adminTab==="morning"?"tab-on":"tab-off")+'" onclick="setTab(\'morning\')">朝出勤確認</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -1846,6 +1922,18 @@ function render(){
       var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
       var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
       dlCSV(hdrD+"\n"+sdD.map(function(d){return[d.date,d.staff,d.home,d.work,d.inTime,d.outTime,d.ms>0?toHM(d.ms):"",d.wageType].join(",");}).join("\n"),"穂乃味_応援明細_"+selMonth+".csv");
+    };
+
+    // 朝出勤確認 — 最新状態に更新
+    var mRefBtn=document.getElementById("btn-morning-refresh");
+    if(mRefBtn)mRefBtn.onclick=function(){
+      mRefBtn.textContent="更新中…";mRefBtn.disabled=true;
+      authFetch(FB_URL+"/tc5_records.json")
+        .then(function(r){return r.json();})
+        .then(function(val){
+          if(val){var arr=Array.isArray(val)?val:Object.values(val);records=arr;localStorage.setItem("tc5_records",JSON.stringify(records));}
+          render();
+        }).catch(function(){render();});
     };
 
     // 打刻追加
