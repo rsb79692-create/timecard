@@ -230,7 +230,7 @@ function showModal(opts){
   var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
   function close(){if(ov.parentNode)document.body.removeChild(ov);}
   if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
-  var ok=document.createElement("button");ok.textContent="OK";ok.style.cssText="flex:1;background:#1e40af;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
+  var ok=document.createElement("button");ok.textContent=opts.okLabel||"OK";ok.style.cssText="flex:1;background:#1e40af;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
   card.appendChild(row);ov.appendChild(card);
   ov.onclick=function(e){if(e.target===ov){close();if(opts.onCancel)opts.onCancel();}};
   document.body.appendChild(ov);ok.focus();
@@ -2315,13 +2315,10 @@ function selStaff(s){
 }
 function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;});saveData("tc5_staff",staffList);render();}
 
-function doPunch(type){
-  if(!tokenValid)return;
-  var d=new Date();
-  console.log("[doPunch start]", staffName, type, fmtDateKey(d));
+function _execPunch(type,d){
   var _so=staffList.find(function(s){return s.name===staffName;})||{};
   var _fn=(_so.location)||facilityName||"";
-  var nr={id:""+Date.now(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  var nr={id:""+d.getTime(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
   if(_fn)nr.facilityName=_fn;
   if(type==="clockIn"){
     var _wf=(_so.canSupportWork&&selectedWorkFacility)?selectedWorkFacility:_fn;
@@ -2332,6 +2329,29 @@ function doPunch(type){
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){punchMsg=null;staffName=null;selectedWorkFacility=null;screen="home";render();},1500);
   render();
+}
+function doPunch(type){
+  if(!tokenValid)return;
+  var d=new Date();
+  console.log("[doPunch start]", staffName, type, fmtDateKey(d));
+  if(type==="clockOut"){
+    var _sr=records.filter(function(r){return r.staff===staffName&&r.date===fmtDateKey(d)&&!r.deleted;});
+    _sr.sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+    var _lr=_sr[_sr.length-1];
+    if(_lr&&_lr.type==="clockIn"){
+      var _em=Math.floor((d-new Date(_lr.timestamp))/60000);
+      var _im="前回：出勤 "+_lr.time+"\n現在：退勤 "+fmtTime(d)+"\n経過："+_em+"分";
+      if(_em<5){
+        showModal({title:"打刻内容を確認してください",message:_im+"\n\n誤って退勤していませんか？",alertOnly:false,okLabel:"退勤する",onOK:function(){_execPunch(type,d);},onCancel:function(){}});
+        return;
+      }
+      if(_em<10){
+        showAlert("打刻内容を確認してください\n\n"+_im,function(){_execPunch(type,d);});
+        return;
+      }
+    }
+  }
+  _execPunch(type,d);
 }
 
 // ===== PIN ハッシュ化 (Phase 1-C/1-D) =====
