@@ -1140,13 +1140,17 @@ function render(){
         var locked=approved;
         function tCell(rec,type,label,color){
           var t=rec?rec.time:"--:--";
-          if(locked)return'<td style="padding:4px 4px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';">'+t+'</td>';
+          var badge=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type])
+            ?'<br><span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;">修正</span>':"";
+          if(locked)return'<td style="padding:4px 4px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';">'+t+badge+'</td>';
           return'<td style="padding:6px 4px;text-align:center;">'
             +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
             +'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+t+'</span>'
-            +'</td>';
+            +badge+'</td>';
         }
+        var bsBadge=(bs&&bs.editedByAdmin&&bs.editedFields&&bs.editedFields.breakStart)?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;">修正</span>':"";
+        var beBadge=(be&&be.editedByAdmin&&be.editedFields&&be.editedFields.breakEnd)?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;">修正</span>':"";
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
@@ -1154,10 +1158,10 @@ function render(){
           +tCell(cin,"clockIn","出","#1e40af")
           +(showBreakColumn?'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
           +(locked
-            ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'
-            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bs?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bs?bs.time:"--:--")+'</span>'
+            ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>'+bsBadge+'〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'+beBadge
+            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bs?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bs?bs.time:"--:--")+'</span>'+bsBadge
             +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
-            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(be?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(be?be.time:"--:--")+'</span>')
+            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(be?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(be?be.time:"--:--")+'</span>'+beBadge)
           +'</td>':"")
           +tCell(cout,"clockOut","退","#dc2626")
           +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
@@ -1583,7 +1587,7 @@ function render(){
         inp.type="time";inp.value=cur;
         inp.style.cssText="width:72px;font-size:.85rem;font-family:monospace;border:1px solid #1e40af;border-radius:2px;padding:2px 3px;background:#eff4ff;outline:none;";
         var btnOk=document.createElement("button");
-        btnOk.textContent="✓";btnOk.title="保存";
+        btnOk.textContent="設定";btnOk.title="保存";
         btnOk.style.cssText="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:2px 5px;font-size:.78rem;cursor:pointer;";
         var btnCnl=document.createElement("button");
         btnCnl.textContent="✕";btnCnl.title="キャンセル";
@@ -1609,18 +1613,17 @@ function render(){
               render();
             },function(){saving=false;cancel();});
           } else if(newTime){
-            showConfirm(snm+"さんの "+typeName+" を "+newTime+" に修正します。\n（"+date+"）\nよろしいですか？",function(){
-              var d2=new Date(date);d2.setHours(hh,mm,0,0);
-              if(id){
-                var rec=records.find(function(r){return r.id===id;});
-                if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
-              } else {
-                var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-                if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
-                else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true};records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
-              }
-              render();
-            },function(){saving=false;cancel();});
+            var d2=new Date(date);d2.setHours(hh,mm,0,0);
+            var nowIso=new Date().toISOString();
+            if(id){
+              var rec=records.find(function(r){return r.id===id;});
+              if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
+            } else {
+              var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+              if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
+              else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
+            }
+            render();
           } else {
             saving=false;cancel();
           }
