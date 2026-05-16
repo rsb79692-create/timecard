@@ -199,7 +199,7 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 .center{text-align:center;}
 .hrm-row:hover{background:#f0f4ff!important;}
 /* 管理者画面PC全画面対応 */
-.admin-mode{max-width:none!important;}
+.admin-mode{max-width:none!important;min-width:1100px;padding-left:24px;padding-right:24px;}
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
@@ -377,7 +377,15 @@ function filteredStaff(){
 function render(){
   var now=new Date();
   var app=document.getElementById("app");
-  app.className=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode)?"wrap admin-mode":"wrap";
+  var isAdminScreen=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode);
+  app.className=isAdminScreen?"wrap admin-mode":"wrap";
+  // 管理者画面はPC幅(1100px)でレンダリング、それ以外はスマホ向けviewportに戻す
+  var vpMeta=document.querySelector('meta[name="viewport"]');
+  if(vpMeta){
+    vpMeta.setAttribute("content", isAdminScreen
+      ? "width=1100, initial-scale=1.0"
+      : "width=device-width, initial-scale=1.0, maximum-scale=1.0");
+  }
 
   // ── 閲覧トークン認証待ち（Firebase読込中）──
   if(viewerPending){
