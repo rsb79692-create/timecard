@@ -205,10 +205,12 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 }
 @media (max-width:767px){
   .admin-mode{min-width:0;width:100%;padding-left:8px;padding-right:8px;}
-  .sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
+  td.sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
+  th.sticky-name-col{left:auto!important;border-right:none!important;}
 }
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
-.attendance-toolbar-sticky{background:#eaecef;padding:8px 0 2px;border-top:1px solid #c9ced5;}
+.records-th{position:sticky;z-index:2;background:#eaecef;box-shadow:0 2px 4px rgba(0,0,0,.08);}
+.records-th.sticky-name-col{z-index:3;}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
 </style>
@@ -1121,7 +1123,7 @@ function render(){
     var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
-    var tc="";var toolbarHTML="";
+    var tc="";
 
     if(adminTab==="records"){
       var dRecs=records.filter(function(r){return r.date===selDate;})
@@ -1183,7 +1185,8 @@ function render(){
       var sdYOpts=sdAllYears.map(function(y){return'<option value="'+y+'"'+(y===sdY?' selected':'')+'>'+y+'年</option>';}).join('');
       var sdMOpts=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMo?' selected':'')+'>'+m+'月</option>';}).join('');
       var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
-      toolbarHTML='<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+      tc='<div class="admin-card" style="padding:8px 6px;">'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<button id="btn-date-prev" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
         +'<select id="sd-y" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdYOpts+'</select>'
         +'<select id="sd-m" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdMOpts+'</select>'
@@ -1193,16 +1196,15 @@ function render(){
         +'<span style="color:#8496a7;font-size:.72rem;">※時刻をタップで編集</span>'
         +'<button onclick="showBreakColumn=!showBreakColumn;render();" style="background:'+(showBreakColumn?"#374151":"#dde1e7")+';color:'+(showBreakColumn?"#fff":"#475569")+';border:1px solid #adb5bd;padding:4px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(showBreakColumn?"休憩非表示":"休憩表示")+'</button>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
-        +'</div>';
-      tc='<div class="admin-card" style="padding:8px 6px;">'
+        +'</div>'
         +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
-        +'<th class="sticky-name-col" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:2;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">氏名</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
-        +(showBreakColumn?'<th style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>':"")
-        +'<th style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">勤務時間</th>'
-        +'<th style="text-align:center;font-size:.72rem;color:#8796a7;padding:4px;font-weight:700;">承認</th>'
+        +'<th class="sticky-name-col records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08),0 2px 4px rgba(0,0,0,.08);">氏名</th>'
+        +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
+        +(showBreakColumn?'<th class="records-th" style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>':"")
+        +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
+        +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">勤務時間</th>'
+        +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#8796a7;padding:4px;font-weight:700;">承認</th>'
         +'</tr></thead>'
         +'<tbody>'+sumRows+'</tbody></table>'
         +(delRecs.length?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
@@ -1552,7 +1554,6 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="master"?"tab-on":"tab-off")+'" onclick="setTab(\'master\')">マスター管理</button>'
       +'<button class="tab-btn '+(adminTab==="documents"?"tab-on":"tab-off")+'" onclick="setTab(\'documents\')">資料管理</button>'
       +'</div>'
-      +(adminTab==="records"?'<div class="attendance-toolbar-sticky">'+toolbarHTML+'</div>':"")
       +'</div>'+tc;
 
     // イベント
@@ -1571,6 +1572,13 @@ function render(){
     if(bdPrev)bdPrev.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()-1);selDate=fmtDateKey(d);render();};
     var bdNext=document.getElementById("btn-date-next");
     if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
+
+    // thead sticky: admin-sticky-bar の高さを測って top を設定
+    if(adminTab==="records"){
+      var sBar=document.querySelector('.admin-sticky-bar');
+      var sBarH=sBar?sBar.offsetHeight:0;
+      document.querySelectorAll('.records-th').forEach(function(th){th.style.top=sBarH+'px';});
+    }
 
     // 勤怠一覧タブ：時刻セルのインライン編集
     console.log("[admin time-cell handler attached]", document.querySelectorAll(".time-cell").length, "cells, tab:", adminTab);
