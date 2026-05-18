@@ -259,6 +259,8 @@ async function main() {
       if (names.length > 0) {
         facilities = names;
         console.log(`[RTDB]  master/locations(配列) から ${names.length} 件取得`);
+        console.log("[DEBUG] 施設マスタ詳細:");
+        rawLocs.forEach((f, i) => console.log(`  [${i}] ${JSON.stringify(f)}`));
       }
     } else if (typeof rawLocs === "object" && rawLocs !== null) {
       const names = Object.values(rawLocs)
@@ -267,6 +269,8 @@ async function main() {
       if (names.length > 0) {
         facilities = names;
         console.log(`[RTDB]  master/locations(オブジェクト) から ${names.length} 件取得`);
+        console.log("[DEBUG] 施設マスタ詳細:");
+        Object.values(rawLocs).forEach((f, i) => console.log(`  [${i}] ${JSON.stringify(f)}`));
       }
     }
   } catch (e) {
@@ -287,15 +291,39 @@ async function main() {
   );
   console.log(`[DATE]  対象日 ${today} の clockIn 件数: ${todayClockIns.length}`);
 
+  // 本日打刻データ詳細（workFacility/facilityName の内容を確認）
+  console.log("[DEBUG] 本日 clockIn レコード一覧:");
+  if (todayClockIns.length === 0) {
+    console.log("  (なし)");
+    // 日付ずれのデバッグ用：直近5件の clockIn を出力
+    const recentClockIns = validRecords
+      .filter((r) => r && r.type === "clockIn" && !r.deleted)
+      .slice(-5);
+    console.log("[DEBUG] 直近 clockIn レコード（最大5件・日付ずれ確認用）:");
+    recentClockIns.forEach((r, i) => {
+      console.log(`  [${i + 1}] staff="${r.staff}" date="${r.date}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}"`);
+    });
+  } else {
+    todayClockIns.forEach((r, i) => {
+      console.log(`  [${i + 1}] staff="${r.staff}" date="${r.date}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}" deleted=${!!r.deleted}`);
+    });
+  }
+
   // ── 施設別に出勤件数を集計 ──
   const facilityClockInCount = {};
   facilities.forEach((name) => { facilityClockInCount[name] = 0; });
 
+  console.log("[DEBUG] 施設マッチング結果:");
   todayClockIns.forEach((r) => {
     const fac = r.workFacility || r.facilityName || "";
-    if (fac && Object.prototype.hasOwnProperty.call(facilityClockInCount, fac)) {
+    const matched = fac && Object.prototype.hasOwnProperty.call(facilityClockInCount, fac);
+    if (!fac) {
+      console.log(`  staff="${r.staff}" → workFacility/facilityName が空のためスキップ`);
+    } else if (matched) {
+      console.log(`  staff="${r.staff}" fac="${fac}" → マッチ OK`);
       facilityClockInCount[fac]++;
-    } else if (fac) {
+    } else {
+      console.log(`  staff="${r.staff}" fac="${fac}" → 施設マスタ外（応援先 or 表記ゆれ）`);
       // 通知対象外施設（応援等）
       if (!facilityClockInCount["__other__"]) facilityClockInCount["__other__"] = {};
       facilityClockInCount["__other__"][fac] = (facilityClockInCount["__other__"][fac] || 0) + 1;
@@ -321,6 +349,32 @@ async function main() {
   }
 
   console.log(`[CHECK] 未打刻施設 ${unconfirmed.length} 件: ${unconfirmed.length > 0 ? unconfirmed.join(", ") : "なし"}`);
+
+  // ── ここら未確認の場合：原因を詳細出力 ──
+  if (unconfirmed.includes("ここら")) {
+    console.log("[DEBUG] ここら が未確認扱いになった原因調査:");
+    const cocoraKeywords = ["ここ", "cocora", "kokora"];
+    const cocoraRecs = todayClockIns.filter((r) =>
+      cocoraKeywords.some((kw) =>
+        (r.workFacility || "").toLowerCase().includes(kw) ||
+        (r.facilityName || "").toLowerCase().includes(kw)
+      )
+    );
+    if (cocoraRecs.length === 0) {
+      console.log("  → 本日の clockIn に「ここ/cocora/kokora」を含む workFacility/facilityName が存在しない");
+      console.log("  → 原因候補: 打刻されていない / workFacility が空 / 施設名表記が異なる");
+      const allFacs = [...new Set(todayClockIns.map((r) => r.workFacility || r.facilityName || "(空)"))];
+      console.log(`  → 本日 clockIn の workFacility 一覧: ${allFacs.join(", ")}`);
+    } else {
+      cocoraRecs.forEach((r) => {
+        console.log(`  → レコードあり: staff="${r.staff}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}"`);
+        console.log(`     施設マスタに "${r.workFacility || r.facilityName}" が存在しないか表記ゆれがある可能性`);
+      });
+      console.log(`  → 施設マスタの "ここら" のキー文字コード: ${[..."ここら"].map((c) => c.codePointAt(0).toString(16)).join(" ")}`);
+      const facKey = cocoraRecs[0].workFacility || cocoraRecs[0].facilityName || "";
+      console.log(`  → データの workFacility "${facKey}" の文字コード: ${[...facKey].map((c) => c.codePointAt(0).toString(16)).join(" ")}`);
+    }
+  }
 
   // ── 未確認が 0 件なら通知せず終了 ──
   if (unconfirmed.length === 0) {

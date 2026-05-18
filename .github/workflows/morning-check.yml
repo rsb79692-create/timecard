@@ -2,8 +2,8 @@ name: 朝出勤確認 LINE通知
 
 on:
   schedule:
-    # JST 05:55 = UTC 20:55 (前日)
-    - cron: "55 20 * * *"
+    # JST 06:00 = UTC 21:00 (前日)
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
       testNotify:
