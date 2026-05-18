@@ -470,7 +470,9 @@ function attachTimeCellHandlers(){
       if(el.querySelector("input"))return;
       var origText=el.textContent,origStyle=el.getAttribute("style")||"";
       var typeName=TYPE_LABEL[type]||type;
-      var saving=false;
+      // saveAllowed=true にした直後の save() 呼び出しだけが保存を実行する
+      // Enter / 設定ボタン以外では saveAllowed を true にしない
+      var saveAllowed=false;
       var wrap=document.createElement("div");
       wrap.style.cssText="display:inline-flex;align-items:center;gap:3px;";
       var inp=document.createElement("input");
@@ -486,9 +488,10 @@ function attachTimeCellHandlers(){
       el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
       el.appendChild(wrap);
       inp.focus();
-      try{ if(inp.showPicker) inp.showPicker(); } catch(e){}
       function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
       function save(){
+        if(!saveAllowed){return;}  // ガード：Enter / 設定ボタン以外は通さない
+        saveAllowed=false;          // 即リセットして二重保存を防ぐ
         var val=inp.value.trim();
         if(!val&&!id){cancel();return;}
         var parts=val?val.split(":"):[null,null];
@@ -496,13 +499,12 @@ function attachTimeCellHandlers(){
         if(val&&(isNaN(hh)||isNaN(mm)||hh>23||mm>59)){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
         var newTime=val?pad(hh)+":"+pad(mm):"";
         var oldTime=cur||"（未打刻）";
-        saving=true;
         if(newTime===""&&id){
           showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
             var rec=records.find(function(r){return r.id===id;});
             if(rec){console.log("[管理者修正] 削除:",snm,date,typeName,"元時刻:",rec.time);rec.deleted=true;softDeleteRecord(rec.id);}
             render();
-          },function(){saving=false;cancel();});
+          },function(){cancel();});
         } else if(newTime){
           var d2=new Date(date);d2.setHours(hh,mm,0,0);
           var nowIso=new Date().toISOString();
@@ -516,18 +518,23 @@ function attachTimeCellHandlers(){
           }
           render();
         } else {
-          saving=false;cancel();
+          cancel();
         }
       }
+      // mousedown で preventDefault → ボタンクリック時に input のフォーカスを維持
       btnOk.addEventListener("mousedown",function(e){e.preventDefault();});
       btnCnl.addEventListener("mousedown",function(e){e.preventDefault();});
-      btnOk.addEventListener("click",save);
-      btnCnl.addEventListener("click",cancel);
+      // 設定ボタン：saveAllowed を true にしてから save()
+      btnOk.addEventListener("click",function(e){e.stopPropagation();saveAllowed=true;save();});
+      // ×ボタン：cancel のみ
+      btnCnl.addEventListener("click",function(e){e.stopPropagation();cancel();});
+      // Enter：saveAllowed を true にしてから save()
+      // Escape：cancel のみ
+      // それ以外のキー・blur・change・枠外クリックでは一切何もしない
       inp.addEventListener("keydown",function(e){
-        if(e.key==="Enter"){e.preventDefault();save();}
+        if(e.key==="Enter"){e.preventDefault();saveAllowed=true;save();}
         if(e.key==="Escape"){e.preventDefault();cancel();}
       });
-      // 保存確定は Enter / 設定ボタン のみ。blur・change では保存もキャンセルもしない。
     };
   });
 }
