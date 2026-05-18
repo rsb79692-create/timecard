@@ -208,12 +208,11 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 .center{text-align:center;}
 .hrm-row:hover{background:#f0f4ff!important;}
 /* 管理者画面：PC(768px以上)は広幅、スマホは画面幅に収める */
-.admin-mode{max-width:none!important;}
 @media (min-width:768px){
-  .admin-mode{min-width:1100px;padding-left:24px;padding-right:24px;}
+  .admin-mode{max-width:95%;margin:0 auto;padding-left:20px;padding-right:20px;}
 }
 @media (max-width:767px){
-  .admin-mode{min-width:0;width:100%;padding-left:8px;padding-right:8px;}
+  .admin-mode{max-width:none!important;min-width:0;width:100%;padding-left:8px;padding-right:8px;}
   td.sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
   th.sticky-name-col{left:auto!important;border-right:none!important;}
 }
@@ -222,6 +221,9 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 .records-th.sticky-name-col{z-index:3;}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
+/* 勤怠一覧テーブル */
+.records-table td,.records-table th{padding:8px 10px;}
+.records-table tr{height:52px;}
 </style>
 </head>
 <body>
@@ -246,6 +248,32 @@ function showModal(opts){
 }
 function showAlert(msg,cb){showModal({message:msg,alertOnly:true,onOK:cb});}
 function showConfirm(msg,onOK,onCancel){showModal({title:"確認",message:msg,alertOnly:false,onOK:onOK,onCancel:onCancel});}
+function showEditHistoryModal(nm,type,recId){
+  var rec=records.find(function(r){return r.id===recId;});
+  var history=(rec&&rec.editHistory)?rec.editHistory:[];
+  var typeName=TYPE_LABEL[type]||type;
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:20px;max-width:320px;width:100%;border:1px solid #adb5bd;";
+  var ttl=document.createElement("div");ttl.style.cssText="font-size:.95rem;font-weight:900;color:#0f172a;margin-bottom:12px;";
+  ttl.textContent=nm+"（"+typeName+"）修正履歴";card.appendChild(ttl);
+  var list=document.createElement("div");
+  if(history.length===0){var empty=document.createElement("div");empty.style.cssText="font-size:.85rem;color:#8496a7;padding:8px 0;";empty.textContent="履歴なし";list.appendChild(empty);}
+  history.forEach(function(h,i){
+    var row=document.createElement("div");row.style.cssText="padding:6px 0;font-size:.85rem;border-bottom:1px solid #e9ecef;color:#374151;";
+    var dt=h.editedAt?h.editedAt.replace("T"," ").slice(0,16):"";
+    row.textContent=(i===0?"元の時刻: ":"修正前: ")+(h.time||"（未打刻）")+(dt?" ／ "+dt:"");
+    list.appendChild(row);
+  });
+  if(rec&&rec.time){var cur=document.createElement("div");cur.style.cssText="padding:6px 0;font-size:.85rem;font-weight:700;color:#0f172a;";cur.textContent="現在: "+rec.time;list.appendChild(cur);}
+  card.appendChild(list);
+  var ok=document.createElement("button");ok.textContent="閉じる";
+  ok.style.cssText="margin-top:14px;width:100%;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  function close(){if(ov.parentNode)document.body.removeChild(ov);}
+  ok.onclick=close;ov.onclick=function(e){if(e.target===ov)close();};
+  card.appendChild(ok);ov.appendChild(card);document.body.appendChild(ov);ok.focus();
+}
 
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
@@ -462,10 +490,10 @@ function attachTimeCellHandlers(){
           var nowIso=new Date().toISOString();
           if(id){
             var rec=records.find(function(r){return r.id===id;});
-            if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
+            if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
           } else {
             var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-            if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
+            if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
             else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
           }
           render();
@@ -1307,14 +1335,17 @@ function render(){
         var locked=approved;
         function tCell(rec,type,label,color){
           var t=rec?rec.time:"--:--";
-          var badge=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type])
-            ?'<br><span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;">修正</span>':"";
-          if(locked)return'<td style="padding:4px 4px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';">'+t+badge+'</td>';
-          return'<td style="padding:6px 4px;text-align:center;">'
+          var wasEdited=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type]);
+          var prevTime=wasEdited?(rec.editHistory&&rec.editHistory.length?rec.editHistory[0].time:rec.editedFrom)||"":"";
+          var histLine=wasEdited
+            ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;cursor:pointer;text-decoration:underline dotted;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
+            :"";
+          if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.05rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+'</td>';
+          return'<td style="padding:6px 8px;text-align:center;">'
             +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+t+'</span>'
-            +badge+'</td>';
+            +'" style="font-family:monospace;font-size:1.05rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
+            +histLine+'</td>';
         }
         function brkPairCell(bsRec,beRec,locked2){
           var bsBadge2=(bsRec&&bsRec.editedByAdmin&&bsRec.editedFields&&bsRec.editedFields.breakStart)?'<span title="管理者修正済み" style="font-size:.5rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 2px;font-weight:700;">修正</span>':"";
@@ -1327,10 +1358,10 @@ function render(){
             +'<span class="time-cell" data-id="'+(beRec?beRec.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(beRec?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?beRec.time:"--:--")+'</span>'+beBadge2;
         }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(cin
-            ?'<div style="font-size:.6rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
+            ?'<div style="font-size:.72rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
               +(cin.isSupportWork
                 ?'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">応援</span> '
                 +'<span style="color:#374151;">'+(cin.homeFacility||"")+'→'+(cin.workFacility||"")+'</span>'
@@ -1346,12 +1377,12 @@ function render(){
           +(brkPairs.length>1?'<div style="white-space:nowrap;border-top:1px dashed #e5e7eb;margin-top:2px;padding-top:2px;">'+brkPairCell(bs2,be2,locked)+'</div>':"")
           +'</td>':"")
           +tCell(cout,"clockOut","退","#dc2626")
-          +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
+          +'<td style="padding:4px 6px;font-family:monospace;font-size:1.02rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td>'
           +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
-            ?'<div style="background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #93c5fd;">✓承認</div>'
-             +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#fee2e2;color:#dc2626;border:none;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
-            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#e0f2fe;color:#0369a1;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
+            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
+             +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
+            :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
           +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
@@ -1372,11 +1403,11 @@ function render(){
         +'<select id="sd-d" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdDOpts+'</select>'
         +'<button id="btn-date-next" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
         +'<span style="color:#8496a7;font-size:.8rem;">'+staffList.length+'名</span>'
-        +'<span style="color:#8496a7;font-size:.72rem;">※時刻をタップで編集</span>'
+        +'<span style="color:#8496a7;font-size:.72rem;">※未承認の時刻をタップで編集</span>'
         +'<button onclick="showBreakColumn=!showBreakColumn;render();" style="background:'+(showBreakColumn?"#374151":"#dde1e7")+';color:'+(showBreakColumn?"#fff":"#475569")+';border:1px solid #adb5bd;padding:4px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(showBreakColumn?"休憩非表示":"休憩表示")+'</button>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
-        +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
+        +'<table class="records-table" style="width:100%;border-collapse:collapse;min-width:360px;">'
         +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
         +'<th class="sticky-name-col records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08),0 2px 4px rgba(0,0,0,.08);">氏名</th>'
         +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
