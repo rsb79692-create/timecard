@@ -116,6 +116,15 @@ function fetchJson(url) {
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
   setInterval(function(){
+    // tc5_pins は画面を問わず常時同期（スタッフ選択画面でも反映されるよう）
+    authFetch(FB_URL + "/tc5_pins.json")
+      .then(function(r){return r.json();})
+      .then(function(val){
+        if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
+          staffPins=val;
+          render();
+        }
+      }).catch(function(){});
     if(screen!=="admin" && screen!=="staffDetail") return;
     authFetch(FB_URL + "/tc5_records.json")
       .then(function(r){return r.json();})
@@ -324,6 +333,23 @@ function calcMs(rs){
   }
   return Math.max(0,tot-brk);
 }
+// 休憩ペア配列を取得（{start:rec, end:rec|null}）。endがnullは休憩中
+function getBreakPairs(dr){
+  var sorted=dr.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  var pairs=[],bsin=null;
+  for(var i=0;i<sorted.length;i++){
+    var r=sorted[i];
+    if(r.type==="breakStart"){bsin=r;}
+    else if(r.type==="breakEnd"){if(bsin){pairs.push({start:bsin,end:r});bsin=null;}}
+  }
+  if(bsin)pairs.push({start:bsin,end:null});
+  return pairs;
+}
+function sumBreakMs(pairs){
+  var brk=0;
+  pairs.forEach(function(p){if(p.start&&p.end)brk+=new Date(p.end.timestamp)-new Date(p.start.timestamp);});
+  return brk;
+}
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
@@ -340,6 +366,8 @@ var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
 var staffList=loadData("tc5_staff",DEF_STAFF);
 var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageには保存しない）
+var firebaseReady=false;  // Firebase読込完了フラグ
+var firebaseError=false;  // Firebase読込失敗フラグ
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
@@ -656,7 +684,7 @@ function render(){
         vcDailyBtn.textContent="📥 日次CSV";
       }
       var DAYS_D=["日","月","火","水","木","金","土"];
-      var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩開始,休憩終了,実働時間";
+      var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩1開始,休憩1終了,休憩2開始,休憩2終了,休憩回数,休憩回数超過,休憩合計,実働時間";
       var rows=[];
       vStaff.forEach(function(s){
         var nm=s.name;
@@ -666,10 +694,18 @@ function render(){
           var dr=sr.filter(function(r){return r.date===dk;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
           var cin=dr.find(function(r){return r.type==="clockIn";});
           var cout=dr.find(function(r){return r.type==="clockOut";});
-          var bs=dr.find(function(r){return r.type==="breakStart";});
-          var be=dr.find(function(r){return r.type==="breakEnd";});
+          var vPairs=getBreakPairs(dr);
+          var vCompleted=vPairs.filter(function(p){return p.end!=null;});
+          var vp1=vPairs[0]||null,vp2=vPairs[1]||null;
+          var vBrkTot=sumBreakMs(vPairs);
+          var vBrkCount=vCompleted.length;
+          var vBrkOver=vBrkCount>=3?"超過":"";
           var ms=calcMs(dr);
-          rows.push([dk,DAYS_D[new Date(dk).getDay()],(s.employeeId||""),nm,(s.location||""),(s.employmentType||""),(cin?cin.time:""),(cout?cout.time:""),(bs?bs.time:""),(be?be.time:""),toHM(ms)||""].join(","));
+          rows.push([dk,DAYS_D[new Date(dk).getDay()],(s.employeeId||""),nm,(s.location||""),(s.employmentType||""),(cin?cin.time:""),(cout?cout.time:""),
+            vp1?vp1.start.time:"",vp1&&vp1.end?vp1.end.time:"",
+            vp2?vp2.start.time:"",vp2&&vp2.end?vp2.end.time:"",
+            vBrkCount>0?vBrkCount:"",vBrkOver,
+            vBrkTot>0?toHM(vBrkTot):"",toHM(ms)||""].join(","));
         });
       });
       rows.sort(function(a,b){return a<b?-1:a>b?1:0;});
@@ -781,13 +817,20 @@ function render(){
     var staffHTML=list.length?list.map(function(s){
       var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
       var locLabel=s.location?'<div style="font-size:.72rem;color:#64748b;font-weight:500;margin-top:3px;letter-spacing:.03em;">'+s.location+'</div>':"";
+      if(!firebaseReady||firebaseError){
+        return '<button class="btn-staff" disabled style="opacity:0.5;cursor:not-allowed;">'+dispName+locLabel+'</button>';
+      }
       return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+dispName+locLabel+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
+    var statusLabel=firebaseError
+      ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
+      :(firebaseReady?'':'');
     app.innerHTML='<div class="center" style="margin-bottom:10px;padding-top:4px;">'
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
-      +'<div class="label">スタッフを選択してください</div>'
+      +'<div class="label">'+(firebaseError?'通信エラー':firebaseReady?'スタッフを選択してください':'読込中...')+'</div>'
+      +statusLabel
       +'<div class="yomi-tabs">'+tabsHTML+'</div>'
       +'<div class="staff-grid">'+staffHTML+'</div>'
       +(!urlToken||isAllToken?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'');
@@ -948,8 +991,12 @@ function render(){
       var dr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
       var cin=dr.find(function(r){return r.type==="clockIn";});
       var cout=dr.find(function(r){return r.type==="clockOut";});
-      var bs=dr.find(function(r){return r.type==="breakStart";});
-      var be=dr.find(function(r){return r.type==="breakEnd";});
+      var dBrkPairs=getBreakPairs(dr);
+      var bs=dBrkPairs[0]?dBrkPairs[0].start:null;
+      var be=dBrkPairs[0]?dBrkPairs[0].end:null;
+      var bs2d=dBrkPairs[1]?dBrkPairs[1].start:null;
+      var be2d=dBrkPairs[1]?dBrkPairs[1].end:null;
+      var hasBreak3d=dBrkPairs.length>2;
       var ms=calcMs(dr);
       if(ms>0){totalMs+=ms;totalDays++;totalOtMs+=Math.max(0,ms-8*3600000);}
       var approved2=approvals[dk+"__"+nm];
@@ -970,25 +1017,31 @@ function render(){
         if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge;
         return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge;
       }
-      var brkText=(bs||be)?((bs?bs.time:"??:??")+"〜"+(be?be.time:"??:??")):"";
-      var brkDisplay=locked2
-        ?'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(brkText?"#4b5563":"#c8ccd2")+'">'+(brkText||"−")+'</span>'
-        :'<span style="display:inline-flex;align-items:center;gap:2px;">'
-          +tCell(bs,"breakStart")
-          +'<span style="font-size:.75rem;color:#c8ccd2;">〜</span>'
-          +tCell(be,"breakEnd")
-          +'</span>';
+      function brkPairDisp(bsR,beR){
+        if(locked2){
+          var t1=bsR?bsR.time:"??:??",t2=beR?beR.time:"未終了";
+          return'<span style="font-family:monospace;font-size:.85rem;color:'+(bsR?"#4b5563":"#c8ccd2")+'">'+(bsR||beR?t1+"〜"+t2:"−")+'</span>';
+        }
+        return'<span style="display:inline-flex;align-items:center;gap:1px;">'+tCell(bsR,"breakStart")+'<span style="font-size:.72rem;color:#c8ccd2;">〜</span>'+tCell(beR,"breakEnd")+'</span>';
+      }
+      var brkDisplay='<div style="line-height:1.6;">'
+        +(dBrkPairs.length>0
+          ?'<div>'+brkPairDisp(bs,be)+'</div>'
+          :'<span style="color:#c8ccd2;font-size:.85rem;">−</span>')
+        +(dBrkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:1px;">'+brkPairDisp(bs2d,be2d)+'</div>':"")
+        +(hasBreak3d?'<div style="font-size:.6rem;color:#dc2626;font-weight:700;">休憩回数超過</div>':"")
+        +'</div>';
       var approveBtn=approved2
         ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
         :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#1e40af;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">承認</button>':"");
-      return'<tr style="height:40px;border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
-        +'<td style="padding:0 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
-        +'<td style="padding:0 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
-        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
-        +'<td style="padding:0 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#c8ccd2;">−</span>')+'</td>'
-        +'<td style="padding:0 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
-        +'<td style="padding:0 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
-        +'<td style="padding:0 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
+      return'<tr style="border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
+        +'<td style="padding:4px 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
+        +'<td style="padding:4px 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:4px 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:4px 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
         +'</tr>';
     }).join("");
     app.innerHTML=''
@@ -1173,7 +1226,7 @@ function render(){
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var DAYS2=["日","月","火","水","木","金","土"];
-        var hdr2="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,実働時間,登録施設,出勤先施設,応援勤務,賃金種別";
+        var hdr2="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,休憩2開始_打刻_,休憩2終了_打刻_,休憩回数,休憩回数超過,休憩合計,実働時間,登録施設,出勤先施設,応援勤務,賃金種別";
         var rows2=[];
         activeNs2.forEach(function(nm){
           var sr2=mRe2.filter(function(r){return r.staff===nm;});
@@ -1182,9 +1235,18 @@ function render(){
             var dr2=sr2.filter(function(r){return r.date===dk;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
             var cin2=dr2.find(function(r){return r.type==="clockIn";});
             var cout2=dr2.find(function(r){return r.type==="clockOut";});
-            var bs2=dr2.find(function(r){return r.type==="breakStart";});
-            var be2=dr2.find(function(r){return r.type==="breakEnd";});
-            rows2.push([nm,monthKey(dk),dk,DAYS2[new Date(dk).getDay()],cin2?cin2.time:"",cout2?cout2.time:"",bs2?bs2.time:"",be2?be2.time:"",toHM(calcMs(dr2)),(cin2&&cin2.homeFacility)||"",(cin2&&cin2.workFacility)||"",(cin2&&cin2.isSupportWork)?"応援":"通常",(cin2&&cin2.wageType)||""].join(","));
+            var csvPairs=getBreakPairs(dr2);
+            var completedPairs=csvPairs.filter(function(p){return p.end!=null;});
+            var cp1=csvPairs[0]||null,cp2=csvPairs[1]||null;
+            var brkTot=sumBreakMs(csvPairs);
+            var brkCount=completedPairs.length;
+            var brkOver=brkCount>=3?"超過":"";
+            rows2.push([nm,monthKey(dk),dk,DAYS2[new Date(dk).getDay()],cin2?cin2.time:"",cout2?cout2.time:"",
+              cp1?cp1.start.time:"",cp1&&cp1.end?cp1.end.time:"",
+              cp2?cp2.start.time:"",cp2&&cp2.end?cp2.end.time:"",
+              brkCount>0?brkCount:"",brkOver,
+              brkTot>0?toHM(brkTot):"",toHM(calcMs(dr2)),
+              (cin2&&cin2.homeFacility)||"",(cin2&&cin2.workFacility)||"",(cin2&&cin2.isSupportWork)?"応援":"通常",(cin2&&cin2.wageType)||""].join(","));
           });
         });
         dlCSV(hdr2+"\n"+rows2.join("\n"),"穂乃味_日次勤怠_"+selMonth+".csv");
@@ -1222,8 +1284,12 @@ function render(){
         var sr=dRecs.filter(function(r){return r.staff===nm&&!r.deleted;});
         var cin=sr.find(function(r){return r.type==="clockIn";});
         var cout=sr.find(function(r){return r.type==="clockOut";});
-        var bs=sr.find(function(r){return r.type==="breakStart";});
-        var be=sr.find(function(r){return r.type==="breakEnd";});
+        var brkPairs=getBreakPairs(sr);
+        var bs=brkPairs[0]?brkPairs[0].start:null;
+        var be=brkPairs[0]?brkPairs[0].end:null;
+        var bs2=brkPairs[1]?brkPairs[1].start:null;
+        var be2=brkPairs[1]?brkPairs[1].end:null;
+        var hasBreak3=brkPairs.length>2;
         var ms=calcMs(sr);
         var worked=toHM(ms);
         var approved=approvals[selDate+"__"+nm];
@@ -1240,8 +1306,16 @@ function render(){
             +'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+t+'</span>'
             +badge+'</td>';
         }
-        var bsBadge=(bs&&bs.editedByAdmin&&bs.editedFields&&bs.editedFields.breakStart)?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;">修正</span>':"";
-        var beBadge=(be&&be.editedByAdmin&&be.editedFields&&be.editedFields.breakEnd)?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;">修正</span>':"";
+        function brkPairCell(bsRec,beRec,locked2){
+          var bsBadge2=(bsRec&&bsRec.editedByAdmin&&bsRec.editedFields&&bsRec.editedFields.breakStart)?'<span title="管理者修正済み" style="font-size:.5rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 2px;font-weight:700;">修正</span>':"";
+          var beBadge2=(beRec&&beRec.editedByAdmin&&beRec.editedFields&&beRec.editedFields.breakEnd)?'<span title="管理者修正済み" style="font-size:.5rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 2px;font-weight:700;">修正</span>':"";
+          if(locked2){
+            return'<span style="color:'+(bsRec?"#374151":"#d1d5db")+'">'+(bsRec?bsRec.time:"--:--")+'</span>'+bsBadge2+'〜<span style="color:'+(beRec?"#374151":"#d1d5db")+'">'+(beRec?beRec.time:"--:--")+'</span>'+beBadge2;
+          }
+          return'<span class="time-cell" data-id="'+(bsRec?bsRec.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bsRec?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bsRec?bsRec.time:"--:--")+'</span>'+bsBadge2
+            +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
+            +'<span class="time-cell" data-id="'+(beRec?beRec.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(beRec?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?beRec.time:"--:--")+'</span>'+beBadge2;
+        }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
           +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
@@ -1256,12 +1330,10 @@ function render(){
             :"")
           +'</td>'
           +tCell(cin,"clockIn","出","#1e40af")
-          +(showBreakColumn?'<td style="padding:6px 2px;font-family:monospace;font-size:.85rem;text-align:center;white-space:nowrap;">'
-          +(locked
-            ?'<span style="color:'+(bs?"#374151":"#d1d5db")+'">'+(bs?bs.time:"--:--")+'</span>'+bsBadge+'〜<span style="color:'+(be?"#374151":"#d1d5db")+'">'+(be?be.time:"--:--")+'</span>'+beBadge
-            :'<span class="time-cell" data-id="'+(bs?bs.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bs?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bs?bs.time:"--:--")+'</span>'+bsBadge
-            +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
-            +'<span class="time-cell" data-id="'+(be?be.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(be?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(be?be.time:"--:--")+'</span>'+beBadge)
+          +(showBreakColumn?'<td style="padding:4px 2px;font-family:monospace;font-size:.82rem;text-align:center;">'
+          +(hasBreak3?'<span style="font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:1px 4px;font-weight:700;display:block;margin-bottom:2px;">休憩回数超過</span>':"")
+          +'<div style="white-space:nowrap;">'+(brkPairs.length>0?brkPairCell(bs,be,locked):'<span style="color:#d1d5db;">--:--〜--:--</span>')+'</div>'
+          +(brkPairs.length>1?'<div style="white-space:nowrap;border-top:1px dashed #e5e7eb;margin-top:2px;padding-top:2px;">'+brkPairCell(bs2,be2,locked)+'</div>':"")
           +'</td>':"")
           +tCell(cout,"clockOut","退","#dc2626")
           +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
@@ -2299,6 +2371,8 @@ function setTab(v){
 }
 function selStaff(s){
   if(!tokenValid)return;
+  if(firebaseError){alert("通信エラーです。画面を再読み込みしてください");return;}
+  if(!firebaseReady){alert("読込中です。数秒お待ちください");return;}
   staffName=s;
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
@@ -2350,6 +2424,15 @@ function doPunch(type){
   if(type==="clockOut"&&!_dCin){
     showAlert("本日の出勤打刻がありません。\n\n先に出勤を打刻してください。");
     return;
+  }
+  // C2. 休憩3回目以上チェック
+  if(type==="breakStart"){
+    var _bpairs=getBreakPairs(_dr);
+    var _completedBreaks=_bpairs.filter(function(p){return p.end!=null;}).length;
+    if(_completedBreaks>=2){
+      showAlert("休憩は2回まで記録できます。\n追加休憩が必要な場合は管理者に連絡してください。");
+      return;
+    }
   }
   // D. 出勤→退勤の短時間警告チェック
   if(type==="clockOut"){
@@ -2902,10 +2985,14 @@ async function initFirebase() {
       }
     }
     if(KANA_ROWS.concat(["すべて"]).indexOf(yomiTab)<0){yomiTab="すべて";}
+    firebaseReady=true;
+    firebaseError=false;
     listenFirebase();
     render();
   } catch(e) {
     console.error("FB init error:",e);
+    firebaseReady=false;
+    firebaseError=true;
     render();
   }
 }
