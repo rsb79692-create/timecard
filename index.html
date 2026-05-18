@@ -280,7 +280,9 @@ var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
 var viewerInvalid=false;
-var viewerTokenConfig=""; // Firebase config/viewerTokenから読み込む
+var viewerExpired=false;
+var viewerTokensList=null; // 管理者用トークン一覧（null=未ロード）
+var viewerTokensLoading=false;
 var ADMIN_TOKEN=""; // Firebase config/adminToken（旧形式・移行用フォールバック）
 var ADMIN_TOKEN_HASH=""; // Firebase config/adminTokenHash（SHA-256ハッシュ、推奨）
 var adminParam=new URLSearchParams(location.search).get("admin");
@@ -353,7 +355,7 @@ function sumBreakMs(pairs){
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
-var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/adminTokenHash","config/viewerToken"];
+var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/adminTokenHash"];
 function saveData(k,v){
   if(SENSITIVE_KEYS.indexOf(k)<0){
     try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
@@ -524,12 +526,21 @@ function render(){
     return;
   }
 
-  // ── 閲覧専用トークン不正 ──
+  // ── 閲覧専用トークン無効（存在しない・enabled:false）──
   if(viewerInvalid){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
-      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">正しい閲覧URLをご利用ください</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">この閲覧用URLは無効です</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">管理者に新しいURLを発行してもらってください</div>'
+      +'</div>';
+    return;
+  }
+  // ── 閲覧専用トークン有効期限切れ ──
+  if(viewerExpired){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">⏰</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">この閲覧用URLは有効期限切れです</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">管理者に新しいURLを発行してもらってください</div>'
       +'</div>';
     return;
   }
@@ -1604,12 +1615,37 @@ function render(){
         +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         +'<div class="admin-card">'
-        +'<div class="admin-title">閲覧専用トークン（労務士向け）</div>'
-        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(viewerTokenConfig?"#1e40af":"#b91c1c")+';font-family:monospace;">'+(viewerTokenConfig||"未設定（閲覧URL使用不可）")+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(viewerTokenConfig?'?viewer='+viewerTokenConfig+' でアクセス可':'設定がないと閲覧URLは使用不可')+'</div>'
-        +'<div style="display:flex;gap:8px;">'
-        +'<input id="new-viewer-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
-        +'<button id="btn-change-viewer-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<div class="admin-title">閲覧用URL管理（労務士向け）</div>'
+        +(viewerTokensList===null
+          ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">読込中...</div>'
+          :viewerTokensList.length===0
+            ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">発行済みトークンなし</div>'
+            :viewerTokensList.map(function(vt){
+              var vtUrl=location.origin+location.pathname+'?viewer='+vt.token;
+              return '<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
+                +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                +'<strong style="font-size:.9rem;flex:1;">'+vt.name+'</strong>'
+                +(vt.enabled?'<span style="background:#dcfce7;color:#166534;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">有効</span>':'<span style="background:#fee2e2;color:#991b1b;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">無効</span>')
+                +'</div>'
+                +(vt.expiresAt?'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+vt.expiresAt+'</div>':'')
+                +(vt.memo?'<div style="font-size:.75rem;color:#64748b;margin-bottom:3px;">メモ: '+vt.memo+'</div>':'')
+                +'<div style="font-size:.72rem;color:#94a3b8;word-break:break-all;margin-bottom:8px;">'+vtUrl+'</div>'
+                +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+                +'<button class="btn-vt-copy" data-vt-token="'+vt.token+'" style="background:#1e40af;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
+                +'<button class="btn-vt-toggle" data-vt-token="'+vt.token+'" data-vt-enabled="'+(vt.enabled?'1':'0')+'" style="background:'+(vt.enabled?'#fef3c7':'#d1fae5')+';color:'+(vt.enabled?'#92400e':'#065f46')+';border:1px solid '+(vt.enabled?'#fcd34d':'#6ee7b7')+';padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(vt.enabled?'無効化':'有効化')+'</button>'
+                +'<button class="btn-vt-del" data-vt-token="'+vt.token+'" data-vt-name="'+vt.name+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+                +'</div>'
+                +'</div>';
+            }).join('')
+        )
+        +'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
+        +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規トークン発行</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
+        +'<input id="vt-new-name" type="text" placeholder="名称（例: 田中税理士事務所）" style="flex:1;">'
+        +'<input id="vt-new-expires" type="text" placeholder="有効期限 yyyy-mm-dd（省略可）" style="width:160px;">'
+        +'</div>'
+        +'<input id="vt-new-memo" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
+        +'<button id="btn-vt-issue" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する</button>'
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">デモアクセス管理</div>'
@@ -2242,21 +2278,68 @@ function render(){
         render();
       });
     };
-    // 閲覧専用トークン変更
-    var changeViewerTokenBtn=document.getElementById("btn-change-viewer-token");
-    if(changeViewerTokenBtn)changeViewerTokenBtn.onclick=function(){
-      var v=(document.getElementById("new-viewer-token")?.value||"").trim();
-      if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
-      viewerTokenConfig=v;
-      authFetch(FB_URL+"/config/viewerToken.json",{
+    // 閲覧用トークン CRUD
+    var issueVtBtn=document.getElementById("btn-vt-issue");
+    if(issueVtBtn)issueVtBtn.onclick=function(){
+      var name=(document.getElementById("vt-new-name")?.value||"").trim();
+      var expires=(document.getElementById("vt-new-expires")?.value||"").trim();
+      var memo=(document.getElementById("vt-new-memo")?.value||"").trim();
+      if(!name){showAlert("名称を入力してください");return;}
+      if(expires&&!/^\d{4}-\d{2}-\d{2}$/.test(expires)){showAlert("有効期限は yyyy-mm-dd 形式で入力してください");return;}
+      var token=generateViewerToken();
+      var rec={name:name,enabled:true,createdAt:new Date().toISOString().slice(0,10)};
+      if(expires)rec.expiresAt=expires;
+      if(memo)rec.memo=memo;
+      authFetch(FB_URL+"/viewerTokens/"+token+".json",{
         method:"PUT",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(v)
-      }).then(function(){showAlert("閲覧トークンを更新しました");})
-        .catch(function(){showAlert("Firebase保存に失敗しました");});
-      document.getElementById("new-viewer-token").value="";
-      render();
+        body:JSON.stringify(rec)
+      }).then(function(){
+        if(!viewerTokensList)viewerTokensList=[];
+        viewerTokensList.push(Object.assign({token:token},rec));
+        showAlert("トークンを発行しました");
+        render();
+      }).catch(function(){showAlert("Firebase保存に失敗しました");});
     };
+    document.querySelectorAll(".btn-vt-copy").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-vt-token");
+        var url=location.origin+location.pathname+"?viewer="+tok;
+        navigator.clipboard.writeText(url).then(function(){showAlert("URLをコピーしました");}).catch(function(){showAlert("コピーに失敗しました");});
+      };
+    });
+    document.querySelectorAll(".btn-vt-toggle").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-vt-token");
+        var cur=btn.getAttribute("data-vt-enabled")==="1";
+        authFetch(FB_URL+"/viewerTokens/"+tok+"/enabled.json",{
+          method:"PUT",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify(!cur)
+        }).then(function(){
+          if(viewerTokensList){
+            var vt=viewerTokensList.find(function(t){return t.token===tok;});
+            if(vt)vt.enabled=!cur;
+          }
+          render();
+        }).catch(function(){showAlert("Firebase保存に失敗しました");});
+      };
+    });
+    document.querySelectorAll(".btn-vt-del").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-vt-token");
+        var nm=btn.getAttribute("data-vt-name");
+        showConfirm("「"+nm+"」のトークンを削除しますか？",function(){
+          authFetch(FB_URL+"/viewerTokens/"+tok+".json",{
+            method:"DELETE"
+          }).then(function(){
+            if(viewerTokensList)viewerTokensList=viewerTokensList.filter(function(t){return t.token!==tok;});
+            showAlert("削除しました");
+            render();
+          }).catch(function(){showAlert("削除に失敗しました");});
+        });
+      };
+    });
     // デモアクセス設定
     var saveDemoBtn=document.getElementById("btn-save-demo");
     if(saveDemoBtn)saveDemoBtn.onclick=function(){
@@ -2365,6 +2448,12 @@ function setTab(v){
   if(v==="documents"){
     docLoading=true;docList=[];render();
     loadDocumentList(function(docs){docList=docs;docLoading=false;render();});
+  } else if(v==="master"&&viewerTokensList===null&&!viewerTokensLoading){
+    viewerTokensLoading=true;render();
+    authFetch(FB_URL+"/viewerTokens.json").then(function(r){return r.json();}).then(function(data){
+      viewerTokensList=data?Object.entries(data).map(function(e){return Object.assign({token:e[0]},e[1]);}):[];
+      viewerTokensLoading=false;render();
+    }).catch(function(){viewerTokensList=[];viewerTokensLoading=false;render();});
   } else {
     render();
   }
@@ -2385,6 +2474,7 @@ function selStaff(s){
 function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;});saveData("tc5_staff",staffList);render();}
 
 function _execPunch(type,d){
+  if(viewerMode){console.warn("[viewerMode] write blocked");return;}
   var _so=staffList.find(function(s){return s.name===staffName;})||{};
   var _hf=(_so.location)||"";
   var _fn=facilityName||"";
@@ -2453,6 +2543,14 @@ function doPunch(type){
   }
   // E. 通常保存処理
   _execPunch(type,d);
+}
+
+// ===== 閲覧用トークン生成 =====
+function generateViewerToken(){
+  var chars='abcdefghijklmnopqrstuvwxyz0123456789';
+  var arr=new Uint8Array(24);
+  crypto.getRandomValues(arr);
+  return Array.from(arr).map(function(b){return chars[b%chars.length];}).join('');
 }
 
 // ===== PIN ハッシュ化 (Phase 1-C/1-D) =====
@@ -2927,14 +3025,14 @@ async function initFirebase() {
       fetchJson(FB_URL+"/config/adminPin.json"),
       fetchJson(FB_URL+"/config/adminTokenHash.json"),
       fetchJson(FB_URL+"/config/adminToken.json"),
-      fetchJson(FB_URL+"/config/viewerToken.json"),
+      (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
       fetchJson(FB_URL+"/config/demoAccess.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
     var fbAdminPinHash=results[6],fbAdminPin=results[7];
     var fbAdminTokenHash=results[8],fbAdminToken=results[9];
-    var fbViewerToken=results[10],fbDemoAccess=results[11];
+    var fbViewerTokenData=results[10],fbDemoAccess=results[11];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -2959,8 +3057,7 @@ async function initFirebase() {
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
-    // 閲覧専用トークン・デモ
-    if(fbViewerToken){viewerTokenConfig=fbViewerToken;}
+    // デモアクセス
     if(fbDemoAccess){demoAccessConfig=fbDemoAccess;}
     // 管理者URLトークン認証（hash比較優先、旧平文フォールバック）
     if(adminUrlUsed){
@@ -2970,10 +3067,13 @@ async function initFirebase() {
       if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";}
       else{adminTokenValid=false;adminTokenInvalid=true;}
     }
-    // 閲覧専用トークン認証
+    // 閲覧専用トークン認証（viewerTokens/{token} 方式）
     if(viewerPending){
-      if(viewerTokenConfig&&viewerParam===viewerTokenConfig){viewerMode=true;viewerInvalid=false;}
-      else{viewerMode=false;viewerInvalid=true;}
+      var _vtd=fbViewerTokenData;
+      var _todayIso=new Date().toISOString().slice(0,10);
+      if(!_vtd||!_vtd.enabled){viewerMode=false;viewerInvalid=true;}
+      else if(_vtd.expiresAt&&_vtd.expiresAt<_todayIso){viewerMode=false;viewerExpired=true;}
+      else{viewerMode=true;viewerInvalid=false;}
       viewerPending=false;
     }
     if(demoUrlUsed){
