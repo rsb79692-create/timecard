@@ -426,6 +426,7 @@ var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
 var adminTab="records",yomiTab="すべて";
 var showBreakColumn=false;
+var showUnapprovedOnly=false;
 var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
@@ -548,6 +549,32 @@ function getMorningUnconfirmedFacilities(){
   records.filter(function(r){return r.type==="clockIn"&&r.date===today&&!r.deleted;})
     .forEach(function(r){var fac=r.workFacility||r.facilityName||"";if(fac)checked[fac]=true;});
   return masterFacilities.map(function(f){return f.name;}).filter(function(nm){return !checked[nm];});
+}
+
+// ===== 承認漏れサマリー =====
+function getUnapprovedSummary(){
+  var seen={},byFacility={},total=0;
+  records.filter(function(r){return r.type==="clockIn"&&!r.deleted;}).forEach(function(r){
+    var key=r.date+"__"+r.staff;
+    if(seen[key])return;
+    seen[key]=true;
+    if(approvals[key])return;
+    total++;
+    var fac=r.workFacility||r.facilityName||"施設不明";
+    byFacility[fac]=(byFacility[fac]||0)+1;
+  });
+  return{total:total,byFacility:byFacility};
+}
+function goUnapprovedRecords(){
+  var seen={},dates=[];
+  records.filter(function(r){return r.type==="clockIn"&&!r.deleted;}).forEach(function(r){
+    var key=r.date+"__"+r.staff;
+    if(seen[key])return;
+    seen[key]=true;
+    if(!approvals[key])dates.push(r.date);
+  });
+  if(dates.length)selDate=dates.sort().reverse()[0];
+  adminTab="records";showUnapprovedOnly=true;render();
 }
 
 // ===== レンダリング =====
@@ -1338,6 +1365,7 @@ function render(){
       var dRecs=records.filter(function(r){return r.date===selDate;})
         .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
       var allStaffSorted=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
+      if(showUnapprovedOnly){allStaffSorted=allStaffSorted.filter(function(s){var hp=dRecs.some(function(r){return r.staff===s.name&&!r.deleted;});return hp&&!approvals[selDate+"__"+s.name];});}
       var sumRows=allStaffSorted.map(function(s){
         var nm=s.name;
         var sr=dRecs.filter(function(r){return r.staff===nm&&!r.deleted;});
@@ -1437,6 +1465,7 @@ function render(){
         +'<button id="btn-date-next" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">▶</button>'
         +'<span style="color:#8496a7;font-size:.8rem;">'+staffList.length+'名</span>'
         +'<span style="color:#8496a7;font-size:.72rem;">※未承認の時刻をタップで編集</span>'
+        +(showUnapprovedOnly?'<button onclick="showUnapprovedOnly=false;render();" style="background:#c62828;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">✕ 未承認フィルター解除</button>':"")
         +'<button onclick="showBreakColumn=!showBreakColumn;render();" style="background:'+(showBreakColumn?"#374151":"#dde1e7")+';color:'+(showBreakColumn?"#fff":"#475569")+';border:1px solid #adb5bd;padding:4px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(showBreakColumn?"休憩非表示":"休憩表示")+'</button>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
@@ -1961,11 +1990,19 @@ function render(){
         +facTableHtml+'</div>';
     }
 
+    var _unapv=getUnapprovedSummary();
+    var _unapvHTML=_unapv.total>0
+      ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
+        +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります（'+_unapv.total+'件）</div>'
+        +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return k+" "+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
+        +'</div>'
+      :"";
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
       +'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
+      +_unapvHTML
       +'<div class="tab-row" style="margin-bottom:0;">'
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
       +'<button class="tab-btn '+(adminTab==="export"?"tab-on":"tab-off")+'" onclick="setTab(\'export\')">CSV出力</button>'
@@ -2507,7 +2544,7 @@ function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;select
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
-  adminTab=v;
+  adminTab=v;showUnapprovedOnly=false;
   if(v==="documents"){
     docLoading=true;docList=[];render();
     loadDocumentList(function(docs){docList=docs;docLoading=false;render();});
