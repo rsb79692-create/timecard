@@ -53,6 +53,11 @@ const DEFAULT_FACILITIES = [
 // ハーベストは朝5:55通知の対象外（打刻機能・管理画面は通常通り）
 const NOTIFY_EXCLUDE = ["ハーベスト"];
 
+// ===== 施設名正規化（NFKC・空白除去） =====
+function normalizeFacility(s) {
+  return (s || "").normalize("NFKC").replace(/\s+/g, "").trim();
+}
+
 // ===== HTTPS リクエストヘルパー =====
 function httpRequest(url, options, body) {
   return new Promise((resolve, reject) => {
@@ -291,8 +296,17 @@ async function main() {
   );
   console.log(`[DATE]  対象日 ${today} の clockIn 件数: ${todayClockIns.length}`);
 
-  // 本日打刻データ詳細（workFacility/facilityName の内容を確認）
-  console.log("[DEBUG] 本日 clockIn レコード一覧:");
+  // 施設マスタの施設名文字コード確認
+  console.log("[DEBUG] 施設マスタ 施設名文字コード:");
+  facilities.forEach((name) => {
+    console.log(
+      `[施設確認] "${name}"`,
+      [...name].map((c) => c.codePointAt(0).toString(16)).join(" ")
+    );
+  });
+
+  // 本日 clockIn 施設名の文字コード確認
+  console.log("[DEBUG] 本日 clockIn 施設名文字コード:");
   if (todayClockIns.length === 0) {
     console.log("  (なし)");
     // 日付ずれのデバッグ用：直近5件の clockIn を出力
@@ -304,29 +318,37 @@ async function main() {
       console.log(`  [${i + 1}] staff="${r.staff}" date="${r.date}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}"`);
     });
   } else {
-    todayClockIns.forEach((r, i) => {
-      console.log(`  [${i + 1}] staff="${r.staff}" date="${r.date}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}" deleted=${!!r.deleted}`);
+    todayClockIns.forEach((r) => {
+      const key = (r.workFacility || r.facilityName || "").trim();
+      console.log(
+        `[施設確認] "${key}"`,
+        [...key].map((c) => c.codePointAt(0).toString(16)).join(" ")
+      );
     });
   }
 
-  // ── 施設別に出勤件数を集計 ──
+  // ── 施設別に出勤件数を集計（NFKC 正規化で比較） ──
   const facilityClockInCount = {};
-  facilities.forEach((name) => { facilityClockInCount[name] = 0; });
+  const facilityNormMap = {};
+  facilities.forEach((name) => {
+    facilityClockInCount[name] = 0;
+    facilityNormMap[normalizeFacility(name)] = name;
+  });
 
   console.log("[DEBUG] 施設マッチング結果:");
   todayClockIns.forEach((r) => {
-    const fac = r.workFacility || r.facilityName || "";
-    const matched = fac && Object.prototype.hasOwnProperty.call(facilityClockInCount, fac);
-    if (!fac) {
+    const key = (r.workFacility || r.facilityName || "").trim();
+    const normalized = normalizeFacility(key);
+    const matchedOriginal = facilityNormMap[normalized];
+    if (!key) {
       console.log(`  staff="${r.staff}" → workFacility/facilityName が空のためスキップ`);
-    } else if (matched) {
-      console.log(`  staff="${r.staff}" fac="${fac}" → マッチ OK`);
-      facilityClockInCount[fac]++;
+    } else if (matchedOriginal) {
+      console.log(`  staff="${r.staff}" fac="${key}" (norm="${normalized}") → マッチ OK: "${matchedOriginal}"`);
+      facilityClockInCount[matchedOriginal]++;
     } else {
-      console.log(`  staff="${r.staff}" fac="${fac}" → 施設マスタ外（応援先 or 表記ゆれ）`);
-      // 通知対象外施設（応援等）
+      console.log(`  staff="${r.staff}" fac="${key}" (norm="${normalized}") → 施設マスタ外（応援先 or 表記ゆれ）`);
       if (!facilityClockInCount["__other__"]) facilityClockInCount["__other__"] = {};
-      facilityClockInCount["__other__"][fac] = (facilityClockInCount["__other__"][fac] || 0) + 1;
+      facilityClockInCount["__other__"][key] = (facilityClockInCount["__other__"][key] || 0) + 1;
     }
   });
 
@@ -349,32 +371,6 @@ async function main() {
   }
 
   console.log(`[CHECK] 未打刻施設 ${unconfirmed.length} 件: ${unconfirmed.length > 0 ? unconfirmed.join(", ") : "なし"}`);
-
-  // ── ここら未確認の場合：原因を詳細出力 ──
-  if (unconfirmed.includes("ここら")) {
-    console.log("[DEBUG] ここら が未確認扱いになった原因調査:");
-    const cocoraKeywords = ["ここ", "cocora", "kokora"];
-    const cocoraRecs = todayClockIns.filter((r) =>
-      cocoraKeywords.some((kw) =>
-        (r.workFacility || "").toLowerCase().includes(kw) ||
-        (r.facilityName || "").toLowerCase().includes(kw)
-      )
-    );
-    if (cocoraRecs.length === 0) {
-      console.log("  → 本日の clockIn に「ここ/cocora/kokora」を含む workFacility/facilityName が存在しない");
-      console.log("  → 原因候補: 打刻されていない / workFacility が空 / 施設名表記が異なる");
-      const allFacs = [...new Set(todayClockIns.map((r) => r.workFacility || r.facilityName || "(空)"))];
-      console.log(`  → 本日 clockIn の workFacility 一覧: ${allFacs.join(", ")}`);
-    } else {
-      cocoraRecs.forEach((r) => {
-        console.log(`  → レコードあり: staff="${r.staff}" workFacility="${r.workFacility || ""}" facilityName="${r.facilityName || ""}"`);
-        console.log(`     施設マスタに "${r.workFacility || r.facilityName}" が存在しないか表記ゆれがある可能性`);
-      });
-      console.log(`  → 施設マスタの "ここら" のキー文字コード: ${[..."ここら"].map((c) => c.codePointAt(0).toString(16)).join(" ")}`);
-      const facKey = cocoraRecs[0].workFacility || cocoraRecs[0].facilityName || "";
-      console.log(`  → データの workFacility "${facKey}" の文字コード: ${[...facKey].map((c) => c.codePointAt(0).toString(16)).join(" ")}`);
-    }
-  }
 
   // ── 未確認が 0 件なら通知せず終了 ──
   if (unconfirmed.length === 0) {
