@@ -527,13 +527,7 @@ function attachTimeCellHandlers(){
         if(e.key==="Enter"){e.preventDefault();save();}
         if(e.key==="Escape"){e.preventDefault();cancel();}
       });
-      inp.addEventListener("blur",function(){
-        if(saving)return;
-        setTimeout(function(){if(el.querySelector("input"))cancel();},300);
-      });
-      inp.addEventListener("change",function(){
-        if(inp.value&&inp.value!==cur)save();
-      });
+      // 保存確定は Enter / 設定ボタン のみ。blur・change では保存もキャンセルもしない。
     };
   });
 }
