@@ -222,8 +222,15 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
 /* 勤怠一覧テーブル */
-.records-table td,.records-table th{padding:8px 10px;}
-.records-table tr{height:52px;}
+.records-table td,.records-table th{padding:6px 8px;}
+.records-table tr{height:48px;}
+/* 休憩ブロック */
+.break-list{display:flex;flex-direction:column;gap:2px;align-items:center;}
+.break-item{min-width:120px;padding:2px 6px;border:1px solid #dbeafe;border-radius:6px;background:#f8fbff;line-height:1.15;}
+.break-time{font-size:.95rem;font-weight:700;color:#0f172a;font-variant-numeric:tabular-nums;}
+.break-edited{margin-top:1px;font-size:.7rem;color:#92400e;}
+/* 管理者カード余白 */
+.admin-wrap{max-width:97%;margin:0 auto;padding:6px 10px;}
 </style>
 </head>
 <body>
@@ -1338,30 +1345,41 @@ function render(){
           var wasEdited=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type]);
           var prevTime=wasEdited?(rec.editHistory&&rec.editHistory.length?rec.editHistory[0].time:rec.editedFrom)||"":"";
           var histLine=wasEdited
-            ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;cursor:pointer;text-decoration:underline dotted;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
+            ?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
             :"";
-          if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.05rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+'</td>';
+          if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.18rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+'</td>';
           return'<td style="padding:6px 8px;text-align:center;">'
             +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
-            +'" style="font-family:monospace;font-size:1.05rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
+            +'" style="font-family:monospace;font-size:1.18rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
             +histLine+'</td>';
         }
         function brkPairCell(bsRec,beRec,locked2){
-          var bsBadge2=(bsRec&&bsRec.editedByAdmin&&bsRec.editedFields&&bsRec.editedFields.breakStart)?'<span title="管理者修正済み" style="font-size:.5rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 2px;font-weight:700;">修正</span>':"";
-          var beBadge2=(beRec&&beRec.editedByAdmin&&beRec.editedFields&&beRec.editedFields.breakEnd)?'<span title="管理者修正済み" style="font-size:.5rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 2px;font-weight:700;">修正</span>':"";
+          var bsEdited=(bsRec&&bsRec.editedByAdmin&&bsRec.editedFields&&bsRec.editedFields.breakStart);
+          var beEdited=(beRec&&beRec.editedByAdmin&&beRec.editedFields&&beRec.editedFields.breakEnd);
+          var bsPrev=bsEdited?(bsRec.editHistory&&bsRec.editHistory.length?bsRec.editHistory[0].time:bsRec.editedFrom)||"":"";
+          var bePrev=beEdited?(beRec.editHistory&&beRec.editHistory.length?beRec.editHistory[0].time:beRec.editedFrom)||"":"";
+          var editLine=(bsEdited||beEdited)
+            ?'<div class="break-edited">修正前 '+(bsPrev||"?")+'→'+(bePrev||"?")+'</div>'
+            :"";
           if(locked2){
-            return'<span style="color:'+(bsRec?"#374151":"#d1d5db")+'">'+(bsRec?bsRec.time:"--:--")+'</span>'+bsBadge2+'〜<span style="color:'+(beRec?"#374151":"#d1d5db")+'">'+(beRec?beRec.time:"--:--")+'</span>'+beBadge2;
+            return'<div class="break-item">'
+              +'<div class="break-time" style="color:'+(bsRec?"#0f172a":"#d1d5db")+'">'+(bsRec?bsRec.time:"--:--")+' → <span style="color:'+(beRec?"#0f172a":"#d1d5db")+'">'+(beRec?beRec.time:"--:--")+'</span></div>'
+              +editLine+'</div>';
           }
-          return'<span class="time-cell" data-id="'+(bsRec?bsRec.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(bsRec?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bsRec?bsRec.time:"--:--")+'</span>'+bsBadge2
-            +'<span style="font-size:.75rem;color:#adb5bd;">〜</span>'
-            +'<span class="time-cell" data-id="'+(beRec?beRec.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(beRec?"#4b5563":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?beRec.time:"--:--")+'</span>'+beBadge2;
+          return'<div class="break-item">'
+            +'<div class="break-time">'
+            +'<span class="time-cell" data-id="'+(bsRec?bsRec.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="color:'+(bsRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bsRec?bsRec.time:"--:--")+'</span>'
+            +' → '
+            +'<span class="time-cell" data-id="'+(beRec?beRec.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="color:'+(beRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?beRec.time:"--:--")+'</span>'
+            +'</div>'
+            +editLine+'</div>';
         }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(cin
-            ?'<div style="font-size:.72rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
+            ?'<div style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
               +(cin.isSupportWork
                 ?'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">応援</span> '
                 +'<span style="color:#374151;">'+(cin.homeFacility||"")+'→'+(cin.workFacility||"")+'</span>'
@@ -1371,13 +1389,14 @@ function render(){
             :"")
           +'</td>'
           +tCell(cin,"clockIn","出","#1e40af")
-          +(showBreakColumn?'<td style="padding:4px 2px;font-family:monospace;font-size:.82rem;text-align:center;">'
-          +(hasBreak3?'<span style="font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:1px 4px;font-weight:700;display:block;margin-bottom:2px;">休憩回数超過</span>':"")
-          +'<div style="white-space:nowrap;">'+(brkPairs.length>0?brkPairCell(bs,be,locked):'<span style="color:#d1d5db;">--:--〜--:--</span>')+'</div>'
-          +(brkPairs.length>1?'<div style="white-space:nowrap;border-top:1px dashed #e5e7eb;margin-top:2px;padding-top:2px;">'+brkPairCell(bs2,be2,locked)+'</div>':"")
-          +'</td>':"")
+          +(showBreakColumn?'<td style="padding:4px 6px;text-align:center;">'
+          +(hasBreak3?'<div style="font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:1px 4px;font-weight:700;margin-bottom:3px;">休憩回数超過</div>':"")
+          +'<div class="break-list">'
+          +(brkPairs.length>0?brkPairCell(bs,be,locked):'<span style="font-size:.85rem;color:#d1d5db;">--:-- → --:--</span>')
+          +(brkPairs.length>1?brkPairCell(bs2,be2,locked):"")
+          +'</div></td>':"")
           +tCell(cout,"clockOut","退","#dc2626")
-          +'<td style="padding:4px 6px;font-family:monospace;font-size:1.02rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td>'
+          +'<td style="padding:4px 6px;font-family:monospace;font-size:1.16rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td>'
           +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
             ?'<div style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
@@ -1395,7 +1414,7 @@ function render(){
       var sdYOpts=sdAllYears.map(function(y){return'<option value="'+y+'"'+(y===sdY?' selected':'')+'>'+y+'年</option>';}).join('');
       var sdMOpts=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMo?' selected':'')+'>'+m+'月</option>';}).join('');
       var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
-      tc='<div class="admin-card" style="padding:8px 6px;">'
+      tc='<div class="admin-card admin-wrap">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<button id="btn-date-prev" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
         +'<select id="sd-y" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdYOpts+'</select>'
