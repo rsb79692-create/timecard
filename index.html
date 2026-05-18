@@ -553,27 +553,20 @@ function getMorningUnconfirmedFacilities(){
 
 // ===== 承認漏れサマリー =====
 function getUnapprovedSummary(){
-  var seen={},byFacility={},total=0;
-  records.filter(function(r){return r.type==="clockIn"&&!r.deleted;}).forEach(function(r){
+  var seen={},byFacility={},total=0,peopleSet={};
+  records.filter(function(r){return !r.deleted;}).forEach(function(r){
     var key=r.date+"__"+r.staff;
     if(seen[key])return;
     seen[key]=true;
     if(approvals[key])return;
     total++;
+    peopleSet[r.staff]=true;
     var fac=r.workFacility||r.facilityName||"施設不明";
     byFacility[fac]=(byFacility[fac]||0)+1;
   });
-  return{total:total,byFacility:byFacility};
+  return{total:total,people:Object.keys(peopleSet).length,byFacility:byFacility};
 }
 function goUnapprovedRecords(){
-  var seen={},dates=[];
-  records.filter(function(r){return r.type==="clockIn"&&!r.deleted;}).forEach(function(r){
-    var key=r.date+"__"+r.staff;
-    if(seen[key])return;
-    seen[key]=true;
-    if(!approvals[key])dates.push(r.date);
-  });
-  if(dates.length)selDate=dates.sort().reverse()[0];
   adminTab="records";showUnapprovedOnly=true;render();
 }
 
@@ -1362,10 +1355,33 @@ function render(){
     var tc="";
 
     if(adminTab==="records"){
+      var allActiveStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
+      var _unapvPairsSeen={};var unapvList=[];
+      records.filter(function(r){return !r.deleted;}).forEach(function(r){var key=r.date+"__"+r.staff;if(_unapvPairsSeen[key])return;_unapvPairsSeen[key]=true;if(!approvals[key])unapvList.push({date:r.date,staff:r.staff});});
+      unapvList.sort(function(a,b){if(a.date!==b.date)return b.date.localeCompare(a.date);var _ay=(allActiveStaff.find(function(s){return s.name===a.staff;})||{yomi:a.staff}).yomi;var _by=(allActiveStaff.find(function(s){return s.name===b.staff;})||{yomi:b.staff}).yomi;return _ay.localeCompare(_by,"ja");});
+      if(showUnapprovedOnly){
+        var unapvRows=unapvList.map(function(p){var dt=p.date,nm=p.staff;var sr=records.filter(function(r){return r.date===dt&&r.staff===nm&&!r.deleted;});var cin=sr.find(function(r){return r.type==="clockIn";});var cout=sr.find(function(r){return r.type==="clockOut";});var ms=calcMs(sr);var worked=toHM(ms);var hasPunch=sr.length>0;var dtParts=dt.split('-');var dtDisp=parseInt(dtParts[0])+'年'+parseInt(dtParts[1])+'月'+parseInt(dtParts[2])+'日';return'<tr style="border-bottom:1px solid #e9ecef;"><td style="padding:6px 8px;font-size:.88rem;font-weight:700;white-space:nowrap;color:#374151;">'+dtDisp+'</td><td style="padding:6px 4px;font-weight:700;font-size:1.08rem;white-space:nowrap;"><span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span></td><td style="padding:6px 8px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(cin?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(cin?cin.time:"--:--")+'</td><td style="padding:6px 8px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(cout?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(cout?cout.time:"--:--")+'</td><td style="padding:4px 6px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td><td style="padding:6px 4px;text-align:center;white-space:nowrap;">'+(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dt+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':"")+'</td></tr>';}).join("");
+        tc='<div class="admin-card admin-wrap">'
+          +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
+          +'<span style="color:#c62828;font-size:.88rem;font-weight:700;">未承認一覧 '+unapvList.length+'件</span>'
+          +'<button onclick="showUnapprovedOnly=false;render();" style="background:#c62828;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">✕ 未承認フィルター解除</button>'
+          +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">全件承認</button>'
+          +'</div>'
+          +'<table class="records-table" style="width:100%;border-collapse:collapse;min-width:360px;">'
+          +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
+          +'<th class="records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;">日付</th>'
+          +'<th class="records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;">氏名</th>'
+          +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">出勤</th>'
+          +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
+          +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#1e40af;padding:4px;font-weight:700;">勤務時間</th>'
+          +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#8796a7;padding:4px;font-weight:700;">承認</th>'
+          +'</tr></thead>'
+          +'<tbody>'+(unapvList.length?unapvRows:'<tr><td colspan="6" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">未承認の勤怠はありません</td></tr>')+'</tbody></table>'
+          +'</div>';
+      } else {
       var dRecs=records.filter(function(r){return r.date===selDate;})
         .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
-      var allStaffSorted=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
-      if(showUnapprovedOnly){allStaffSorted=allStaffSorted.filter(function(s){var hp=dRecs.some(function(r){return r.staff===s.name&&!r.deleted;});return hp&&!approvals[selDate+"__"+s.name];});}
+      var allStaffSorted=allActiveStaff;
       var sumRows=allStaffSorted.map(function(s){
         var nm=s.name;
         var sr=dRecs.filter(function(r){return r.staff===nm&&!r.deleted;});
@@ -1484,6 +1500,7 @@ function render(){
           +delRecs.map(function(r){return '<div style="opacity:.4;font-size:.78rem;text-decoration:line-through;">'+r.staff+' '+TYPE_LABEL[r.type]+' '+r.time+'</div>';}).join("")
           +'</div>':"")
         +'</div>';
+      }
     }
 
     if(adminTab==="export"){
@@ -1993,8 +2010,8 @@ function render(){
     var _unapv=getUnapprovedSummary();
     var _unapvHTML=_unapv.total>0
       ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
-        +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります（'+_unapv.total+'件）</div>'
-        +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return k+" "+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
+        +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）</div>'
+        +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return k+"："+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
         +'</div>'
       :"";
     app.innerHTML='<div class="admin-sticky-bar">'
@@ -2073,7 +2090,7 @@ function render(){
     // 承認
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
-        approvals[selDate+"__"+b.dataset.nm]=true;
+        approvals[b.dataset.dk+"__"+b.dataset.nm]=true;
         saveData("tc5_approvals",approvals);render();
       };
     });
@@ -2081,23 +2098,31 @@ function render(){
     // 一括承認
     var bulkApproveBtn=document.getElementById("btn-bulk-approve");
     if(bulkApproveBtn)bulkApproveBtn.onclick=function(){
-      showConfirm("表示中の日付の未承認データをすべて承認します。よろしいですか？",function(){
-        var targets=allStaffSorted.filter(function(s){
-          var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
-          return sr.length>0&&!approvals[selDate+"__"+s.name];
+      if(showUnapprovedOnly){
+        showConfirm("未承認データをすべて承認します。よろしいですか？",function(){
+          if(!unapvList.length){showAlert("承認済みでないデータはありません");return;}
+          unapvList.forEach(function(p){approvals[p.date+"__"+p.staff]=true;});
+          saveData("tc5_approvals",approvals);render();
+          showAlert(unapvList.length+"件を承認しました");
         });
-        if(!targets.length){showAlert("承認済みでないデータはありません");return;}
-        targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
-        saveData("tc5_approvals",approvals);
-        render();
-        showAlert(targets.length+"件を承認しました");
-      });
+      } else {
+        showConfirm("表示中の日付の未承認データをすべて承認します。よろしいですか？",function(){
+          var targets=allStaffSorted.filter(function(s){
+            var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
+            return sr.length>0&&!approvals[selDate+"__"+s.name];
+          });
+          if(!targets.length){showAlert("承認済みでないデータはありません");return;}
+          targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
+          saveData("tc5_approvals",approvals);render();
+          showAlert(targets.length+"件を承認しました");
+        });
+      }
     };
 
     // 引き戻し
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){
-        delete approvals[selDate+"__"+b.dataset.nm];
+        delete approvals[b.dataset.dk+"__"+b.dataset.nm];
         saveData("tc5_approvals",approvals);render();
       };
     });
@@ -2544,7 +2569,7 @@ function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;select
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
-  adminTab=v;showUnapprovedOnly=false;
+  adminTab=v;
   if(v==="documents"){
     docLoading=true;docList=[];render();
     loadDocumentList(function(docs){docList=docs;docLoading=false;render();});
