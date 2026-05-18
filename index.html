@@ -231,6 +231,17 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 .break-edited{margin-top:1px;font-size:.7rem;color:#92400e;}
 /* 管理者カード余白 */
 .admin-wrap{max-width:97%;margin:0 auto;padding:6px 10px;}
+/* PC専用：管理者UI拡大(768px以上のみ) */
+@media(min-width:768px){
+  .admin-title{font-size:1.55rem!important;font-weight:700!important;}
+  .tab-row{gap:8px!important;}
+  .tab-btn{font-size:.95rem!important;font-weight:600!important;padding:10px 18px!important;border-radius:8px!important;}
+  .records-th{font-size:.95rem!important;font-weight:700!important;padding-top:10px!important;padding-bottom:10px!important;}
+  .btn-approve{font-size:.95rem!important;font-weight:700!important;min-width:64px!important;height:34px!important;border-radius:8px!important;}
+  .btn-withdraw{font-size:.88rem!important;font-weight:700!important;min-width:64px!important;height:30px!important;border-radius:8px!important;}
+  .approved-badge{font-size:.95rem!important;font-weight:700!important;}
+  .admin-close-btn{font-size:.92rem!important;font-weight:600!important;padding:10px 18px!important;border-radius:6px!important;}
+}
 </style>
 </head>
 <body>
@@ -1399,7 +1410,7 @@ function render(){
           +'<td style="padding:4px 6px;font-family:monospace;font-size:1.16rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td>'
           +'<td style="padding:6px 4px;text-align:center;white-space:nowrap;">'
           +(approved
-            ?'<div style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
+            ?'<div class="approved-badge" style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
              +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
             :(hasPunch?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
           +'</td></tr>';
@@ -1949,8 +1960,8 @@ function render(){
 
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-      +'<div style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
-      +'<button style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
+      +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
+      +'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
       +'<div class="tab-row" style="margin-bottom:0;">'
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
