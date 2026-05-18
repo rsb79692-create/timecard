@@ -282,8 +282,9 @@ async function main() {
     console.warn(`[WARN]  master/locations 取得失敗 → DEFAULT_FACILITIES を使用: ${e.message}`);
   }
 
-  // ── 朝通知除外施設を取り除く ──
-  facilities = facilities.filter((name) => !NOTIFY_EXCLUDE.includes(name));
+  // ── 朝通知除外施設を取り除く（normalize 比較） ──
+  const excludeNorms = NOTIFY_EXCLUDE.map(normalizeFacility);
+  facilities = facilities.filter((name) => !excludeNorms.includes(normalizeFacility(name)));
 
   console.log(`[FAC]   通知対象施設 ${facilities.length} 件:`);
   facilities.forEach((name, i) => {
