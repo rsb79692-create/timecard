@@ -604,12 +604,13 @@ function render(){
     var sdYOptsV=sdAllYearsV.map(function(y){return'<option value="'+y+'"'+(y===sdYV?' selected':'')+'>'+y+'年</option>';}).join('');
     var sdMOptsV=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMoV?' selected':'')+'>'+m+'月</option>';}).join('');
     var sdDOptsV='';for(var sdiv=1;sdiv<=sdMaxDayV;sdiv++){sdDOptsV+='<option value="'+sdiv+'"'+(sdiv===sdDyV?' selected':'')+'>'+sdiv+'日</option>';}
-    // 日次勤怠テーブル（読み取り専用）
+    // 日次勤怠テーブル（読み取り専用・シンプル）
     var dRecsV=records.filter(function(r){return r.date===selDate&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var allStaffV=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var hasBrkV=dRecsV.some(function(r){return r.type==="breakStart"||r.type==="breakEnd";});
-    var thSV="padding:4px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
+    var thSV="padding:8px 10px;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;text-align:center;";
+    var colCount=hasBrkV?6:5;
     var vRowsD=allStaffV.map(function(s){
       var nm=s.name;
       var sr=dRecsV.filter(function(r){return r.staff===nm;});
@@ -620,20 +621,23 @@ function render(){
       var bs2=brkPairs[1]?brkPairs[1].start:null,be2=brkPairs[1]?brkPairs[1].end:null;
       var ms=calcMs(sr);var worked=toHM(ms);
       var approved=approvals[selDate+"__"+nm];
-      return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-        +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:900;font-size:.88rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'+nm
-        +(cin&&cin.isSupportWork?'<div style="font-size:.6rem;color:#92400e;margin-top:2px;"><span style="background:#fef3c7;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">応援</span></div>':"")
+      var tdS="padding:8px 10px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center;vertical-align:middle;border-bottom:1px solid #e9ecef;";
+      return '<tr style="'+(approved?"background:#f0fdf4;":"background:#fff;")+'">'
+        +'<td style="'+tdS+'text-align:left;font-family:inherit;font-weight:900;color:#0f172a;white-space:nowrap;">'+nm
+        +(cin&&cin.isSupportWork?'<span style="margin-left:4px;font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;vertical-align:middle;">応援</span>':"")
         +'</td>'
-        +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(cin?"#1e40af":"#c8ccd2")+';">'+(cin?cin.time:"—")+'</td>'
-        +(hasBrkV?'<td style="padding:4px 4px;font-size:.82rem;text-align:center;">'
+        +'<td style="'+tdS+'color:'+(cin?"#1e40af":"#c8ccd2")+';">'+(cin?cin.time:"—")+'</td>'
+        +(hasBrkV?'<td style="'+tdS+'color:#4b5563;font-size:.82rem;">'
           +(brkPairs.length>0
-            ?'<div style="white-space:nowrap;font-family:monospace;color:#4b5563;">'+(bs?bs.time:"--:--")+'〜'+(be?be.time:"--:--")+'</div>'
-              +(brkPairs.length>1?'<div style="white-space:nowrap;border-top:1px dashed #e5e7eb;margin-top:2px;padding-top:2px;font-family:monospace;color:#4b5563;">'+(bs2?bs2.time:"--:--")+'〜'+(be2?be2.time:"--:--")+'</div>':"")
+            ?'<div>'+(bs?bs.time:"--:--")+'〜'+(be?be.time:"--:--")+'</div>'
+              +(brkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:3px;padding-top:3px;">'+(bs2?bs2.time:"--:--")+'〜'+(be2?be2.time:"--:--")+'</div>':"")
             :'<span style="color:#c8ccd2;">—</span>')
           +'</td>':"")
-        +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(cout?"#dc2626":"#c8ccd2")+';">'+(cout?cout.time:"—")+'</td>'
-        +'<td style="padding:4px 6px;font-family:monospace;font-size:.88rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
-        +(approved?'<td style="padding:4px 4px;text-align:center;"><div style="background:#dbeafe;color:#1e40af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;border:1px solid #93c5fd;">✓承認</div></td>':'<td></td>')
+        +'<td style="'+tdS+'color:'+(cout?"#dc2626":"#c8ccd2")+';">'+(cout?cout.time:"—")+'</td>'
+        +'<td style="'+tdS+'color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
+        +'<td style="'+tdS+'font-family:inherit;font-size:.75rem;">'
+          +(approved?'<span style="color:#166534;font-weight:700;">承認済</span>':'<span style="color:#9ca3af;">未承認</span>')
+        +'</td>'
         +'</tr>';
     }).join("");
     // 月次CSV用データ
@@ -663,17 +667,17 @@ function render(){
       +'<span style="color:#8496a7;font-size:.8rem;font-family:monospace;">'+selDate.slice(5)+'('+DAYS_V[new Date(selDate).getDay()]+')</span>'
       +'</div>'
       +'</div>'
-      +'<div style="overflow-x:auto;margin-top:4px;">'
-      +'<table style="width:100%;border-collapse:collapse;min-width:340px;">'
-      +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
-      +'<th class="sticky-name-col records-th" style="'+thSV+'text-align:left;position:sticky;left:0;background:#eaecef;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08),0 2px 4px rgba(0,0,0,.08);">氏名</th>'
-      +'<th class="records-th" style="'+thSV+'text-align:center;color:#1e40af;">出勤</th>'
-      +(hasBrkV?'<th class="records-th" style="'+thSV+'text-align:center;color:#4b5563;">休憩</th>':"")
-      +'<th class="records-th" style="'+thSV+'text-align:center;color:#dc2626;">退勤</th>'
-      +'<th class="records-th" style="'+thSV+'text-align:center;color:#1e40af;">勤務時間</th>'
-      +'<th class="records-th" style="'+thSV+'text-align:center;">承認</th>'
+      +'<div style="overflow-x:auto;margin-top:8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;">'
+      +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
+      +'<thead><tr style="background:#eaecef;">'
+      +'<th style="'+thSV+'text-align:left;border-right:1px solid #dee2e6;">氏名</th>'
+      +'<th style="'+thSV+'color:#1e40af;">出勤</th>'
+      +(hasBrkV?'<th style="'+thSV+'color:#4b5563;">休憩</th>':"")
+      +'<th style="'+thSV+'color:#dc2626;">退勤</th>'
+      +'<th style="'+thSV+'color:#1e40af;">勤務時間</th>'
+      +'<th style="'+thSV+'">承認状態</th>'
       +'</tr></thead>'
-      +'<tbody>'+(vRowsD||'<tr><td colspan="6" style="padding:20px;text-align:center;color:#8496a7;">この日の打刻データはありません</td></tr>')+'</tbody>'
+      +'<tbody>'+(vRowsD||'<tr><td colspan="'+colCount+'" style="padding:24px;text-align:center;color:#8496a7;font-size:.9rem;">この日の打刻データはありません</td></tr>')+'</tbody>'
       +'</table></div>'
       +'<div style="margin-top:20px;padding:0 4px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
@@ -696,10 +700,6 @@ function render(){
     if(bdNextV)bdNextV.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
     var vm=document.getElementById("viewer-month");
     if(vm)vm.onchange=function(){selMonth=vm.value;render();};
-    // thead sticky
-    var sBarV=document.querySelector('.admin-sticky-bar');
-    var sBarHV=sBarV?sBarV.offsetHeight:0;
-    document.querySelectorAll('.records-th').forEach(function(th){th.style.top=sBarHV+'px';});
     // 日次CSV（自動承認書き込みなし）
     var vcDailyBtn=document.getElementById("btn-viewer-csv-daily");
     if(vcDailyBtn)vcDailyBtn.onclick=function(){
