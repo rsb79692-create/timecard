@@ -296,6 +296,13 @@ async function main() {
   );
   console.log(`[DATE]  対象日 ${today} の clockIn 件数: ${todayClockIns.length}`);
 
+  // 施設情報なし clockIn の警告
+  todayClockIns
+    .filter((r) => !(r.workFacility || r.facilityName))
+    .forEach((r) => {
+      console.warn(`[WARN]  facility missing: staff=${r.staff}, date=${r.date}, time=${r.time}`);
+    });
+
   // 施設マスタの施設名文字コード確認
   console.log("[DEBUG] 施設マスタ 施設名文字コード:");
   facilities.forEach((name) => {

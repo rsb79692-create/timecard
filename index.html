@@ -893,7 +893,7 @@ function render(){
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var _pso=staffList.find(function(s){return s.name===staffName;})||{};
     var _hf2=facilityName||"";
-    if(selectedWorkFacility===null)selectedWorkFacility=_hf2||"";
+    if(selectedWorkFacility===null)selectedWorkFacility=_hf2||(_pso.location||"");
     var _tfac=tr.filter(function(r){return !r.facilityName||!_hf2||r.facilityName===_hf2;});
     var last=_tfac.length?_tfac[_tfac.length-1].type:null;
     var _xCin=_tfac.find(function(r){return r.type==="clockIn";});
@@ -2477,11 +2477,14 @@ function _execPunch(type,d){
   var _so=staffList.find(function(s){return s.name===staffName;})||{};
   var _hf=(_so.location)||"";
   var _fn=facilityName||"";
+  // facilityName: 1)URLトークン施設 → 2)スタッフ所属施設 の順で補完
+  var _effFn=_fn||_hf;
   var nr={id:""+d.getTime(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
-  if(_fn)nr.facilityName=_fn;
+  if(_effFn)nr.facilityName=_effFn;
   if(type==="clockIn"){
-    var _wf=(_so.canSupportWork&&selectedWorkFacility)?selectedWorkFacility:_fn;
-    nr.homeFacility=_hf||_fn;nr.workFacility=_wf;nr.isSupportWork=!!(_wf&&nr.homeFacility&&_wf!==nr.homeFacility);nr.wageType=nr.isSupportWork?"support_zero":"normal";
+    // workFacility優先順位: 1)応援先選択 2)URLトークン施設 3)スタッフ所属施設
+    var _wf=(_so.canSupportWork&&selectedWorkFacility)?selectedWorkFacility:(_fn||_hf);
+    nr.homeFacility=_hf||_fn||_wf;nr.workFacility=_wf;nr.isSupportWork=!!(_wf&&nr.homeFacility&&_wf!==nr.homeFacility);nr.wageType=nr.isSupportWork?"support_zero":"normal";
   }
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
@@ -2540,7 +2543,16 @@ function doPunch(type){
       }
     }
   }
-  // E. 通常保存処理
+  // E. clockIn時の施設確定チェック（施設不明のまま保存させない）
+  if(type==="clockIn"){
+    var _so3=staffList.find(function(s){return s.name===staffName;})||{};
+    var _wfCheck=(_so3.canSupportWork&&selectedWorkFacility)?selectedWorkFacility:(facilityName||_so3.location||"");
+    if(!_wfCheck){
+      showAlert("施設が確定できません。\nスタッフの所属施設が未登録です。\n管理者に連絡してください。");
+      return;
+    }
+  }
+  // F. 通常保存処理
   _execPunch(type,d);
 }
 
