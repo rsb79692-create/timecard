@@ -403,7 +403,13 @@ function sumBreakMs(pairs){
   pairs.forEach(function(p){if(p.start&&p.end)brk+=new Date(p.end.timestamp)-new Date(p.start.timestamp);});
   return brk;
 }
+function isPastDate(dateStr){
+  var t=new Date();
+  var todayStr=t.getFullYear()+"-"+pad(t.getMonth()+1)+"-"+pad(t.getDate());
+  return dateStr<todayStr;
+}
 function validateAttendanceRecord(nm,date,sr){
+  if(!isPastDate(date))return{valid:true};
   if(!nm||!date)return{valid:false,reason:"データ不足"};
   var cin=sr.find(function(r){return r.type==="clockIn";});
   var cout=sr.find(function(r){return r.type==="clockOut";});
@@ -565,7 +571,7 @@ function getMorningUnconfirmedFacilities(){
 // ===== 承認漏れサマリー =====
 function getUnapprovedSummary(){
   var seen={},byFacility={},total=0,peopleSet={};
-  records.filter(function(r){return !r.deleted;}).forEach(function(r){
+  records.filter(function(r){return !r.deleted&&isPastDate(r.date);}).forEach(function(r){
     var key=r.date+"__"+r.staff;
     if(seen[key])return;
     seen[key]=true;
@@ -1381,7 +1387,7 @@ function render(){
     if(adminTab==="records"){
       var allActiveStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
       var _unapvPairsSeen={};var unapvList=[];
-      records.filter(function(r){return !r.deleted;}).forEach(function(r){var key=r.date+"__"+r.staff;if(_unapvPairsSeen[key])return;_unapvPairsSeen[key]=true;if(!approvals[key])unapvList.push({date:r.date,staff:r.staff});});
+      records.filter(function(r){return !r.deleted&&isPastDate(r.date);}).forEach(function(r){var key=r.date+"__"+r.staff;if(_unapvPairsSeen[key])return;_unapvPairsSeen[key]=true;if(!approvals[key])unapvList.push({date:r.date,staff:r.staff});});
       unapvList.sort(function(a,b){if(a.date!==b.date)return b.date.localeCompare(a.date);var _ay=(allActiveStaff.find(function(s){return s.name===a.staff;})||{yomi:a.staff}).yomi;var _by=(allActiveStaff.find(function(s){return s.name===b.staff;})||{yomi:b.staff}).yomi;return _ay.localeCompare(_by,"ja");});
       if(showUnapprovedOnly){
         var unapvRows=unapvList.map(function(p){var dt=p.date,nm=p.staff;var sr=records.filter(function(r){return r.date===dt&&r.staff===nm&&!r.deleted;});var cin=sr.find(function(r){return r.type==="clockIn";});var cout=sr.find(function(r){return r.type==="clockOut";});var ms=calcMs(sr);var worked=toHM(ms);var hasPunch=sr.length>0;var validation=validateAttendanceRecord(nm,dt,sr);var dtParts=dt.split('-');var dtDisp=parseInt(dtParts[0])+'年'+parseInt(dtParts[1])+'月'+parseInt(dtParts[2])+'日';return'<tr style="border-bottom:1px solid #e9ecef;"><td style="padding:6px 8px;font-size:.88rem;font-weight:700;white-space:nowrap;color:#374151;">'+dtDisp+'</td><td style="padding:6px 4px;font-weight:700;font-size:1.08rem;white-space:nowrap;"><span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span></td><td style="padding:6px 8px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(cin?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(cin?cin.time:"--:--")+'</td><td style="padding:6px 8px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(cout?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(cout?cout.time:"--:--")+'</td><td style="padding:4px 6px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td><td style="padding:6px 4px;text-align:center;white-space:nowrap;">'+(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+validation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dt+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':"")+'</td></tr>';}).join("");
