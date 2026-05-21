@@ -419,6 +419,13 @@ function validateAttendanceRecord(nm,date,sr){
   if(cin&&cout&&new Date(cout.timestamp)-new Date(cin.timestamp)<=0)return{valid:false,reason:"勤務時間異常"};
   return{valid:true};
 }
+function findOpenClockInAcrossFacilities(staff,date){
+  var dr=records.filter(function(r){return r.staff===staff&&r.date===date&&!r.deleted;});
+  var cin=dr.find(function(r){return r.type==="clockIn";});
+  if(!cin)return null;
+  var cout=dr.find(function(r){return r.type==="clockOut";});
+  return cout?null:cin;
+}
 
 // ===== ストレージ =====
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
@@ -983,11 +990,14 @@ function render(){
     var last=_tfac.length?_tfac[_tfac.length-1].type:null;
     var _xCin=_tfac.find(function(r){return r.type==="clockIn";});
     var _xCout=_tfac.find(function(r){return r.type==="clockOut";});
-    var _done=!!(_xCin&&_xCout);
-    var ci=!_xCin;
-    var co=!!(_xCin&&!_xCout&&(last==="clockIn"||last==="breakEnd"));
-    var cbs=!_done&&(last==="clockIn"||last==="breakEnd");
-    var cbe=!_done&&last==="breakStart";
+    var _anyCin=tr.find(function(r){return r.type==="clockIn";});
+    var _anyCout=tr.find(function(r){return r.type==="clockOut";});
+    var _done=!!(_anyCin&&_anyCout);
+    var _crossFacilityCin=(!_xCin&&_anyCin&&!_anyCout)?_anyCin:null;
+    var ci=!_done&&!_crossFacilityCin&&!_xCin;
+    var co=_crossFacilityCin?true:!!(_xCin&&!_xCout&&(last==="clockIn"||last==="breakEnd"));
+    var cbs=!_done&&!_crossFacilityCin&&(last==="clockIn"||last==="breakEnd");
+    var cbe=!_done&&!_crossFacilityCin&&last==="breakStart";
     var worked=toHM(calcMs(tr));
     var histHTML=tr.length?tr.map(function(r){
       return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;font-weight:600;">'+r.time+'</span></div>';
@@ -1007,18 +1017,20 @@ function render(){
           +'</div>'
         :_done
           ?'<div style="text-align:center;padding:20px 16px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;margin:0 0 12px;">'
-            +'<div style="font-size:.95rem;font-weight:900;color:#166534;margin-bottom:12px;">本日のこの施設での打刻は完了しています</div>'
-            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:4px;">出勤 '+_xCin.time+'</div>'
-            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:12px;">退勤 '+_xCout.time+'</div>'
+            +'<div style="font-size:.95rem;font-weight:900;color:#166534;margin-bottom:12px;">本日の打刻は完了しています</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:4px;">出勤 '+_anyCin.time+'</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:12px;">退勤 '+_anyCout.time+'</div>'
             +'<div style="font-size:.75rem;color:#4b5563;">修正が必要な場合は管理者へ連絡してください。</div>'
             +'</div>'
-          :(_pso.canSupportWork
-            ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
-              +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
-              +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
-              +masterLocs.map(function(l){return'<option value="'+l+'"'+(selectedWorkFacility===l?" selected":"")+'>'+l+'</option>';}).join("")
-              +'</select></div>'
-            :"")
+          :(_crossFacilityCin
+            ?'<div style="text-align:center;padding:10px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:0 0 12px;font-size:.9rem;font-weight:700;color:#92400e;">出勤中：'+(_crossFacilityCin.facilityName||"他施設")+'</div>'
+            :(_pso.canSupportWork
+              ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
+                +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
+                +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
+                +masterLocs.map(function(l){return'<option value="'+l+'"'+(selectedWorkFacility===l?" selected":"")+'>'+l+'</option>';}).join("")
+                +'</select></div>'
+              :""))
            +'<div class="grid2">'
             +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
             +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
@@ -2684,13 +2696,24 @@ function doPunch(type){
     showAlert("本日の出勤はすでに打刻済みです。\n\n出勤 "+_dCin.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
     return;
   }
-  if(type==="clockOut"&&_dCout){
-    showAlert("本日の退勤はすでに打刻済みです。\n\n退勤 "+_dCout.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
+  if(type==="clockIn"&&!_dCin){
+    var _anyCinOpen=findOpenClockInAcrossFacilities(staffName,_today);
+    if(_anyCinOpen){
+      showAlert("他施設で出勤中です。\n\n出勤中："+(_anyCinOpen.facilityName||"")+" "+_anyCinOpen.time+"\n\n退勤を押してください。");
+      return;
+    }
+  }
+  var _anyDout=records.find(function(r){return r.staff===staffName&&r.date===_today&&!r.deleted&&r.type==="clockOut";});
+  if(type==="clockOut"&&_anyDout){
+    showAlert("本日の退勤はすでに打刻済みです。\n\n退勤 "+_anyDout.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
     return;
   }
   if(type==="clockOut"&&!_dCin){
-    showAlert("本日の出勤打刻がありません。\n\n先に出勤を打刻してください。");
-    return;
+    var _crossCin=findOpenClockInAcrossFacilities(staffName,_today);
+    if(!_crossCin){
+      showAlert("本日の出勤打刻がありません。\n\n先に出勤を打刻してください。");
+      return;
+    }
   }
   // C2. 休憩3回目以上チェック
   if(type==="breakStart"){
@@ -2705,6 +2728,7 @@ function doPunch(type){
   if(type==="clockOut"){
     var _sr=_dr.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var _lr=_sr[_sr.length-1];
+    if(!_lr){var _crossCinD=findOpenClockInAcrossFacilities(staffName,_today);if(_crossCinD)_lr=_crossCinD;}
     if(_lr&&_lr.type==="clockIn"){
       var _em=Math.floor((d-new Date(_lr.timestamp))/60000);
       var _im="前回：出勤 "+_lr.time+"\n現在：退勤 "+fmtTime(d)+"\n経過："+_em+"分";
