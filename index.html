@@ -409,7 +409,6 @@ function isPastDate(dateStr){
   return dateStr<todayStr;
 }
 function validateAttendanceRecord(nm,date,sr){
-  if(!isPastDate(date))return{valid:true};
   if(!nm||!date)return{valid:false,reason:"データ不足"};
   var cin=sr.find(function(r){return r.type==="clockIn";});
   var cout=sr.find(function(r){return r.type==="clockOut";});
@@ -1101,9 +1100,10 @@ function render(){
       var dow=dObj.getDay();
       var yobi=DAYS[dow];
       var isSun=dow===0,isSat=dow===6;
-      var bgRow=approved2?"#f0fdf4":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#fafafa":"#fff");
-      var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
       var hasData=dr.length>0;
+      var monthValidation=hasData&&!approved2?validateAttendanceRecord(nm,dk,dr):{valid:true};
+      var bgRow=approved2?"#f0fdf4":(hasData&&!monthValidation.valid?"#fff5f5":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#fafafa":"#fff"));
+      var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
       var otMs=Math.max(0,ms-8*3600000);
       var workedColor=otMs>0?"#dc2626":"#1a2332";
       function tCell(rec,type){
@@ -1129,7 +1129,7 @@ function render(){
         +'</div>';
       var approveBtn=approved2
         ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
-        :(hasData?'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#1e40af;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">承認</button>':"");
+        :(hasData?(!monthValidation.valid?'<div style="color:#dc2626;font-size:.62rem;font-weight:700;white-space:nowrap;margin-bottom:1px;">⚠'+monthValidation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" '+(monthValidation.valid?'':'disabled ')+'style="background:'+(monthValidation.valid?'#1e40af':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;'+(monthValidation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;">承認</button>':"");
       return'<tr style="border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
         +'<td style="padding:4px 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:4px 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
@@ -1464,8 +1464,8 @@ function render(){
             +'</div>'
             +editLine+'</div>';
         }
-        return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":"")+'">'
-          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":"#fff")+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+        return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":(hasPunch&&!validation.valid?"background:#fff5f5;":""))+'">'
+          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"#fff"))+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(cin
             ?'<div style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
@@ -1490,7 +1490,7 @@ function render(){
           +(approved
             ?'<div class="approved-badge" style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
              +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
-            :(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+validation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':""))
+            :(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+validation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" '+(validation.valid?'':'disabled ')+'style="background:'+(validation.valid?'#16a34a':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;'+(validation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;white-space:nowrap;">承認</button>':""))
           +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
