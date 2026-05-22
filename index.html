@@ -593,6 +593,31 @@ function goUnapprovedRecords(){
   adminTab="records";showUnapprovedOnly=true;render();
 }
 
+// ===== 通知件数集計 =====
+function getNotificationCounts(){
+  var unapproved=getUnapprovedSummary().total;
+  var cutoff=new Date();cutoff.setDate(cutoff.getDate()-30);
+  var cutoffStr=fmtDateKey(cutoff);
+  var todayStr=fmtDateKey(new Date());
+  var missingList=[];var seenMissing={};
+  records.filter(function(r){return !r.deleted&&r.date<todayStr&&r.date>=cutoffStr;}).forEach(function(r){
+    var key=r.date+"__"+r.staff;
+    if(seenMissing[key])return;seenMissing[key]=true;
+    if(approvals[key])return;
+    var sr=records.filter(function(rx){return rx.staff===r.staff&&rx.date===r.date&&!rx.deleted;});
+    var v=validateAttendanceRecord(r.staff,r.date,sr);
+    if(!v.valid)missingList.push({date:r.date,staff:r.staff,reason:v.reason});
+  });
+  var editedList=records.filter(function(r){return r.editedByAdmin&&!r.deleted&&r.date<todayStr&&r.date>=cutoffStr;});
+  var mp=missingList.length;
+  var edited=editedList.length;
+  return{unapproved:unapproved,missingPunch:mp,edited:edited,total:unapproved+mp+edited,_missingList:missingList,_editedList:editedList};
+}
+function updateAppBadge(count){
+  if(!('setAppBadge' in navigator))return;
+  try{if(count>0){navigator.setAppBadge(count).catch(function(){});}else{navigator.clearAppBadge().catch(function(){});}}catch(e){}
+}
+
 // ===== レンダリング =====
 function render(){
   var now=new Date();
@@ -1395,6 +1420,7 @@ function render(){
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
     var tc="";
+    var counts=getNotificationCounts();
 
     if(adminTab==="records"){
       var allActiveStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
@@ -2050,7 +2076,71 @@ function render(){
         +facTableHtml+'</div>';
     }
 
+    if(adminTab==="notify"){
+      var _nc=counts;
+      var _missingRows=_nc._missingList.length
+        ?_nc._missingList.sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(item){
+            return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+item.date+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+item.staff+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#dc2626;font-weight:700;">'+item.reason+'</td></tr>';
+          }).join("")
+        :'<tr><td colspan="3" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
+      var _editedRows=_nc._editedList.length
+        ?_nc._editedList.sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(r){
+            var prevTime=r.editHistory&&r.editHistory.length?r.editHistory[r.editHistory.length-1].time:(r.editedFrom||"");
+            return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+r.date+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+r.staff+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+(TYPE_LABEL[r.type]||r.type)+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;font-family:monospace;font-weight:600;">'+r.time+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#92400e;font-size:.82rem;">'+(prevTime?'修正前：'+prevTime:'')+'</td></tr>';
+          }).join("")
+        :'<tr><td colspan="5" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
+      tc='<div class="admin-card">'
+        +'<div class="admin-title">🔔 通知管理</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">'
+        +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">未承認打刻</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.unapproved+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +'<button onclick="goUnapprovedRecords()" style="margin-top:8px;background:#dc2626;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
+        +'</div>'
+        +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">打刻漏れ</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.missingPunch+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件（直近30日）</div>'
+        +'</div>'
+        +'<div style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">時刻修正</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:#92400e;">'+_nc.edited+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件（直近30日）</div>'
+        +'</div>'
+        +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">合計</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:#1e40af;">'+_nc.total+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +'</div>'
+        +'</div>'
+        +'<div style="font-weight:700;font-size:.85rem;color:#334155;margin-bottom:8px;">打刻漏れ一覧（直近30日）</div>'
+        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
+        +'<thead><tr>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">日付</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">スタッフ</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">理由</th>'
+        +'</tr></thead><tbody>'+_missingRows+'</tbody></table></div>'
+        +'<div style="font-weight:700;font-size:.85rem;color:#334155;margin-bottom:8px;margin-top:16px;">時刻修正一覧（直近30日）</div>'
+        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
+        +'<thead><tr>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">日付</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">スタッフ</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">種別</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">現在時刻</th>'
+        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">修正前</th>'
+        +'</tr></thead><tbody>'+_editedRows+'</tbody></table></div>'
+        +'</div>';
+    }
+
     var _unapv=getUnapprovedSummary();
+    updateAppBadge(counts.total);
     var _unapvHTML=_unapv.total>0
       ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
         +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）</div>'
@@ -2071,6 +2161,9 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="documents"?"tab-on":"tab-off")+'" onclick="setTab(\'documents\')">資料管理</button>'
       +'<button class="tab-btn '+(adminTab==="support"?"tab-on":"tab-off")+'" onclick="setTab(\'support\')">応援集計</button>'
       +'<button class="tab-btn '+(adminTab==="morning"?"tab-on":"tab-off")+'" onclick="setTab(\'morning\')">朝出勤確認</button>'
+      +'<button class="tab-btn '+(adminTab==="notify"?"tab-on":"tab-off")+'" onclick="setTab(\'notify\')">'
+      +'通知'+(counts.total>0?'<span style="display:inline-block;background:#dc2626;color:#fff;border-radius:9999px;padding:0 5px;font-size:.6rem;font-weight:700;margin-left:3px;vertical-align:middle;">'+counts.total+'</span>':'')
+      +'</button>'
       +'</div>'
       +'</div>'+tc;
 
