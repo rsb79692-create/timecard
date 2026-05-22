@@ -2152,6 +2152,8 @@ function render(){
 
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
+    setTimeout(function(){ updateAppBadge(counts.total); }, 500);
+    setTimeout(function(){ updateAppBadge(counts.total); }, 2000);
     var _unapvHTML=_unapv.total>0
       ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
         +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）</div>'
