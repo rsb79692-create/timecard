@@ -1,7 +1,7 @@
 {
   "name": "穂乃味タイムカード",
   "short_name": "タイムカード",
-  "start_url": "./",
+  "start_url": "./?token=all",
   "scope": "./",
   "display": "standalone",
   "background_color": "#1565C0",
