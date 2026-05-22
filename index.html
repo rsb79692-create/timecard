@@ -13,6 +13,16 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <title>穂乃味 タイムカード</title>
 <script>
+// ===== PWAインストール =====
+var _deferredInstallPrompt=null;
+window.addEventListener('beforeinstallprompt',function(e){
+  e.preventDefault();
+  _deferredInstallPrompt=e;
+});
+window.addEventListener('appinstalled',function(){
+  _deferredInstallPrompt=null;
+});
+
 // ===== Firebase REST API設定 =====
 var FB_URL = "https://honomi-timecard-default-rtdb.asia-southeast1.firebasedatabase.app/honomi";
 // Firebase Storage（バケット名は Firebase コンソールで確認・変更してください）
@@ -2160,11 +2170,19 @@ function render(){
         +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return k+"："+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
         +'</div>'
       :"";
+    var _installHTML=_deferredInstallPrompt
+      ?'<div style="background:#e8f5e9;border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
+        +'<div style="font-size:.82rem;color:#2e7d32;font-weight:700;">📲 アプリとしてインストールできます</div>'
+        +'<button onclick="if(_deferredInstallPrompt){_deferredInstallPrompt.prompt();_deferredInstallPrompt.userChoice.then(function(){_deferredInstallPrompt=null;render();});}" '
+        +'style="background:#2e7d32;color:#fff;border:none;padding:6px 14px;border-radius:4px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">インストール</button>'
+        +'</div>'
+      :"";
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
       +'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
       +'</div>'
+      +_installHTML
       +_unapvHTML
       +'<div class="tab-row" style="margin-bottom:0;">'
       +'<button class="tab-btn '+(adminTab==="records"?"tab-on":"tab-off")+'" onclick="setTab(\'records\')">勤怠一覧</button>'
