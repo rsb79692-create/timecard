@@ -254,6 +254,7 @@ async function main() {
   console.log("[CHECK] 未承認チェック開始");
   const seenUnapproved = {};
   const unapprovedList = [];
+  const unapprovedDebug = {}; // key → 代表レコード（文字化け調査用）
 
   records
     .filter((r) => r.date >= cutoff && r.date < today && !r.deleted)
@@ -263,11 +264,32 @@ async function main() {
       seenUnapproved[key] = true;
       if (!approvals[key]) {
         unapprovedList.push({ date: r.date, staff: r.staff });
+        unapprovedDebug[key] = r;
       }
     });
 
   console.log(`[CHECK] 未承認: ${unapprovedList.length} 件`);
   unapprovedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff}`));
+
+  // 文字化け調査ログ（未承認先頭3件の全フィールド）
+  console.log("[DEBUG] 未承認 詳細 (先頭3件):");
+  unapprovedList.slice(0, 3).forEach((x) => {
+    const r = unapprovedDebug[`${x.date}__${x.staff}`];
+    if (!r) return;
+    const staffCodes = [...(r.staff || "")].map((c) =>
+      "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")
+    ).join(" ");
+    console.log("  ---");
+    console.log(`  id/key       : ${r.id || "(なし)"}`);
+    console.log(`  date         : ${r.date}`);
+    console.log(`  staff        : ${r.staff}`);
+    console.log(`  charCode     : ${staffCodes}`);
+    console.log(`  type         : ${r.type}`);
+    console.log(`  time         : ${r.time}`);
+    console.log(`  facilityName : ${r.facilityName || ""}`);
+    console.log(`  homeFacility : ${r.homeFacility || ""}`);
+    console.log(`  workFacility : ${r.workFacility || ""}`);
+  });
 
   // ========================================
   // ■ 打刻漏れチェック
