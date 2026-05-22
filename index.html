@@ -611,7 +611,18 @@ function getNotificationCounts(){
   var editedList=records.filter(function(r){return r.editedByAdmin&&!r.deleted&&r.date<todayStr&&r.date>=cutoffStr;});
   var mp=missingList.length;
   var edited=editedList.length;
-  return{unapproved:unapproved,missingPunch:mp,edited:edited,total:unapproved+mp+edited,_missingList:missingList,_editedList:editedList};
+  // 重複排除：unapproved / missingPunch / edited を同一ID方式で集約
+  var notifyIds={};
+  var _seenU={};
+  records.filter(function(r){return !r.deleted&&isPastDate(r.date);}).forEach(function(r){
+    var key=r.date+"__"+r.staff;
+    if(_seenU[key])return;_seenU[key]=true;
+    if(!approvals[key])notifyIds[key+"__unapproved"]=true;
+  });
+  missingList.forEach(function(x){notifyIds[x.date+"__"+x.staff+"__missing"]=true;});
+  editedList.forEach(function(x){notifyIds[(x.id||x.date+"__"+x.staff)+"__edit"]=true;});
+  var total=Object.keys(notifyIds).length;
+  return{unapproved:unapproved,missingPunch:mp,edited:edited,total:total,_missingList:missingList,_editedList:editedList};
 }
 function updateAppBadge(count){
   if(!('setAppBadge' in navigator))return;
