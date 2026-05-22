@@ -315,11 +315,15 @@ async function main() {
       const key = r.id || `${r.date}__${r.staff}__${r.type}`;
       if (seenEdited[key]) return;
       seenEdited[key] = true;
-      editedList.push({ date: r.date, staff: r.staff, type: r.type });
+      editedList.push({ date: r.date, staff: r.staff, type: r.type, editedAt: r.editedAt, editedFrom: r.editedFrom, editedFields: r.editedFields });
     });
 
   console.log(`[CHECK] 時刻修正(本日): ${editedList.length} 件`);
-  editedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff} (${x.type})`));
+  editedList.slice(0, 3).forEach((x) => {
+    console.log(`  date=${x.date} staff=${x.staff} type=${x.type}`);
+    console.log(`  editedAt=${x.editedAt}`);
+    console.log(`  editedFrom=${x.editedFrom} editedFields=${JSON.stringify(x.editedFields)}`);
+  });
 
   // ========================================
   // ■ 集計サマリー
