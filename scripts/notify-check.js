@@ -160,15 +160,6 @@ async function sendLineMessage(text) {
   console.log(`[LINE]  LINE_TO_ID 存在: true (先頭文字=${toPrefix} 長さ=${toLength})`);
   console.log(`[LINE]  LINE_CHANNEL_ACCESS_TOKEN 存在: ${!!LINE_TOKEN}`);
 
-  if (DRY_RUN) {
-    console.log("[DRY]   dryRun=true → LINE送信スキップ");
-    console.log("[DRY]   送信予定メッセージ ↓");
-    console.log("---");
-    console.log(text);
-    console.log("---");
-    return;
-  }
-
   const payload = JSON.stringify({
     to: LINE_TO,
     messages: [{ type: "text", text }],
@@ -217,7 +208,15 @@ async function main() {
       "【穂乃味タイムカード】\nテスト通知\n\n" +
       "LINE通知設定は正常です。\n\n" +
       `送信時刻：${getNowJSTWithSeconds()}`;
-    await sendLineMessage(testMessage);
+    if (DRY_RUN) {
+      console.log("[DRY]   dryRun=true → LINE送信スキップ (testNotify)");
+      console.log("[DRY]   送信予定メッセージ ↓");
+      console.log("---");
+      console.log(testMessage);
+      console.log("---");
+    } else {
+      await sendLineMessage(testMessage);
+    }
     console.log("[DONE]  テスト通知完了");
     return;
   }
@@ -344,6 +343,13 @@ async function main() {
   console.log("[SAMPLE] 時刻修正 サンプル3件:");
   console.log(formatSamples(editedList));
 
+  // 文字コード確認（文字化けデバッグ用・先頭1件のみ）
+  const debugStaff = (unapprovedList[0] || missingList[0] || editedList[0] || {}).staff || "";
+  if (debugStaff) {
+    const codes = [...debugStaff].map((c) => "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")).join(" ");
+    console.log(`[CHARCODE] "${debugStaff}" → ${codes}`);
+  }
+
   // ── 対象なしなら通知スキップ ──
   if (total === 0) {
     console.log("[OK]    通知対象なし — LINE送信スキップ");
@@ -359,7 +365,15 @@ async function main() {
     "▼管理者画面\n" +
     "https://rsb79692-create.github.io/timecard/?token=all";
 
-  await sendLineMessage(message);
+  if (DRY_RUN) {
+    console.log("[DRY]   dryRun=true → LINE送信スキップ");
+    console.log("[DRY]   送信予定メッセージ ↓");
+    console.log("---");
+    console.log(message);
+    console.log("---");
+  } else {
+    await sendLineMessage(message);
+  }
   console.log("[DONE]  処理完了");
 }
 

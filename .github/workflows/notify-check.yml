@@ -34,4 +34,6 @@ jobs:
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
           TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
           DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
         run: node scripts/notify-check.js
