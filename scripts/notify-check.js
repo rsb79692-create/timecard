@@ -241,28 +241,6 @@ async function main() {
   const records = allRecords.filter(Boolean);
   console.log(`[RTDB]  tc5_records 総件数: ${records.length}`);
 
-  // ── 特定レコード raw JSON 確認（文字化け調査: id=1778822455178） ──
-  const TARGET_ID = "1778822455178";
-  const targetByKey = rawRecords && typeof rawRecords === "object" ? rawRecords[TARGET_ID] : null;
-  const targetById  = records.find((r) => String(r.id) === TARGET_ID);
-  const targetRec   = targetByKey || targetById || null;
-  console.log(`[RAW]   対象レコード id=${TARGET_ID}`);
-  if (targetRec) {
-    console.log(`[RAW]   JSON.stringify: ${JSON.stringify(targetRec)}`);
-    const staffVal  = targetRec.staff;
-    const staffCode = staffVal
-      ? [...staffVal].map((c) => "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")).join(" ")
-      : "(なし)";
-    console.log(`[RAW]   staff        : ${staffVal}`);
-    console.log(`[RAW]   staff charCode: ${staffCode}`);
-    if (targetRec.name)         console.log(`[RAW]   name         : ${targetRec.name}`);
-    if (targetRec.staffName)    console.log(`[RAW]   staffName    : ${targetRec.staffName}`);
-    if (targetRec.employeeName) console.log(`[RAW]   employeeName : ${targetRec.employeeName}`);
-    if (targetRec.staffId)      console.log(`[RAW]   staffId      : ${targetRec.staffId}`);
-  } else {
-    console.log(`[RAW]   該当レコードなし（id=${TARGET_ID} は存在しないか既に削除済み）`);
-  }
-
   // ── tc5_approvals 取得 ──
   const rawApprovals = await fetchRTDB("tc5_approvals", idToken);
   const approvals = (rawApprovals && typeof rawApprovals === "object") ? rawApprovals : {};
@@ -276,7 +254,6 @@ async function main() {
   console.log("[CHECK] 未承認チェック開始");
   const seenUnapproved = {};
   const unapprovedList = [];
-  const unapprovedDebug = {}; // key → 代表レコード（文字化け調査用）
 
   records
     .filter((r) => r.date >= cutoff && r.date < today && !r.deleted)
@@ -286,32 +263,11 @@ async function main() {
       seenUnapproved[key] = true;
       if (!approvals[key]) {
         unapprovedList.push({ date: r.date, staff: r.staff });
-        unapprovedDebug[key] = r;
       }
     });
 
   console.log(`[CHECK] 未承認: ${unapprovedList.length} 件`);
   unapprovedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff}`));
-
-  // 文字化け調査ログ（未承認先頭3件の全フィールド）
-  console.log("[DEBUG] 未承認 詳細 (先頭3件):");
-  unapprovedList.slice(0, 3).forEach((x) => {
-    const r = unapprovedDebug[`${x.date}__${x.staff}`];
-    if (!r) return;
-    const staffCodes = [...(r.staff || "")].map((c) =>
-      "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")
-    ).join(" ");
-    console.log("  ---");
-    console.log(`  id/key       : ${r.id || "(なし)"}`);
-    console.log(`  date         : ${r.date}`);
-    console.log(`  staff        : ${r.staff}`);
-    console.log(`  charCode     : ${staffCodes}`);
-    console.log(`  type         : ${r.type}`);
-    console.log(`  time         : ${r.time}`);
-    console.log(`  facilityName : ${r.facilityName || ""}`);
-    console.log(`  homeFacility : ${r.homeFacility || ""}`);
-    console.log(`  workFacility : ${r.workFacility || ""}`);
-  });
 
   // ========================================
   // ■ 打刻漏れチェック
@@ -359,15 +315,11 @@ async function main() {
       const key = r.id || `${r.date}__${r.staff}__${r.type}`;
       if (seenEdited[key]) return;
       seenEdited[key] = true;
-      editedList.push({ date: r.date, staff: r.staff, type: r.type, editedAt: r.editedAt, editedFrom: r.editedFrom, editedFields: r.editedFields });
+      editedList.push({ date: r.date, staff: r.staff, type: r.type });
     });
 
   console.log(`[CHECK] 時刻修正(本日): ${editedList.length} 件`);
-  editedList.slice(0, 3).forEach((x) => {
-    console.log(`  date=${x.date} staff=${x.staff} type=${x.type}`);
-    console.log(`  editedAt=${x.editedAt}`);
-    console.log(`  editedFrom=${x.editedFrom} editedFields=${JSON.stringify(x.editedFields)}`);
-  });
+  editedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff} (${x.type})`));
 
   // ========================================
   // ■ 集計サマリー
@@ -390,13 +342,6 @@ async function main() {
   console.log(formatSamples(missingList));
   console.log("[SAMPLE] 時刻修正 サンプル3件:");
   console.log(formatSamples(editedList));
-
-  // 文字コード確認（文字化けデバッグ用・先頭1件のみ）
-  const debugStaff = (unapprovedList[0] || missingList[0] || editedList[0] || {}).staff || "";
-  if (debugStaff) {
-    const codes = [...debugStaff].map((c) => "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0")).join(" ");
-    console.log(`[CHARCODE] "${debugStaff}" → ${codes}`);
-  }
 
   // ── 対象なしなら通知スキップ ──
   if (total === 0) {
