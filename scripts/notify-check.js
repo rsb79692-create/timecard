@@ -1,5 +1,5 @@
 /**
- * notify-check.js — 未承認・打刻漏れ・時刻修正 LINE通知
+ * notify-check.js — 未承認・打刻漏れ LINE通知
  * GitHub Actions (workflow_dispatch) から実行。Node.js 標準モジュールのみ。
  */
 
@@ -301,47 +301,22 @@ async function main() {
   });
 
   // ========================================
-  // ■ 時刻修正チェック（本日JST分のみ）
-  // 対象: editedByAdmin=true、editedAt が JST今日、deleted=false
-  // ========================================
-  console.log("[CHECK] 時刻修正チェック開始");
-  const seenEdited = {};
-  const editedList = [];
-
-  records
-    .filter((r) => r.editedByAdmin && r.editedAt && !r.deleted)
-    .forEach((r) => {
-      if (isoToDateJST(r.editedAt) !== today) return;
-      const key = r.id || `${r.date}__${r.staff}__${r.type}`;
-      if (seenEdited[key]) return;
-      seenEdited[key] = true;
-      editedList.push({ date: r.date, staff: r.staff, type: r.type });
-    });
-
-  console.log(`[CHECK] 時刻修正(本日): ${editedList.length} 件`);
-  editedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff} (${x.type})`));
-
-  // ========================================
   // ■ 集計サマリー
   // ========================================
   const unapprovedCount = unapprovedList.length;
   const missingCount    = missingList.length;
-  const editedCount     = editedList.length;
-  const total = unapprovedCount + missingCount + editedCount;
+  const total = unapprovedCount + missingCount;
 
   console.log("========================================");
   console.log("[RESULT] 集計結果");
   console.log(`  未承認  : ${unapprovedCount} 件`);
   console.log(`  打刻漏れ: ${missingCount} 件`);
-  console.log(`  時刻修正: ${editedCount} 件`);
   console.log(`  合計    : ${total} 件`);
   console.log("========================================");
   console.log("[SAMPLE] 未承認 サンプル3件:");
   console.log(formatSamples(unapprovedList));
   console.log("[SAMPLE] 打刻漏れ サンプル3件:");
   console.log(formatSamples(missingList));
-  console.log("[SAMPLE] 時刻修正 サンプル3件:");
-  console.log(formatSamples(editedList));
 
   // ── 対象なしなら通知スキップ ──
   if (total === 0) {
@@ -353,8 +328,7 @@ async function main() {
   const message =
     "【穂乃味タイムカード】\n\n" +
     `未承認：${unapprovedCount}件\n` +
-    `打刻漏れ：${missingCount}件\n` +
-    `時刻修正：${editedCount}件\n\n` +
+    `打刻漏れ：${missingCount}件\n\n` +
     "▼管理者画面\n" +
     "https://rsb79692-create.github.io/timecard/?token=all";
 
