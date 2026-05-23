@@ -622,10 +622,8 @@ function getNotificationCounts(){
     var v=validateAttendanceRecord(r.staff,r.date,sr);
     if(!v.valid)missingList.push({date:r.date,staff:r.staff,reason:v.reason});
   });
-  var editedList=records.filter(function(r){return r.editedByAdmin&&!r.deleted&&r.date<todayStr&&r.date>=cutoffStr;});
   var mp=missingList.length;
-  var edited=editedList.length;
-  // 重複排除：unapproved / missingPunch / edited を同一ID方式で集約
+  // 重複排除：unapproved / missingPunch を同一ID方式で集約
   var notifyIds={};
   var _seenU={};
   records.filter(function(r){return !r.deleted&&isPastDate(r.date);}).forEach(function(r){
@@ -634,9 +632,8 @@ function getNotificationCounts(){
     if(!approvals[key])notifyIds[key+"__unapproved"]=true;
   });
   missingList.forEach(function(x){notifyIds[x.date+"__"+x.staff+"__missing"]=true;});
-  editedList.forEach(function(x){notifyIds[(x.id||x.date+"__"+x.staff)+"__edit"]=true;});
   var total=Object.keys(notifyIds).length;
-  return{unapproved:unapproved,missingPunch:mp,edited:edited,total:total,_missingList:missingList,_editedList:editedList};
+  return{unapproved:unapproved,missingPunch:mp,total:total,_missingList:missingList};
 }
 function updateAppBadge(count){
   if(!('setAppBadge' in navigator))return;
@@ -2111,16 +2108,6 @@ function render(){
               +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#dc2626;font-weight:700;">'+item.reason+'</td></tr>';
           }).join("")
         :'<tr><td colspan="3" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
-      var _editedRows=_nc._editedList.length
-        ?_nc._editedList.sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(r){
-            var prevTime=r.editHistory&&r.editHistory.length?r.editHistory[r.editHistory.length-1].time:(r.editedFrom||"");
-            return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+r.date+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+r.staff+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+(TYPE_LABEL[r.type]||r.type)+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;font-family:monospace;font-weight:600;">'+r.time+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#92400e;font-size:.82rem;">'+(prevTime?'修正前：'+prevTime:'')+'</td></tr>';
-          }).join("")
-        :'<tr><td colspan="5" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">🔔 通知管理</div>'
         +'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">'
@@ -2133,11 +2120,6 @@ function render(){
         +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">打刻漏れ</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.missingPunch+'</div>'
-        +'<div style="font-size:.7rem;color:#8496a7;">件（直近30日）</div>'
-        +'</div>'
-        +'<div style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;">'
-        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">時刻修正</div>'
-        +'<div style="font-size:1.5rem;font-weight:900;color:#92400e;">'+_nc.edited+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件（直近30日）</div>'
         +'</div>'
         +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
@@ -2153,15 +2135,6 @@ function render(){
         +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">スタッフ</th>'
         +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">理由</th>'
         +'</tr></thead><tbody>'+_missingRows+'</tbody></table></div>'
-        +'<div style="font-weight:700;font-size:.85rem;color:#334155;margin-bottom:8px;margin-top:16px;">時刻修正一覧（直近30日）</div>'
-        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
-        +'<thead><tr>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">日付</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">スタッフ</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">種別</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">現在時刻</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">修正前</th>'
-        +'</tr></thead><tbody>'+_editedRows+'</tbody></table></div>'
         +'</div>';
     }
 
