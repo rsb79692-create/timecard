@@ -1264,16 +1264,17 @@ function render(){
       showConfirm("この月の未承認データをすべて承認します。よろしいですか？",function(){
         var unapprovedDates=[...new Set(mRecsStaff.filter(function(r){return !r.deleted&&!approvals[r.date+"__"+nm];}).map(function(r){return r.date;}))];
         if(!unapprovedDates.length){showAlert("承認済みでないデータはありません");return;}
-        var _errs=[];
+        var _approved=[],_skipped=[];
         unapprovedDates.forEach(function(dk){
           var _sr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
-          var _v=validateAttendanceRecord(nm,dk,_sr);
-          if(!_v.valid)_errs.push("・"+dk.slice(5)+"："+_v.reason);
+          var _cin=_sr.find(function(r){return r.type==="clockIn";});
+          var _cout=_sr.find(function(r){return r.type==="clockOut";});
+          if(_cin&&_cout){_approved.push(dk);}else{_skipped.push(dk);}
         });
-        if(_errs.length){showAlert("承認できません\n\n理由：\n"+_errs.join("\n"));return;}
-        unapprovedDates.forEach(function(dk){approvals[dk+"__"+nm]=true;});
+        if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
+        _approved.forEach(function(dk){approvals[dk+"__"+nm]=true;});
         saveData("tc5_approvals",approvals);
-        showAlert(unapprovedDates.length+"件承認しました",function(){render();});
+        showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件",function(){render();});
       });
     };
     attachTimeCellHandlers();
@@ -2276,16 +2277,17 @@ function render(){
       if(showUnapprovedOnly){
         showConfirm("未承認データをすべて承認します。よろしいですか？",function(){
           if(!unapvList.length){showAlert("承認済みでないデータはありません");return;}
-          var _errs=[];
+          var _approved=[],_skipped=[];
           unapvList.forEach(function(p){
             var _sr=records.filter(function(r){return r.staff===p.staff&&r.date===p.date&&!r.deleted;});
-            var _v=validateAttendanceRecord(p.staff,p.date,_sr);
-            if(!_v.valid)_errs.push("・"+p.staff+"（"+p.date.slice(5)+"）："+_v.reason);
+            var _cin=_sr.find(function(r){return r.type==="clockIn";});
+            var _cout=_sr.find(function(r){return r.type==="clockOut";});
+            if(_cin&&_cout){_approved.push(p);}else{_skipped.push(p);}
           });
-          if(_errs.length){showAlert("承認できません\n\n理由：\n"+_errs.join("\n"));return;}
-          unapvList.forEach(function(p){approvals[p.date+"__"+p.staff]=true;});
+          if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
+          _approved.forEach(function(p){approvals[p.date+"__"+p.staff]=true;});
           saveData("tc5_approvals",approvals);render();
-          showAlert(unapvList.length+"件を承認しました");
+          showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       } else {
         showConfirm("表示中の日付の未承認データをすべて承認します。よろしいですか？",function(){
@@ -2294,16 +2296,17 @@ function render(){
             return sr.length>0&&!approvals[selDate+"__"+s.name];
           });
           if(!targets.length){showAlert("承認済みでないデータはありません");return;}
-          var _errs=[];
+          var _approved=[],_skipped=[];
           targets.forEach(function(s){
             var _sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
-            var _v=validateAttendanceRecord(s.name,selDate,_sr);
-            if(!_v.valid)_errs.push("・"+s.name+"："+_v.reason);
+            var _cin=_sr.find(function(r){return r.type==="clockIn";});
+            var _cout=_sr.find(function(r){return r.type==="clockOut";});
+            if(_cin&&_cout){_approved.push(s);}else{_skipped.push(s);}
           });
-          if(_errs.length){showAlert("承認できません\n\n理由：\n"+_errs.join("\n"));return;}
-          targets.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
+          if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
+          _approved.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
           saveData("tc5_approvals",approvals);render();
-          showAlert(targets.length+"件を承認しました");
+          showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       }
     };
