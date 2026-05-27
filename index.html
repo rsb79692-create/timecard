@@ -796,7 +796,6 @@ function render(){
       +'<select id="viewer-month" style="padding:4px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;background:#fff;">'+vMonthOpts+'</select>'
       +'<button id="btn-viewer-csv-daily" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日次CSV</button>'
       +'<button id="btn-viewer-csv" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
-      +'<button id="btn-viewer-staff-summary" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 人別集計CSV</button>'
       +'<button id="btn-viewer-staff-detail" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 人別明細CSV</button>'
       +'</div></div>'
       +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
@@ -883,9 +882,6 @@ function render(){
       });
       dlCSV(hdr+"\n"+csvRows.join("\n"),"穂乃味_月次勤怠_"+selMonth+".csv");
     };
-    // 人別集計CSV（閲覧専用）
-    var vcSSBtn=document.getElementById("btn-viewer-staff-summary");
-    if(vcSSBtn)vcSSBtn.onclick=function(){dlStaffSummaryCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
     // 人別明細CSV（閲覧専用）
     var vcSDBtn=document.getElementById("btn-viewer-staff-detail");
     if(vcSDBtn)vcSDBtn.onclick=function(){dlStaffDetailCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
@@ -1627,7 +1623,6 @@ function render(){
         +'<div style="display:flex;gap:10px;flex-wrap:wrap;">'
         +'<button class="btn-export" id="btn-csv-daily" style="width:auto;padding:10px 24px;">📥 日次CSV</button>'
         +'<button class="btn-export" id="btn-csv-monthly" style="width:auto;padding:10px 24px;">📥 月次CSV</button>'
-        +'<button class="btn-export" id="btn-csv-staff-summary" style="width:auto;padding:10px 24px;">📥 人別集計CSV</button>'
         +'<button class="btn-export" id="btn-csv-staff-detail" style="width:auto;padding:10px 24px;">📥 人別明細CSV</button>'
         +'</div>'
         +'</div>'
@@ -2313,12 +2308,6 @@ function render(){
     // CSV月次
     var csvM=document.getElementById("btn-csv-monthly");
     if(csvM)csvM.onclick=function(){csvPreviewType="monthly";screen="csvPreview";render();};
-    // 人別集計CSV
-    var csvSS=document.getElementById("btn-csv-staff-summary");
-    if(csvSS)csvSS.onclick=function(){
-      var mR=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
-      dlStaffSummaryCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
-    };
     // 人別明細CSV
     var csvSD=document.getElementById("btn-csv-staff-detail");
     if(csvSD)csvSD.onclick=function(){
@@ -3346,38 +3335,6 @@ function buildCsvStaffList(mR){
   var retiredWithRec=staffList.filter(function(s){return s.status==="\u9000\u8077"&&recNms.has(s.name)&&!activeNmSet.has(s.name);});
   var unknownStaff=[...recNms].filter(function(nm){return !staffList.find(function(s){return s.name===nm;});}).map(function(nm){return{name:nm,yomi:nm,location:"",status:""};});
   return activeS.concat(retiredWithRec).concat(unknownStaff).sort(function(a,b){return(a.yomi||a.name).localeCompare(b.yomi||b.name,"ja");});
-}
-
-// \u4EBA\u5225\u96C6\u8A08CSV\uFF081\u4EBA1\u884C\u30FB\u52B4\u52D9\u58EB\u5411\u3051\uFF09
-function dlStaffSummaryCSV(month,recs,staffArr,approvalsObj){
-  var hdr="\u6C0F\u540D,\u6240\u5C5E\u65BD\u8A2D,\u5BFE\u8C61\u5E74\u6708,\u51FA\u52E4\u65E5\u6570,\u7DCF\u52B4\u50CD\u6642\u9593,\u7DCF\u4F11\u61A9\u6642\u9593,\u7DCF\u5B9F\u50CD\u6642\u9593,\u6B8B\u696D\u6642\u9593,\u9045\u523B\u56DE\u6570,\u65E9\u9000\u56DE\u6570,\u672A\u627F\u8A8D\u4EF6\u6570,\u6253\u523B\u6F0F\u308C\u4EF6\u6570";
-  var rows=staffArr.map(function(s){
-    var nm=s.name;
-    var sr=recs.filter(function(r){return r.staff===nm;});
-    var dates=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
-    var grossMs=0,brkMs=0,netMs=0;
-    dates.forEach(function(dk){
-      var dr=sr.filter(function(r){return r.date===dk;});
-      var cin=dr.find(function(r){return r.type==="clockIn";});
-      var cout=dr.find(function(r){return r.type==="clockOut";});
-      if(cin&&cout)grossMs+=Math.max(0,new Date(cout.timestamp)-new Date(cin.timestamp));
-      brkMs+=sumBreakMs(getBreakPairs(dr));
-      netMs+=calcMs(dr);
-    });
-    var otMs=Math.max(0,netMs-dates.length*8*3600000);
-    var allDates=[...new Set(sr.map(function(r){return r.date;}))];
-    var unapproved=dates.filter(function(dk){return !approvalsObj[dk+"__"+nm];}).length;
-    var missing=allDates.filter(function(dk){
-      var dr=sr.filter(function(r){return r.date===dk;});
-      var cin=dr.find(function(r){return r.type==="clockIn";});
-      var cout=dr.find(function(r){return r.type==="clockOut";});
-      return !cin||!cout;
-    }).length;
-    return[nm,(s.location||""),month,dates.length,
-      grossMs>0?toHM(grossMs):"0:00",brkMs>0?toHM(brkMs):"0:00",netMs>0?toHM(netMs):"0:00",
-      otMs>0?toHM(otMs):"0:00",0,0,unapproved,missing].join(",");
-  });
-  dlCSV(hdr+"\n"+rows.join("\n"),"\u7A42\u4E43\u5473_\u4EBA\u5225\u96C6\u8A08_"+month+".csv");
 }
 
 // \u4EBA\u5225\u660E\u7D30CSV\uFF081\u4EBA1\u65E51\u884C\u30FB\u52B4\u52D9\u58EB\u5411\u3051\uFF09
