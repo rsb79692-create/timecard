@@ -132,7 +132,7 @@ function listenFirebase() {
       .then(function(val){
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
-          render();
+          if(!document.querySelector('.time-edit-wrap')) render();
         }
       }).catch(function(){});
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
@@ -144,7 +144,7 @@ function listenFirebase() {
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
             localStorage.setItem("tc5_records",JSON.stringify(records));
-            render();
+            if(!document.querySelector('.time-edit-wrap')) render();
           }
         }
       }).catch(function(){});
@@ -154,7 +154,7 @@ function listenFirebase() {
         if(val && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
-          render();
+          if(!document.querySelector('.time-edit-wrap')) render();
         }
       }).catch(function(){});
   }, 10000);
