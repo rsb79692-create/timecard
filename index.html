@@ -885,10 +885,10 @@ function render(){
     };
     // 人別集計CSV（閲覧専用）
     var vcSSBtn=document.getElementById("btn-viewer-staff-summary");
-    if(vcSSBtn)vcSSBtn.onclick=function(){dlStaffSummaryCSV(selMonth,vMRecs,vStaff,approvals);};
+    if(vcSSBtn)vcSSBtn.onclick=function(){dlStaffSummaryCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
     // 人別明細CSV（閲覧専用）
     var vcSDBtn=document.getElementById("btn-viewer-staff-detail");
-    if(vcSDBtn)vcSDBtn.onclick=function(){dlStaffDetailCSV(selMonth,vMRecs,vStaff,approvals);};
+    if(vcSDBtn)vcSDBtn.onclick=function(){dlStaffDetailCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
     // 資料一覧（非同期）
     loadDocumentList(function(docs){
       var el=document.getElementById("viewer-docs-section");
@@ -2317,15 +2317,13 @@ function render(){
     var csvSS=document.getElementById("btn-csv-staff-summary");
     if(csvSS)csvSS.onclick=function(){
       var mR=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
-      var aS=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return(a.yomi||"").localeCompare(b.yomi||"","ja");});
-      dlStaffSummaryCSV(selMonth,mR,aS,approvals);
+      dlStaffSummaryCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
     };
     // 人別明細CSV
     var csvSD=document.getElementById("btn-csv-staff-detail");
     if(csvSD)csvSD.onclick=function(){
       var mR=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
-      var aS=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return(a.yomi||"").localeCompare(b.yomi||"","ja");});
-      dlStaffDetailCSV(selMonth,mR,aS,approvals);
+      dlStaffDetailCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
     };
 
     // 応援集計タブ
@@ -3338,6 +3336,16 @@ function dlCSV(csv,fname){
   var url=URL.createObjectURL(blob);
   var a=document.createElement("a");a.href=url;a.download=fname;a.click();
   URL.revokeObjectURL(url);
+}
+
+// \u5BFE\u8C61\u6708\u306Erecords\u306B\u3044\u308B\u9000\u8077\u6E08\u307F\u30B9\u30BF\u30C3\u30D5\u3082\u542B\u3081\u305F\u30B9\u30BF\u30C3\u30D5\u4E00\u89A7\u3092\u8FD4\u3059\uFF08\u4EBA\u5225CSV\u7528\uFF09
+function buildCsvStaffList(mR){
+  var activeS=staffList.filter(function(s){return !s.status||s.status==="\u5728\u7C4D";});
+  var recNms=new Set(mR.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.staff;}));
+  var activeNmSet=new Set(activeS.map(function(s){return s.name;}));
+  var retiredWithRec=staffList.filter(function(s){return s.status==="\u9000\u8077"&&recNms.has(s.name)&&!activeNmSet.has(s.name);});
+  var unknownStaff=[...recNms].filter(function(nm){return !staffList.find(function(s){return s.name===nm;});}).map(function(nm){return{name:nm,yomi:nm,location:"",status:""};});
+  return activeS.concat(retiredWithRec).concat(unknownStaff).sort(function(a,b){return(a.yomi||a.name).localeCompare(b.yomi||b.name,"ja");});
 }
 
 // \u4EBA\u5225\u96C6\u8A08CSV\uFF081\u4EBA1\u884C\u30FB\u52B4\u52D9\u58EB\u5411\u3051\uFF09
