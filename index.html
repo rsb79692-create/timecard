@@ -30,6 +30,10 @@ var STORAGE_BUCKET="honomi-timecard.firebasestorage.app";
 var STORAGE_BASE="https://firebasestorage.googleapis.com/v0/b/"+STORAGE_BUCKET+"/o";
 var DB_DOCS=FB_URL+"/documents";
 
+// ===== 画像アップロード LINE通知設定 =====
+// Vercel 本番固定ドメイン（デプロイごとに変わらない）
+var NOTIFY_API_URL="https://timecard-rho.vercel.app/api/line-notify";
+
 // ===== Phase 3-A: Anonymous Auth (REST API) =====
 // Firebase Console > プロジェクトの設定 > 全般 > ウェブ API キー を設定してください
 var FB_API_KEY="AIzaSyDkYQ5d8mskHo94WIysaFYP8VT2bIZ9Vtc";
@@ -3388,6 +3392,7 @@ function uploadStaffDocument(){
           staffUploadMsg='送信しました';
           render();
           setTimeout(function(){staffUploadMsg=null;render();},3000);
+          sendUploadLineNotify(docId,staffName,facilityName,now2.toISOString());
         }).catch(function(){
           showAlert('メタデータの保存に失敗しました');
           if(btn){btn.disabled=false;btn.textContent='送信する';}
@@ -3407,6 +3412,28 @@ function uploadStaffDocument(){
   }).catch(function(){
     showAlert('認証トークンの取得に失敗しました');
     if(btn){btn.disabled=false;btn.textContent='送信する';}
+  });
+}
+// ===== 画像アップロード LINE通知（非同期・失敗してもアップロード成功扱い） =====
+function sendUploadLineNotify(docId,sName,fName,uploadedAt){
+  if(!NOTIFY_API_URL)return;
+  fetch(NOTIFY_API_URL,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({staffName:sName,facilityName:fName,uploadedAt:uploadedAt})
+  }).then(function(r){
+    if(r.ok){
+      authFetch(DB_DOCS+'/'+docId+'/lineNotifiedAt.json',{
+        method:'PUT',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(new Date().toISOString())
+      }).catch(function(e){console.error('[LINE通知] lineNotifiedAt 保存失敗:',e);});
+    } else {
+      r.text().then(function(t){
+        console.error('[LINE通知] 送信失敗: HTTP '+r.status+' '+t);
+      });
+    }
+  }).catch(function(e){
+    console.error('[LINE通知] ネットワークエラー:',e);
   });
 }
 function loadDocumentList(callback){
