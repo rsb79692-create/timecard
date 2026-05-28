@@ -263,9 +263,15 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 <div class="wrap" id="app"></div>
 <script>
 console.log("[TC VERSION] 2026-05-12 hash-token-fix-2");
-// ===== ファイル表示名整形（タイムスタンプ・拡張子を除去） =====
+// ===== ファイル表示名整形（先頭タイムスタンプ・日時部分を除去して人間が読める名前に変換） =====
 function getDisplayFileName(name){
-  return (name||'').replace(/_\d+\.[^.]+$/,'').replace(/\.[^.]+$/,'');
+  if(!name)return '';
+  var n=name;
+  // 旧形式：先頭のUnixタイムスタンプ (例: 1748000000000_山田太郎_雇用契約書.jpg)
+  n=n.replace(/^\d{10,13}_/,'');
+  // 新形式：スタッフアップロードの日時部分 (例: 山田太郎_2026-05-28_1030_雇用契約書.jpg)
+  n=n.replace(/_\d{4}-\d{2}-\d{2}_\d{4}(?=_)/,'');
+  return n;
 }
 // ===== カスタムモーダル =====
 function showModal(opts){
@@ -475,6 +481,7 @@ var staffHrmTab="在籍中";
 var csvPreviewType=""; // "daily" or "monthly"
 var viewerExpandedStaff=null;
 var docList=[];var docLoading=false;var selectedDocFile=null;
+var selectedStaffDocIds=new Set();
 var staffUploadFile=null;var staffUploadMsg=null;
 var selectedWorkFacility=null;
 var masterDepts=loadData("tc_master_depts",[]);
@@ -1881,21 +1888,27 @@ function render(){
         var ft=(d.fileType||'').toLowerCase();
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
         var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
-        var safeName=(d.fileName||'').replace(/'/g,'&#39;');
+        var displayName=getDisplayFileName(d.fileName);
+        var safeDisplayName=displayName.replace(/'/g,'&#39;');
+        var displayTitle=showUploader?getDisplayFileName(d.title):d.title;
+        var chkHtml=showUploader
+          ?'<input type="checkbox" class="staff-doc-checkbox" data-docid="'+d.id+'"'+(selectedStaffDocIds.has(d.id)?' checked':'')+' style="width:16px;height:16px;cursor:pointer;accent-color:#1e40af;flex-shrink:0;margin-top:6px;">'
+          :'';
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#f1f3f5;">'
           +'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">'
+          +chkHtml
           +'<span style="font-size:1.5rem;flex-shrink:0;margin-top:2px;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
-          +'<div style="font-weight:700;font-size:.92rem;">'+d.title+'</div>'
+          +'<div style="font-weight:700;font-size:.92rem;">'+displayTitle+'</div>'
           +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;word-break:break-all;">'
           +(showUploader?'提出者: <b style="color:#0f172a;">'+d.uploadedBy+'</b> &nbsp;':'')
-          +getDisplayFileName(d.fileName)+' ('+sizeStr+') &nbsp;'+date+'</div>'
+          +displayName+' ('+sizeStr+') &nbsp;'+date+'</div>'
           +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#475569;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
           +'</div>'
           +'</div>'
           +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeName+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
+          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeDisplayName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeDisplayName+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
           +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
           +'</div>'
           +'</div>';
@@ -1917,8 +1930,20 @@ function render(){
           +adminDocs.map(function(d){return renderDocItem(d,false);}).join('')
           +'</div>';
       }
+      var staffBulkBar='';
+      if(!docLoading&&staffDocs.length){
+        staffBulkBar='<div id="staff-doc-bulk-bar" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:12px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:2px;">'
+          +'<button id="btn-staff-doc-all" style="background:#dde1e7;color:#374151;border:1px solid #adb5bd;padding:5px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">全選択</button>'
+          +'<button id="btn-staff-doc-none" style="background:#dde1e7;color:#374151;border:1px solid #adb5bd;padding:5px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">選択解除</button>'
+          +'<span id="staff-doc-sel-count" style="font-size:.82rem;color:#475569;min-width:64px;">選択中：0件</span>'
+          +'<div style="flex:1;"></div>'
+          +'<button id="btn-staff-doc-dl" disabled style="background:#e5e7eb;color:#9ca3af;border:1px solid #d1d5db;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:default;font-family:inherit;">📥 一括DL(ZIP)</button>'
+          +'<button id="btn-staff-doc-del" disabled style="background:#e5e7eb;color:#9ca3af;border:1px solid #d1d5db;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:default;font-family:inherit;">🗑 一括削除</button>'
+          +'</div>';
+      }
       var staffDocListHtml='<div class="admin-card">'
-        +'<div class="admin-title" style="margin-bottom:12px;">👤 スタッフ提出書類'+(staffDocs.length?' ('+staffDocs.length+'件)':'')+'</div>'
+        +'<div class="admin-title" style="margin-bottom:10px;">👤 スタッフ提出書類'+(staffDocs.length?' ('+staffDocs.length+'件)':'')+'</div>'
+        +staffBulkBar
         +(docLoading
           ?'<div class="empty">読み込み中...</div>'
           :!staffDocs.length
@@ -2674,6 +2699,49 @@ function render(){
     document.querySelectorAll(".btn-doc-delete").forEach(function(b){
       b.onclick=function(){deleteDocument(b.dataset.docid);};
     });
+    // スタッフ提出書類 一括操作
+    var staffBulkBarEl=document.getElementById('staff-doc-bulk-bar');
+    if(staffBulkBarEl){
+      var updateStaffDocBar=function(){
+        var n=0;
+        document.querySelectorAll('.staff-doc-checkbox').forEach(function(cb){if(cb.checked)n++;});
+        var cntEl=document.getElementById('staff-doc-sel-count');
+        var dlBtn=document.getElementById('btn-staff-doc-dl');
+        var delBtn=document.getElementById('btn-staff-doc-del');
+        if(cntEl)cntEl.textContent='選択中：'+n+'件';
+        var ena=n>0;
+        if(dlBtn){dlBtn.disabled=!ena;dlBtn.style.background=ena?'#eff4ff':'#e5e7eb';dlBtn.style.color=ena?'#1e40af':'#9ca3af';dlBtn.style.borderColor=ena?'#c7d7fd':'#d1d5db';dlBtn.style.cursor=ena?'pointer':'default';}
+        if(delBtn){delBtn.disabled=!ena;delBtn.style.background=ena?'#fff1f2':'#e5e7eb';delBtn.style.color=ena?'#e11d48':'#9ca3af';delBtn.style.borderColor=ena?'#fecdd3':'#d1d5db';delBtn.style.cursor=ena?'pointer':'default';}
+      }
+      document.querySelectorAll('.staff-doc-checkbox').forEach(function(cb){
+        cb.onchange=function(){
+          if(this.checked)selectedStaffDocIds.add(this.dataset.docid);
+          else selectedStaffDocIds.delete(this.dataset.docid);
+          updateStaffDocBar();
+        };
+      });
+      var sdAllBtn=document.getElementById('btn-staff-doc-all');
+      if(sdAllBtn)sdAllBtn.onclick=function(){
+        document.querySelectorAll('.staff-doc-checkbox').forEach(function(cb){cb.checked=true;selectedStaffDocIds.add(cb.dataset.docid);});
+        updateStaffDocBar();
+      };
+      var sdNoneBtn=document.getElementById('btn-staff-doc-none');
+      if(sdNoneBtn)sdNoneBtn.onclick=function(){
+        document.querySelectorAll('.staff-doc-checkbox').forEach(function(cb){cb.checked=false;selectedStaffDocIds.delete(cb.dataset.docid);});
+        updateStaffDocBar();
+      };
+      var sdDlBtn=document.getElementById('btn-staff-doc-dl');
+      if(sdDlBtn)sdDlBtn.onclick=function(){
+        var ids=[...selectedStaffDocIds];if(!ids.length)return;
+        bulkDownloadStaffDocs(ids);
+      };
+      var sdDelBtn=document.getElementById('btn-staff-doc-del');
+      if(sdDelBtn)sdDelBtn.onclick=function(){
+        var ids=[...selectedStaffDocIds];if(!ids.length)return;
+        bulkDeleteStaffDocs(ids);
+      };
+      updateStaffDocBar();
+    }
     return;
   }
 }
@@ -3319,6 +3387,52 @@ function deleteDocument(docId){
   });
 }
 
+function bulkDownloadStaffDocs(ids){
+  var docs=docList.filter(function(d){return ids.indexOf(d.id)>=0;});
+  if(!docs.length)return;
+  showConfirm('選択した'+docs.length+'件の書類をZIPでダウンロードします。よろしいですか？',function(){
+    var ov=document.createElement('div');
+    ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
+    ov.innerHTML='<div style="background:#fff;border-radius:2px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
+    document.body.appendChild(ov);
+    var zip=new JSZip();
+    Promise.all(docs.map(function(d){
+      var dlName=getDisplayFileName(d.fileName);
+      return fetch(d.downloadURL)
+        .then(function(res){return res.blob();})
+        .then(function(blob){zip.file(dlName,blob);})
+        .catch(function(){});
+    }))
+    .then(function(){return zip.generateAsync({type:'blob'});})
+    .then(function(content){
+      if(ov.parentNode)document.body.removeChild(ov);
+      var now=new Date();
+      var fname='スタッフ書類_'+now.getFullYear()+pad(now.getMonth()+1)+pad(now.getDate())+'.zip';
+      var a=document.createElement('a');a.href=URL.createObjectURL(content);a.download=fname;a.click();URL.revokeObjectURL(a.href);
+    })
+    .catch(function(){
+      if(ov.parentNode)document.body.removeChild(ov);
+      showAlert('一括ダウンロードに失敗しました');
+    });
+  });
+}
+function bulkDeleteStaffDocs(ids){
+  if(!ids.length)return;
+  showConfirm('選択した'+ids.length+'件の書類を削除します。この操作は取り消せません。\nよろしいですか？',function(){
+    Promise.all(ids.map(function(id){
+      return Promise.all([
+        authFetch(DB_DOCS+'/'+id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
+        authFetch(DB_DOCS+'/'+id+'/downloadURL.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify('')})
+      ]);
+    })).then(function(){
+      selectedStaffDocIds.clear();
+      showAlert(ids.length+'件を削除しました',function(){setTab('documents');});
+    }).catch(function(){
+      showAlert('削除に失敗した項目があります');
+      setTab('documents');
+    });
+  });
+}
 function dlCSV(csv,fname){
   var bom="\uFEFF";
   var blob=new Blob([bom+csv],{type:"text/csv;charset=utf-8;"});
