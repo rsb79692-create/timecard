@@ -3384,16 +3384,19 @@ function uploadStaffDocument(){
           storageRef:storagePath,downloadURL:downloadURL,
           uploadedAt:now2.toISOString(),uploadedBy:staffName,isStaffUpload:true,isActive:true
         };
+        console.log('[UPLOAD] Storage upload OK, saving metadata...');
         authFetch(DB_DOCS+'/'+docId+'.json',{
           method:'PUT',headers:{'Content-Type':'application/json'},
           body:JSON.stringify(metadata)
         }).then(function(){
+          console.log('[UPLOAD] metadata saved. calling sendUploadNotify...');
           staffUploadFile=null;
           staffUploadMsg='送信しました';
           render();
           setTimeout(function(){staffUploadMsg=null;render();},3000);
           sendUploadNotify(docId,staffName,facilityName,now2.toISOString());
-        }).catch(function(){
+        }).catch(function(e){
+          console.error('[UPLOAD] metadata save failed:', e);
           showAlert('メタデータの保存に失敗しました');
           if(btn){btn.disabled=false;btn.textContent='送信する';}
         });
@@ -3416,24 +3419,37 @@ function uploadStaffDocument(){
 }
 // ===== 画像アップロード通知（非同期・失敗してもアップロード成功扱い） =====
 function sendUploadNotify(docId,sName,fName,uploadedAt){
-  if(!NOTIFY_API_URL)return;
+  console.log('[NOTIFY] sendUploadNotify called', {docId:docId,staffName:sName,facilityName:fName,uploadedAt:uploadedAt});
+  console.log('[NOTIFY] NOTIFY_API_URL=', NOTIFY_API_URL);
+  if(!NOTIFY_API_URL){
+    console.warn('[NOTIFY] NOTIFY_API_URL が空のためスキップ');
+    return;
+  }
+  var payload={staffName:sName,facilityName:fName,uploadedAt:uploadedAt};
+  console.log('[NOTIFY] fetch 開始... payload=', JSON.stringify(payload));
   fetch(NOTIFY_API_URL,{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({staffName:sName,facilityName:fName,uploadedAt:uploadedAt})
+    body:JSON.stringify(payload)
   }).then(function(r){
+    console.log('[NOTIFY] fetch response status=', r.status, 'ok=', r.ok);
     if(r.ok){
-      authFetch(DB_DOCS+'/'+docId+'/lineNotifiedAt.json',{
+      console.log('[NOTIFY] 通知成功。uploadNotifiedAt を書き込み中...');
+      authFetch(DB_DOCS+'/'+docId+'/uploadNotifiedAt.json',{
         method:'PUT',headers:{'Content-Type':'application/json'},
         body:JSON.stringify(new Date().toISOString())
-      }).catch(function(e){console.error('[LINE通知] lineNotifiedAt 保存失敗:',e);});
+      }).then(function(){
+        console.log('[NOTIFY] uploadNotifiedAt 書き込み完了');
+      }).catch(function(e){
+        console.error('[NOTIFY] uploadNotifiedAt 保存失敗:', e);
+      });
     } else {
       r.text().then(function(t){
-        console.error('[LINE通知] 送信失敗: HTTP '+r.status+' '+t);
+        console.error('[NOTIFY] 送信失敗: HTTP '+r.status+' body='+t);
       });
     }
   }).catch(function(e){
-    console.error('[LINE通知] ネットワークエラー:',e);
+    console.error('[NOTIFY] fetch catch エラー:', e);
   });
 }
 function loadDocumentList(callback){
