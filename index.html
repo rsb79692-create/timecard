@@ -263,15 +263,62 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
 <div class="wrap" id="app"></div>
 <script>
 console.log("[TC VERSION] 2026-05-12 hash-token-fix-2");
-// ===== ファイル表示名整形（先頭タイムスタンプ・日時部分を除去して人間が読める名前に変換） =====
-function getDisplayFileName(name){
+// ===== ファイル表示名整形 =====
+// 方針: 巨大ID・epochタイムスタンプを除去/変換し、「名前_書類名_YYYY-MM-DD.ext」順に整理
+// uploadedAt: Firebaseのメタデータ日時文字列。巨大IDを日付に置換する際に使用（任意）
+function getDisplayFileName(name,uploadedAt){
   if(!name)return '';
-  var n=name;
-  // 旧形式：先頭のUnixタイムスタンプ (例: 1748000000000_山田太郎_雇用契約書.jpg)
-  n=n.replace(/^\d{10,13}_/,'');
-  // 新形式：スタッフアップロードの日時部分 (例: 山田太郎_2026-05-28_1030_雇用契約書.jpg)
-  n=n.replace(/_\d{4}-\d{2}-\d{2}_\d{4}(?=_)/,'');
-  return n;
+  var lastDot=name.lastIndexOf('.');
+  var ext=lastDot>=0?name.slice(lastDot):'';
+  var stem=lastDot>=0?name.slice(0,lastDot):name;
+  var parts=stem.split('_');
+  var textParts=[];
+  var dateParts=[];
+  var hasDate=false;
+  var prevWasDate=false;
+  var hugeRemoved=false;
+  function toDateStr(d){return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());}
+  for(var i=0;i<parts.length;i++){
+    var p=parts[i];
+    if(!p){prevWasDate=false;continue;}
+    // YYYY-MM-DD → 日付として末尾へ
+    if(/^\d{4}-\d{2}-\d{2}$/.test(p)){
+      var pd=new Date(p);
+      if(!isNaN(pd)){dateParts.push(p);hasDate=true;prevWasDate=true;continue;}
+    }
+    // 日付直後の4桁 (HHMM) → 時刻なので削除
+    if(prevWasDate&&/^\d{4}$/.test(p)){prevWasDate=false;continue;}
+    prevWasDate=false;
+    // 15桁以上 → 巨大ID・UUID系 → 削除(uploadedAtで代替)
+    if(/^\d{15,}$/.test(p)){hugeRemoved=true;continue;}
+    // 14桁 → YYYYMMDDHHmmss → YYYY-MM-DDに変換
+    if(/^\d{14}$/.test(p)){
+      var y=p.slice(0,4),mo=p.slice(4,6),dy=p.slice(6,8);
+      var pd2=new Date(y+'-'+mo+'-'+dy);
+      if(!isNaN(pd2)&&parseInt(y,10)>=2000){dateParts.push(y+'-'+mo+'-'+dy);hasDate=true;continue;}
+    }
+    // 10〜13桁 → epochタイムスタンプ(ms/s) → YYYY-MM-DDに変換
+    if(/^\d{10,13}$/.test(p)){
+      var ts=parseInt(p,10);
+      var tsMs=p.length<=10?ts*1000:ts;
+      var td=new Date(tsMs);
+      if(td.getFullYear()>=2000&&td.getFullYear()<=2100){dateParts.push(toDateStr(td));hasDate=true;continue;}
+    }
+    // 8桁 → YYYYMMDD → YYYY-MM-DDに変換
+    if(/^\d{8}$/.test(p)){
+      var y2=p.slice(0,4),mo2=p.slice(4,6),dy2=p.slice(6,8);
+      var pd3=new Date(y2+'-'+mo2+'-'+dy2);
+      if(!isNaN(pd3)&&parseInt(y2,10)>=2000){dateParts.push(y2+'-'+mo2+'-'+dy2);hasDate=true;continue;}
+    }
+    textParts.push(p);
+  }
+  // 巨大IDを除去した場合のみ、uploadedAtの日付を代替として末尾に追加
+  if(hugeRemoved&&!hasDate&&uploadedAt){
+    var ud=new Date(uploadedAt);
+    if(!isNaN(ud))dateParts.push(toDateStr(ud));
+  }
+  // 名前_書類名_日付.ext の順で結合
+  return textParts.concat(dateParts).join('_')+ext;
 }
 // ===== カスタムモーダル =====
 function showModal(opts){
@@ -937,17 +984,18 @@ function render(){
         var ft=(d.fileType||'').toLowerCase();
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
         var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
-        var safeName=(d.fileName||'').replace(/'/g,'&#39;');
+        var vDisplayName=getDisplayFileName(d.fileName,d.uploadedAt);
+        var vSafeDisplayName=vDisplayName.replace(/'/g,'&#39;');
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#fff;">'
           +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
           +'<span style="font-size:1.4rem;flex-shrink:0;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
           +'<div style="font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+d.title+'</div>'
-          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">'+getDisplayFileName(d.fileName)+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
+          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">'+vDisplayName+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
           +'</div></div>'
           +'<div style="display:flex;gap:8px;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+safeName+'\',\''+d.id+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
+          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+vSafeDisplayName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+vSafeDisplayName+'\',\''+d.id+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>'
           +'</div>';
       }).join('');
@@ -1888,9 +1936,9 @@ function render(){
         var ft=(d.fileType||'').toLowerCase();
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
         var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
-        var displayName=getDisplayFileName(d.fileName);
+        var displayName=getDisplayFileName(d.fileName,d.uploadedAt);
         var safeDisplayName=displayName.replace(/'/g,'&#39;');
-        var displayTitle=showUploader?getDisplayFileName(d.title):d.title;
+        var displayTitle=showUploader?getDisplayFileName(d.title,d.uploadedAt):d.title;
         var chkHtml=showUploader
           ?'<input type="checkbox" class="staff-doc-checkbox" data-docid="'+d.id+'"'+(selectedStaffDocIds.has(d.id)?' checked':'')+' style="width:16px;height:16px;cursor:pointer;accent-color:#1e40af;flex-shrink:0;margin-top:6px;">'
           :'';
@@ -3397,7 +3445,7 @@ function bulkDownloadStaffDocs(ids){
     document.body.appendChild(ov);
     var zip=new JSZip();
     Promise.all(docs.map(function(d){
-      var dlName=getDisplayFileName(d.fileName);
+      var dlName=getDisplayFileName(d.fileName,d.uploadedAt);
       return fetch(d.downloadURL)
         .then(function(res){return res.blob();})
         .then(function(blob){zip.file(dlName,blob);})
