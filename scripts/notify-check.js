@@ -262,12 +262,26 @@ async function main() {
       if (seenUnapproved[key]) return;
       seenUnapproved[key] = true;
       if (!approvals[key]) {
-        unapprovedList.push({ date: r.date, staff: r.staff });
+        unapprovedList.push({
+          date:     r.date,
+          staff:    r.staff,
+          facility: r.workFacility || r.facilityName || "施設不明",
+        });
       }
     });
 
   console.log(`[CHECK] 未承認: ${unapprovedList.length} 件`);
-  unapprovedList.slice(0, 3).forEach((x) => console.log(`  ${x.date} ${x.staff}`));
+  unapprovedList.forEach((x) => {
+    const key = `${x.date}__${x.staff}`;
+    console.log(
+      `[UNAPPROVED_DETAIL]` +
+      ` date=${x.date}` +
+      ` staff=${x.staff}` +
+      ` facility=${x.facility}` +
+      ` approvalKey=${key}` +
+      ` approvalValue=${JSON.stringify(approvals[key])}`
+    );
+  });
 
   // ========================================
   // ■ 打刻漏れチェック
@@ -283,10 +297,21 @@ async function main() {
     .forEach((r) => {
       const key = `${r.date}__${r.staff}`;
       if (!punchMap[key]) {
-        punchMap[key] = { date: r.date, staff: r.staff, hasIn: false, hasOut: false };
+        punchMap[key] = {
+          date:     r.date,
+          staff:    r.staff,
+          facility: r.workFacility || r.facilityName || "施設不明",
+          hasIn:    false,
+          hasOut:   false,
+          inTime:   null,
+          outTime:  null,
+        };
       }
-      if (r.type === "clockIn")  punchMap[key].hasIn  = true;
-      if (r.type === "clockOut") punchMap[key].hasOut = true;
+      if (r.type === "clockIn")  { punchMap[key].hasIn  = true; punchMap[key].inTime  = r.time || null; }
+      if (r.type === "clockOut") { punchMap[key].hasOut = true; punchMap[key].outTime = r.time || null; }
+      if (punchMap[key].facility === "施設不明") {
+        punchMap[key].facility = r.workFacility || r.facilityName || "施設不明";
+      }
     });
 
   const missingList = Object.values(punchMap).filter((x) => {
@@ -295,9 +320,17 @@ async function main() {
   });
 
   console.log(`[CHECK] 打刻漏れ: ${missingList.length} 件`);
-  missingList.slice(0, 3).forEach((x) => {
-    const status = x.hasIn ? "clockInのみ" : "clockOutのみ";
-    console.log(`  ${x.date} ${x.staff} (${status})`);
+  missingList.forEach((x) => {
+    const reason = x.hasIn ? "退勤漏れ(clockInのみ)" : "出勤漏れ(clockOutのみ)";
+    console.log(
+      `[MISSING_DETAIL]` +
+      ` date=${x.date}` +
+      ` staff=${x.staff}` +
+      ` facility=${x.facility}` +
+      ` clockIn=${x.inTime  ?? "なし"}` +
+      ` clockOut=${x.outTime ?? "なし"}` +
+      ` reason=${reason}`
+    );
   });
 
   // ========================================
