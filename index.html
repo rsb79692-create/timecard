@@ -465,7 +465,12 @@ function fmtDate(d){return d.getFullYear()+"/"+pad(d.getMonth()+1)+"/"+pad(d.get
 function fmtDateKey(d){return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());}
 function fmtTime(d){return pad(d.getHours())+":"+pad(d.getMinutes());}
 function fmtTimeSec(d){return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());}
-function monthKey(iso){return iso.substring(0,7);}
+function monthKey(iso){return iso?iso.substring(0,7):"";}
+// JST 明示で date+time から Date を生成（UTC解釈ズレを防ぐ）
+function parseJstDateTime(date,time){
+  if(!date||!time)return null;
+  return new Date(date+"T"+time+":00+09:00");
+}
 function toHM(ms){if(ms<=0)return"";return Math.floor(ms/3600000)+":"+pad(Math.floor((ms%3600000)/60000));}
 function calcTenure(hireDateStr){
   if(!hireDateStr)return"";
@@ -636,7 +641,7 @@ function attachTimeCellHandlers(){
             render();
           },function(){cancel();});
         } else if(newTime){
-          var d2=new Date(date);d2.setHours(hh,mm,0,0);
+          var d2=parseJstDateTime(date,pad(hh)+":"+pad(mm));
           var nowIso=new Date().toISOString();
           if(id){
             var rec=records.find(function(r){return r.id===id;});
@@ -870,10 +875,10 @@ function render(){
         +'</tr>';
     }).join("");
     // 月次CSV用データ
-    var vMonths=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var vMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(vMonths.indexOf(selMonth)<0)vMonths.unshift(selMonth);
     var vMonthOpts=vMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var vMRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+    var vMRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     app.innerHTML='<div class="admin-sticky-bar" style="padding:10px 16px 8px;">'
@@ -1225,10 +1230,10 @@ function render(){
   // ── スタッフ詳細 ──
   if(screen==="staffDetail"){
     var nm=selStaffDetail;
-    var months2=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var months2=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.timestamp)===selMonth;});
+    var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.date)===selMonth;});
     var year=parseInt(selMonth.split("-")[0]),mon=parseInt(selMonth.split("-")[1])-1;
     var daysInMonth=new Date(year,mon+1,0).getDate();
     var allDates=[];
@@ -1380,10 +1385,10 @@ function render(){
   }
 
   if(screen==="csvPreview"){
-    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(prevMonths.indexOf(selMonth)<0)prevMonths.unshift(selMonth);
     var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var mRecsPrev=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+    var mRecsPrev=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var activeStaffP=staffList.slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var allLocsP=masterLocs.slice();
     var allTypesP=[...new Set(staffList.map(function(s){return s.employmentType||"";}).filter(Boolean))].sort();
@@ -1487,12 +1492,12 @@ function render(){
     filterCsvPreview();
     var dlBtn=document.getElementById("btn-csv-preview-dl");
     if(dlBtn)dlBtn.onclick=function(){
-      var chkRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted&&r.type==="clockIn";});
+      var chkRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted&&r.type==="clockIn";});
       var chkKeys={};var unapproved=0;
       chkRecs.forEach(function(r){var k=r.date+"__"+r.staff;if(!chkKeys[k]){chkKeys[k]=true;if(!approvals[k])unapproved++;}});
       if(unapproved>0){showAlert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       if(csvPreviewType==="daily"){
-        var mRe2=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var mRe2=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var DAYS2=["日","月","火","水","木","金","土"];
@@ -1521,7 +1526,7 @@ function render(){
         });
         dlCSV(hdr2+"\n"+rows2.join("\n"),"穂乃味_日次勤怠_"+selMonth+".csv");
       } else {
-        var mRe3=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var mRe3=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs3=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数";
@@ -1540,9 +1545,9 @@ function render(){
   }
 
   if(screen==="admin"){
-    var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var months=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
-    var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
+    var mRecs=records.filter(function(r){return monthKey(r.date)===selMonth;});
     var tc="";
     var counts=getNotificationCounts();
 
@@ -1697,7 +1702,7 @@ function render(){
     }
 
     if(adminTab==="export"){
-      var mRecsClean=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var mRecsClean=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       // staffListを基準に（よみがな順・在籍者のみ）
       var activeStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
         .sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
@@ -2069,7 +2074,7 @@ function render(){
     }
 
     if(adminTab==="support"){
-      var supRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var supRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var supCinRecs=supRecs.filter(function(r){
         return r.type==="clockIn"&&(
           r.isSupportWork===true||
@@ -2337,7 +2342,7 @@ function render(){
       if(!hv||!mv)return;
       var newTime=hv+":"+mv;
       var parts=[parseInt(hv),parseInt(mv)];
-      var d=new Date(date);d.setHours(parts[0],parts[1],0,0);
+      var d=parseJstDateTime(date,hv+":"+mv);
       if(id){
         var rec=records.find(function(r){return r.id===id;});
         if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
@@ -2430,7 +2435,7 @@ function render(){
     // 人別明細CSV
     var csvSD=document.getElementById("btn-csv-staff-detail");
     if(csvSD)csvSD.onclick=function(){
-      var mR=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var mR=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       dlStaffDetailCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
     };
 
@@ -2439,7 +2444,7 @@ function render(){
     if(supSelM)supSelM.onchange=function(){selMonth=supSelM.value;render();};
     var supCsvSum=document.getElementById("btn-sup-csv-sum");
     if(supCsvSum)supCsvSum.onclick=function(){
-      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
       var sdT=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",ms:calcMs(dr)};});
       var smT={};
@@ -2450,7 +2455,7 @@ function render(){
     };
     var supCsvDet=document.getElementById("btn-sup-csv-det");
     if(supCsvDet)supCsvDet.onclick=function(){
-      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
       var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
       var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
@@ -2478,7 +2483,7 @@ function render(){
       var time=document.getElementById("add-time")?.value;
       if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
       var parts=time.split(":");
-      var ts=new Date(date);ts.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
+      var ts=parseJstDateTime(date,time);
       var nr={id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
       records.push(nr);saveRecord(nr);render();
     };
@@ -2492,8 +2497,7 @@ function render(){
         var rec=records.find(function(r){return r.id===id;});
         if(!rec)return;
         if(!rec.editedFrom)rec.editedFrom=rec.time;
-        var parts=inp.value.split(":");
-        var d=new Date(rec.date);d.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
+        var d=parseJstDateTime(rec.date,inp.value);
         rec.time=inp.value;rec.timestamp=d.toISOString();
         saveRecord(rec);render();
       };
@@ -3682,7 +3686,7 @@ async function initFirebase() {
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
     if(viewerPending){
       var _vtd=fbViewerTokenData;
-      var _todayIso=new Date().toISOString().slice(0,10);
+      var _todayIso=fmtDateKey(new Date());
       if(!_vtd||!_vtd.enabled){viewerMode=false;viewerInvalid=true;}
       else if(_vtd.expiresAt&&_vtd.expiresAt<_todayIso){viewerMode=false;viewerExpired=true;}
       else{viewerMode=true;viewerInvalid=false;}
