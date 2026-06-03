@@ -485,6 +485,11 @@ const DEF_STAFF=[
 
 // ===== ユーティリティ =====
 function pad(n){return String(n).padStart(2,"0");}
+// 衝突耐性のあるID生成（新規レコード・書類用）
+function generateRecordId(){
+  if(window.crypto&&typeof window.crypto.randomUUID==="function"){return window.crypto.randomUUID();}
+  return"rec_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
+}
 function fmtDate(d){return d.getFullYear()+"/"+pad(d.getMonth()+1)+"/"+pad(d.getDate());}
 function fmtDateKey(d){return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());}
 function fmtTime(d){return pad(d.getHours())+":"+pad(d.getMinutes());}
@@ -673,7 +678,7 @@ function attachTimeCellHandlers(){
           } else {
             var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
             if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
-            else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
+            else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
           }
           render();
         } else {
@@ -2377,7 +2382,7 @@ function render(){
         // 既存の同日同スタッフ同種別を確認
         var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
         if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();saveRecord(exist);}
-        else{var nr={id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
+        else{var nr={id:generateRecordId(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
       }
     }
     document.querySelectorAll(".sel-hour,.sel-min").forEach(function(el){
@@ -2511,7 +2516,7 @@ function render(){
       if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
       var parts=time.split(":");
       var ts=parseJstDateTime(date,time);
-      var nr={id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
+      var nr={id:generateRecordId(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
       records.push(nr);saveRecord(nr);render();
     };
 
@@ -2974,7 +2979,7 @@ function _execPunch(type,d){
   var _fn=facilityName||"";
   // facilityName: 1)URLトークン施設 → 2)スタッフ所属施設 の順で補完
   var _effFn=_fn||_hf;
-  var nr={id:""+d.getTime(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  var nr={id:generateRecordId(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
   if(_effFn)nr.facilityName=_effFn;
   if(type==="clockIn"){
     // workFacility優先順位: 1)応援先選択 2)URLトークン施設 3)スタッフ所属施設
@@ -3357,7 +3362,7 @@ function uploadDocument(){
   if(!title){showAlert('タイトルを入力してください');return;}
   var memo=(document.getElementById('doc-memo')||{value:''}).value.trim();
   var ext=(f.name.split('.').pop()||'').toLowerCase();
-  var docId='doc'+Date.now();
+  var docId=generateRecordId();
   var storagePath='documents/'+docId+'_'+f.name;
   var encodedPath=encodeURIComponent(storagePath);
   var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
@@ -3436,7 +3441,7 @@ function uploadStaffDocument(){
   var timeStr=pad(now2.getHours())+pad(now2.getMinutes());
   var renamedName=staffName+'_'+dateStr+'_'+timeStr+'_'+f.name;
   var ext=(f.name.split('.').pop()||'').toLowerCase();
-  var docId='sdoc'+Date.now();
+  var docId=generateRecordId();
   var storagePath='staff_uploads/'+docId+'_'+renamedName;
   var encodedPath=encodeURIComponent(storagePath);
   var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
