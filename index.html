@@ -109,20 +109,49 @@ function patchRecord(id, partial) {
   var url = FB_URL + "/tc5_records/" + id + ".json";
   console.log("[patchRecord] called:", id, partial, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
+  savingCount++;
   authFetch(url, {
     method: "PATCH",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(partial)
   }).then(function(res){
+    savingCount--;
     if(!res.ok){
       res.text().then(function(t){console.error("[patchRecord] HTTP", res.status, id, t);});
     } else {
       console.log("[patchRecord] OK:", id);
     }
-  }).catch(function(e){console.error("[patchRecord] network error:", e);});
+  }).catch(function(e){savingCount--;console.error("[patchRecord] network error:", e);});
 }
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
+}
+
+// ===== tc5_approvals 書込ヘルパー =====
+function saveApprovals(approvalsObj) {
+  var url = FB_URL + "/tc5_approvals.json";
+  console.log("[saveApprovals] called");
+  try { localStorage.setItem("tc5_approvals", JSON.stringify(approvalsObj)); } catch(e) {}
+  savingCount++;
+  authFetch(url, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(approvalsObj)
+  }).then(function(res) {
+    savingCount--;
+    if (!res.ok) {
+      res.text().then(function(t) {
+        console.error("[saveApprovals] HTTP", res.status, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
+    } else {
+      console.log("[saveApprovals] OK");
+    }
+  }).catch(function(e) {
+    savingCount--;
+    console.error("[saveApprovals] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 
 // 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
@@ -157,7 +186,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_approvals.json")
       .then(function(r){return r.json();})
       .then(function(val){
-        if(val && JSON.stringify(val)!==JSON.stringify(approvals)){
+        if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
           if(!document.querySelector('.time-edit-wrap')) render();
@@ -1312,15 +1341,21 @@ function render(){
     if(dm)dm.onchange=function(){selMonth=dm.value;render();};
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
-        approvals[_dk+"__"+_nm]=true;saveData("tc5_approvals",approvals);render();
+        b.disabled=true;
+        approvals[_dk+"__"+_nm]=true;saveApprovals(approvals);render();
       };
     });
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
-      b.onclick=function(){delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveData("tc5_approvals",approvals);render();};
+      b.onclick=function(){
+        if(b.disabled)return;
+        b.disabled=true;
+        delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveApprovals(approvals);render();
+      };
     });
     var bulkBtn=document.getElementById("btn-bulk-approve-detail");
     if(bulkBtn)bulkBtn.onclick=function(){
@@ -1336,7 +1371,7 @@ function render(){
         });
         if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
         _approved.forEach(function(dk){approvals[dk+"__"+nm]=true;});
-        saveData("tc5_approvals",approvals);
+        saveApprovals(approvals);
         showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件",function(){render();});
       });
     };
@@ -2320,12 +2355,14 @@ function render(){
     // 承認
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
+        b.disabled=true;
         approvals[_dk+"__"+_nm]=true;
-        saveData("tc5_approvals",approvals);render();
+        saveApprovals(approvals);render();
       };
     });
 
@@ -2344,7 +2381,7 @@ function render(){
           });
           if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
           _approved.forEach(function(p){approvals[p.date+"__"+p.staff]=true;});
-          saveData("tc5_approvals",approvals);render();
+          saveApprovals(approvals);render();
           showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       } else {
@@ -2363,7 +2400,7 @@ function render(){
           });
           if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
           _approved.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
-          saveData("tc5_approvals",approvals);render();
+          saveApprovals(approvals);render();
           showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       }
@@ -2372,8 +2409,10 @@ function render(){
     // 引き戻し
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
+        b.disabled=true;
         delete approvals[b.dataset.dk+"__"+b.dataset.nm];
-        saveData("tc5_approvals",approvals);render();
+        saveApprovals(approvals);render();
       };
     });
     var sm=document.getElementById("sel-month");
@@ -2554,7 +2593,7 @@ function render(){
             }).catch(function(e){console.error("FB patchRecord error:",e);});
           });
           var na={};Object.keys(approvals).forEach(function(k){na[k.replace("__"+orig,"__"+newN)]=approvals[k];});
-          approvals=na;saveData("tc5_approvals",approvals);
+          approvals=na;saveApprovals(approvals);
           if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
