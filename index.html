@@ -91,17 +91,19 @@ function saveRecord(rec) {
   var url = FB_URL + "/tc5_records/" + rec.id + ".json";
   console.log("[saveRecord] called:", rec.id, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
+  savingCount++;
   authFetch(url, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(rec)
   }).then(function(res){
+    savingCount--;
     if(!res.ok){
       res.text().then(function(t){console.error("[saveRecord] HTTP", res.status, rec.id, t);});
     } else {
       console.log("[saveRecord] OK:", rec.id);
     }
-  }).catch(function(e){console.error("[saveRecord] network error:", e);});
+  }).catch(function(e){savingCount--;console.error("[saveRecord] network error:", e);});
 }
 function patchRecord(id, partial) {
   var url = FB_URL + "/tc5_records/" + id + ".json";
@@ -143,7 +145,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_records.json")
       .then(function(r){return r.json();})
       .then(function(val){
-        if(val){
+        if(val && savingCount===0){
           var arr=Array.isArray(val)?val:Object.values(val);
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
@@ -525,6 +527,7 @@ var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
 var approvals=loadData("tc5_approvals",{});
+var savingCount=0;  // saveRecord 進行中カウンタ（ポーリング巻き戻し防止）
 var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
 var selStaffDetail=null;
 var staffDetailFrom="csvPreview";
