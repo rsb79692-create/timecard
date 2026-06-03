@@ -282,7 +282,14 @@ function formatMissingLines(items) {
   const shown = items.slice(0, MAX_DETAIL_LINES);
   const rest  = items.length - shown.length;
   const lines = shown.map((x) => {
-    const reason = x.hasIn ? "（退勤のみ）" : "（出勤のみ）";
+    let reason;
+    if (x.hasIn !== x.hasOut) {
+      reason = x.hasIn ? "（退勤漏れ）" : "（出勤漏れ）";
+    } else if (x.hasBreakStart && !x.hasBreakEnd) {
+      reason = "（休憩終了漏れ）";
+    } else {
+      reason = "（打刻不整合）";
+    }
     return `・${x.date} ${displayName(x.rawStaff, x.date, x.facility)}${reason}`;
   });
   if (rest > 0) lines.push(`  他 ${rest} 件`);
@@ -470,10 +477,14 @@ async function main() {
         hasOut:          false,
         inTime:          null,
         outTime:         null,
+        hasBreakStart:   false,
+        hasBreakEnd:     false,
       };
     }
-    if (r.type === "clockIn")  { punchMap[key].hasIn  = true; punchMap[key].inTime  = r.time || null; }
-    if (r.type === "clockOut") { punchMap[key].hasOut = true; punchMap[key].outTime = r.time || null; }
+    if (r.type === "clockIn")    { punchMap[key].hasIn        = true; punchMap[key].inTime  = r.time || null; }
+    if (r.type === "clockOut")   { punchMap[key].hasOut       = true; punchMap[key].outTime = r.time || null; }
+    if (r.type === "breakStart") { punchMap[key].hasBreakStart = true; }
+    if (r.type === "breakEnd")   { punchMap[key].hasBreakEnd   = true; }
     if (punchMap[key].facility === "施設不明") {
       punchMap[key].facility = r.workFacility || r.facilityName || "施設不明";
     }
@@ -485,12 +496,23 @@ async function main() {
 
   const missingList = Object.values(punchMap).filter((x) => {
     if (approvalsHas(approvals, x.date, x.rawStaff)) return false;
-    return x.hasIn !== x.hasOut;
+    // clockIn/clockOut の不整合
+    if (x.hasIn !== x.hasOut) return true;
+    // breakStart あり・breakEnd なし（出退勤が揃っている場合のみ追加検出）
+    if (x.hasBreakStart && !x.hasBreakEnd) return true;
+    return false;
   });
 
   console.log(`[CHECK] 打刻漏れ: ${missingList.length} 件`);
   missingList.forEach((x) => {
-    const reason = x.hasIn ? "退勤漏れ(clockInのみ)" : "出勤漏れ(clockOutのみ)";
+    let reason;
+    if (x.hasIn !== x.hasOut) {
+      reason = x.hasIn ? "退勤漏れ(clockInのみ)" : "出勤漏れ(clockOutのみ)";
+    } else if (x.hasBreakStart && !x.hasBreakEnd) {
+      reason = "休憩終了漏れ(breakStartのみ)";
+    } else {
+      reason = "打刻不整合";
+    }
     console.log(
       `[MISSING_DETAIL]` +
       ` date=${x.date}` +
@@ -500,6 +522,8 @@ async function main() {
       ` facility=${x.facility}` +
       ` clockIn=${x.inTime  ?? "なし"}` +
       ` clockOut=${x.outTime ?? "なし"}` +
+      ` breakStart=${x.hasBreakStart}` +
+      ` breakEnd=${x.hasBreakEnd}` +
       ` reason=${reason}`
     );
     // 文字化けが検出された場合: Firebase保存データ自体の文字化けかを判別するための charCode ログ

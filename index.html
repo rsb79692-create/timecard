@@ -2628,8 +2628,30 @@ function render(){
               method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({staff:newN})
             }).catch(function(e){console.error("FB patchRecord error:",e);});
           });
-          var na={};Object.keys(approvals).forEach(function(k){na[k.replace("__"+orig,"__"+newN)]=approvals[k];});
-          approvals=na;saveApprovals(approvals);
+          // approvals: 旧名キーを削除し新名キーを追加する PATCH（全量PUT を避ける）
+          var na={},patchData={},oldSuffix="__"+orig;
+          Object.keys(approvals).forEach(function(k){
+            if(k.length>oldSuffix.length&&k.slice(-oldSuffix.length)===oldSuffix){
+              var nk=k.slice(0,-oldSuffix.length)+"__"+newN;
+              na[nk]=approvals[k];
+              patchData[k]=null;      // 旧キー削除
+              patchData[nk]=approvals[k]; // 新キー追加
+            } else {
+              na[k]=approvals[k];
+            }
+          });
+          approvals=na;
+          localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
+          if(Object.keys(patchData).length>0){
+            savingCount++;
+            authFetch(FB_URL+"/tc5_approvals.json",{
+              method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patchData)
+            }).then(function(res){
+              savingCount--;
+              if(!res.ok){res.text().then(function(t){console.error("[approvals rename] HTTP",res.status,t);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});}
+              else{console.log("[approvals rename] PATCH OK");}
+            }).catch(function(e){savingCount--;console.error("[approvals rename] network error:",e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
+          }
           if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
@@ -3157,11 +3179,6 @@ async function pinOk(){
       authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(e){console.error("[pinOk] PIN hash migration save error:", e);});
       authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(e){console.error("[pinOk] old PIN delete error:", e);});
     }
-  }
-  if(!match){
-    var _n=new Date();
-    var _mmdd=pad(_n.getMonth()+1)+pad(_n.getDate());
-    if(inputStr==="1209"+_mmdd){match=true;}
   }
   if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();}
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
