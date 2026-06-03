@@ -83,7 +83,17 @@ function saveToFirebase(key, val) {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(val)
-  }).catch(function(e){console.error("FB save error:", e);});
+  }).then(function(res){
+    if(!res.ok){
+      res.text().then(function(t){
+        console.error("[saveToFirebase] HTTP", res.status, key, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
+    }
+  }).catch(function(e){
+    console.error("[saveToFirebase] network error:", key, e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
@@ -99,11 +109,18 @@ function saveRecord(rec) {
   }).then(function(res){
     savingCount--;
     if(!res.ok){
-      res.text().then(function(t){console.error("[saveRecord] HTTP", res.status, rec.id, t);});
+      res.text().then(function(t){
+        console.error("[saveRecord] HTTP", res.status, rec.id, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
     } else {
       console.log("[saveRecord] OK:", rec.id);
     }
-  }).catch(function(e){savingCount--;console.error("[saveRecord] network error:", e);});
+  }).catch(function(e){
+    savingCount--;
+    console.error("[saveRecord] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 function patchRecord(id, partial) {
   var url = FB_URL + "/tc5_records/" + id + ".json";
@@ -117,11 +134,18 @@ function patchRecord(id, partial) {
   }).then(function(res){
     savingCount--;
     if(!res.ok){
-      res.text().then(function(t){console.error("[patchRecord] HTTP", res.status, id, t);});
+      res.text().then(function(t){
+        console.error("[patchRecord] HTTP", res.status, id, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
     } else {
       console.log("[patchRecord] OK:", id);
     }
-  }).catch(function(e){savingCount--;console.error("[patchRecord] network error:", e);});
+  }).catch(function(e){
+    savingCount--;
+    console.error("[patchRecord] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
@@ -1012,7 +1036,10 @@ function render(){
                 if(secEl)secEl.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
                 var bBtn=document.getElementById('btn-viewer-bulk-dl');
                 if(bBtn)bBtn.style.display='none';
-              }).catch(function(){});
+              }).catch(function(e){
+                console.error("[viewer-bulk-dl] metadata update failed:", e);
+                showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+              });
             }).catch(function(){if(ov2.parentNode)document.body.removeChild(ov2);showAlert('一括ダウンロードに失敗しました');});
           });
         };
@@ -3122,8 +3149,8 @@ async function pinOk(){
     if(match){
       var h=await hashPin(inputStr);
       ADMIN_PIN_HASH=h;ADMIN_PIN="";
-      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(){});
-      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(){});
+      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(e){console.error("[pinOk] PIN hash migration save error:", e);});
+      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(e){console.error("[pinOk] old PIN delete error:", e);});
     }
   }
   if(!match){
@@ -3665,7 +3692,7 @@ async function initFirebase() {
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
     } else {
-      authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
+      authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
     // 管理者PIN: ハッシュ優先、旧平文フォールバック
     if(fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
