@@ -1996,6 +1996,7 @@ function render(){
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
         var pinVal=staffPins[s.name];
         var pinRevealed=pinRevealSet[s.name];
+        var _pinKey=JSON.stringify(s.name).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
         var pinTd;
         if(!pinVal){
           pinTd='<td style="padding:0 14px;white-space:nowrap;"><span style="color:#9ca3af;font-size:.78rem;">未設定</span></td>';
@@ -2003,12 +2004,12 @@ function render(){
           if(pinRevealed){
             pinTd='<td style="padding:0 14px;white-space:nowrap;">'
               +'<span style="font-family:monospace;font-size:.88rem;color:#0f172a;letter-spacing:.1em;">'+pinVal+'</span>'
-              +'<button onclick="event.stopPropagation();pinRevealSet['+JSON.stringify(s.name)+']=false;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">隠す</button>'
+              +'<button onclick="event.stopPropagation();pinRevealSet['+_pinKey+']=false;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">隠す</button>'
               +'</td>';
           } else {
             pinTd='<td style="padding:0 14px;white-space:nowrap;">'
               +'<span style="color:#9ca3af;font-size:.85rem;letter-spacing:.1em;">••••</span>'
-              +'<button onclick="event.stopPropagation();pinRevealSet['+JSON.stringify(s.name)+']=true;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">表示</button>'
+              +'<button onclick="event.stopPropagation();pinRevealSet['+_pinKey+']=true;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">表示</button>'
               +'</td>';
           }
         } else {
