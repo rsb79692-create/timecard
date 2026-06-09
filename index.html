@@ -2049,24 +2049,25 @@ function render(){
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
         var _sp=getStoredPin(s.name);
+        var _nmEsc=s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
         var pinTd;
         if(!_sp.hash){
           pinTd='<td style="padding:0 14px;white-space:nowrap;">'
             +'<span style="color:#9ca3af;font-size:.78rem;margin-right:6px;">未設定</span>'
-            +'<button class="btn-pin-reset" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
+            +'<button class="btn-pin-reset" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
             +'</td>';
         } else if(_sp.plain){
           pinTd='<td style="padding:0 14px;white-space:nowrap;">'
-            +'<button class="btn-pin-view" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">PIN確認</button>'
-            +'<button class="btn-pin-change" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN変更</button>'
+            +'<button class="btn-pin-view" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">PIN確認</button>'
+            +'<button class="btn-pin-change" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN変更</button>'
             +'</td>';
         } else {
           pinTd='<td style="padding:0 14px;white-space:nowrap;">'
             +'<span style="color:#6b7280;font-size:.78rem;margin-right:6px;">設定済み</span>'
-            +'<button class="btn-pin-reset" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
+            +'<button class="btn-pin-reset" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
             +'</td>';
         }
-        return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
+        return '<tr class="hrm-row" data-nm="'+_nmEsc+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
           +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
           +'<td style="padding:0 14px;overflow:hidden;">'
           +'<div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispName+'</div>'
@@ -2080,8 +2081,8 @@ function render(){
           +'</td>'
           +pinTd
           +'<td style="padding:0 14px;white-space:nowrap;">'
-          +'<button class="btn-hrm-edit" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
-          +'<button class="btn-hrm-del" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+          +'<button class="btn-hrm-edit" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
+          +'<button class="btn-hrm-del" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</td>'
           +'</tr>';
       }).join("");
