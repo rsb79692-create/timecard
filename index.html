@@ -2638,19 +2638,16 @@ function render(){
 
       var plBalRows="";
       if(normBalances.length===0){
-        plBalRows='<tr><td colspan="9" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">残日数データがありません</td></tr>';
+        plBalRows='<tr><td colspan="6" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">残日数データがありません</td></tr>';
       } else {
         staffOrder.forEach(function(nm){
           var rows=normBalances.filter(function(b){return (b.staffName||b.staffId||"")==nm;})
             .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");});
           var tot=staffTotals[nm]||{granted:0,used:0,remain:0};
-          // スタッフ小計行（社員番号列追加で colspan 調整: 旧3→4）
+          // スタッフ小計行
           plBalRows+='<tr style="background:#f0f4fa;border-top:2px solid #adb5bd;">'
-            +'<td colspan="2" style="padding:6px 8px;font-weight:900;font-size:.88rem;color:#1e3a5f;">'+nm
-            +'<span style="font-size:.72rem;color:#475569;font-weight:400;margin-left:6px;">残日数合計（有効期限内）</span></td>'
-            +'<td colspan="4" style="padding:6px 8px;font-size:.78rem;color:#475569;"></td>'
-            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:#1e40af;">'+Math.round(tot.granted*10)/10+'日</td>'
-            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;color:#dc2626;">'+Math.round(tot.used*10)/10+'日</td>'
+            +'<td colspan="2" style="padding:6px 8px;font-weight:900;font-size:.88rem;color:#1e3a5f;">'+nm+'</td>'
+            +'<td colspan="2" style="padding:6px 8px;font-size:.78rem;color:#475569;"></td>'
             +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:900;color:#166534;font-size:1rem;">'+Math.round(tot.remain*10)/10+'日</td>'
             +'<td style="padding:6px 8px;"></td>'
             +'</tr>';
@@ -2679,12 +2676,6 @@ function render(){
               +'<td style="padding:6px 8px;font-size:.78rem;color:'+textColor+';white-space:nowrap;">第'+b._grantNo+'回</td>'
               +'<td style="padding:6px 8px;font-family:monospace;font-size:.82rem;color:'+textColor+';white-space:nowrap;">'+(b.grantDate||"")+'</td>'
               +'<td style="padding:6px 8px;font-family:monospace;font-size:.78rem;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+(b.expiresAt||"")+'</td>'
-              +'<td style="padding:6px 8px;font-size:.72rem;color:'+textColor+';white-space:nowrap;">'+nm+'</td>'
-              +'<td style="padding:6px 8px;font-family:monospace;font-size:.72rem;color:'+(expired?"#9ca3af":"#8496a7")+';white-space:nowrap;">'+dispEmpId+'</td>'
-              +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#1e40af")+';">'+(b.grantedDays||0)+'日</td>'
-              +'<td style="padding:6px 8px;text-align:right;font-family:monospace;color:'+(expired?"#9ca3af":"#dc2626")+';">'
-              +'<input type="number" id="pl-bal-used-'+safeId+'" value="'+(b.usedDays||0)+'" min="0" step="0.5" '+(expired?'disabled ':'')+'style="width:52px;padding:3px 4px;border:1px solid #adb5bd;border-radius:2px;font-size:.78rem;font-family:monospace;text-align:right;background:'+(expired?"#f3f4f6":"#fff")+';">'
-              +'日</td>'
               +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#166534")+';">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
               +'<td style="padding:4px 4px;white-space:nowrap;">'
               +(expired?""
@@ -2790,10 +2781,6 @@ function render(){
         +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与回</th>'
         +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与日</th>'
         +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#b45309;text-align:left;white-space:nowrap;">有効期限</th>'
-        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">氏名</th>'
-        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#8496a7;text-align:left;white-space:nowrap;">社員番号</th>'
-        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#1e40af;text-align:right;white-space:nowrap;">付与日数</th>'
-        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#dc2626;text-align:right;white-space:nowrap;">使用日数</th>'
         +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#166534;text-align:right;white-space:nowrap;">残日数</th>'
         +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">操作</th>'
         +'</tr></thead>'
