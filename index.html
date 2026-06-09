@@ -4360,6 +4360,17 @@ function normalizePaidLeaveBalance(b){
     var ts=nb.createdAt?new Date(nb.createdAt).getTime():0;
     nb.id="plb_"+(nb.staffId||nb.staffName||"unknown")+"_"+(nb.grantDate||"")+"_"+ts;
   }
+  // 旧形式互換: staffId が employeeId でなく氏名の場合、staffList から employeeId に変換する
+  // b0634b1(staffId移行)以前に保存された付与行は staffId=氏名 のまま残っているため
+  var _sid=(nb.staffId||"").trim();
+  if(_sid&&staffList&&staffList.length>0){
+    var _isEmpId=staffList.some(function(s){return (s.employeeId||"").trim()===_sid;});
+    if(!_isEmpId){
+      // staffId が employeeId として見つからない → 氏名として resolveStaffId を試みる
+      var _resolved=resolveStaffId(_sid)||(nb.staffName?resolveStaffId((nb.staffName||"").trim()):null);
+      if(_resolved)nb.staffId=_resolved;
+    }
+  }
   if(nb.staffName===undefined)nb.staffName=nb.staffId||"";
   if(nb.remainDays===undefined||nb.remainDays===null){
     nb.remainDays=Math.round(((nb.grantedDays||0)-(nb.usedDays||0))*10)/10;
