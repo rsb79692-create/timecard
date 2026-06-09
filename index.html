@@ -1256,11 +1256,12 @@ function render(){
       +(showPaidLeaveForm
         ? (function(){
             var todayStr=getTodayJSTStr();
+            var monthRange=getJSTMonthRange();
             return '<div style="margin-top:8px;background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;">'
               +'<div style="font-weight:700;font-size:.9rem;margin-bottom:10px;color:#0f172a;">有給申請</div>'
               +'<div style="display:flex;flex-direction:column;gap:8px;">'
               +'<div><label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">取得日</label>'
-              +'<input type="date" id="pl-date" value="'+todayStr+'" min="'+todayStr+'" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
+              +'<input type="date" id="pl-date" value="'+todayStr+'" min="'+monthRange.first+'" max="'+monthRange.last+'" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
               +'<div style="display:flex;gap:8px;margin-top:4px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
               +'<button onclick="showPaidLeaveForm=false;render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
@@ -1274,6 +1275,9 @@ function render(){
       if(plSubmitBtn)plSubmitBtn.onclick=function(){
         var dateVal=(document.getElementById("pl-date")||{}).value||"";
         if(!dateVal){showAlert("取得日を選択してください");return;}
+        // 当月内バリデーション（JST基準）
+        var monthRange=getJSTMonthRange();
+        if(dateVal<monthRange.first||dateVal>monthRange.last){showAlert("有給申請は当月内の日付のみ可能です");return;}
         // 同日重複チェック
         var dup=paidLeaveRequests.find(function(r){
           return r.staffName===staffName&&r.date===dateVal&&r.status!=="rejected";
@@ -3855,6 +3859,21 @@ function dlCSV(csv,fname){
 }
 
 // ===== \u6709\u7D66\u7533\u8ACB\u30E6\u30FC\u30C6\u30A3\u30EA\u30C6\u30A3 =====
+
+// JST \u306E\u5F53\u67081\u65E5\u30FB\u672B\u65E5\u3092 { first: "YYYY-MM-DD", last: "YYYY-MM-DD" } \u3067\u8FD4\u3059
+function getJSTMonthRange(){
+  var parts=new Intl.DateTimeFormat("ja-JP",{
+    timeZone:"Asia/Tokyo",year:"numeric",month:"2-digit",day:"2-digit"
+  }).formatToParts(new Date());
+  var y=parseInt(parts.find(function(p){return p.type==="year";}).value,10);
+  var m=parseInt(parts.find(function(p){return p.type==="month";}).value,10);
+  var pad=function(n){return n<10?"0"+n:String(n);};
+  var firstStr=y+"-"+pad(m)+"-01";
+  // \u672B\u65E5: \u7FCC\u67081\u65E5\u306E\u524D\u65E5
+  var lastDay=new Date(Date.UTC(y,m,0)).getUTCDate(); // Date.UTC(y,m,0) = \u5F53\u6708\u672B\u65E5 UTC
+  var lastStr=y+"-"+pad(m)+"-"+pad(lastDay);
+  return {first:firstStr,last:lastStr};
+}
 
 // JST \u306E\u4ECA\u65E5\u306E\u65E5\u4ED8\u3092 YYYY-MM-DD \u3067\u8FD4\u3059
 function getTodayJSTStr(){
