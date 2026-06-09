@@ -191,7 +191,7 @@ function listenFirebase() {
       .then(function(val){
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
-          if(!document.querySelector('.time-edit-wrap')) render();
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm) render();
         }
       }).catch(function(){});
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
@@ -615,6 +615,7 @@ var paidLeaveLoading=false;
 var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
 var paidLeaveBalanceSaving=false; // 承認処理中フラグ（二重クリック防止）
 var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フラグ
+var plFormDate=""; // 有給申請フォームの選択日付を render() またぎで保持
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
 var today=new Date();
@@ -1276,16 +1277,22 @@ function render(){
               +'<div style="font-weight:700;font-size:.9rem;margin-bottom:10px;color:#0f172a;">有給申請</div>'
               +'<div style="display:flex;flex-direction:column;gap:8px;">'
               +'<div><label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">取得日</label>'
-              +'<input type="date" id="pl-date" value="'+todayStr+'" min="'+monthRange.first+'" max="'+monthRange.last+'" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
+              +'<input type="date" id="pl-date" value="'+(plFormDate&&plFormDate>=monthRange.first&&plFormDate<=monthRange.last?plFormDate:todayStr)+'" min="'+monthRange.first+'" max="'+monthRange.last+'" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
               +'<div style="display:flex;gap:8px;margin-top:4px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
-              +'<button onclick="showPaidLeaveForm=false;render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+              +'<button onclick="showPaidLeaveForm=false;plFormDate=\'\';render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
               +'</div></div></div>';
           })()
         :'<button onclick="showPaidLeaveForm=true;render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
       +'</div>';
     if(showPaidLeaveForm){
+      // 日付入力の変更をstateに保持（render()をまたいでも値を維持）
+      var plDateEl=document.getElementById("pl-date");
+      if(plDateEl){
+        plDateEl.onchange=function(){plFormDate=this.value;};
+        plDateEl.oninput=function(){plFormDate=this.value;};
+      }
       var plSubmitBtn=document.getElementById("btn-pl-submit");
       if(plSubmitBtn)plSubmitBtn.onclick=function(){
         var dateVal=(document.getElementById("pl-date")||{}).value||"";
@@ -1312,6 +1319,7 @@ function render(){
         paidLeaveRequests.push(req);
         savePaidLeaveRequest(req).then(function(){});
         showPaidLeaveForm=false;
+        plFormDate=""; // 送信後はリセット
         showAlert("有給申請を送信しました（"+dateVal+"）");
         render();
       };
@@ -1933,7 +1941,7 @@ function render(){
         +mf("姓よみ","modal-lname-yomi","text","やまだ")
         +mf("名よみ","modal-fname-yomi","text","たろう")
         +mf("社員番号","modal-empid","text","001")
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">入社日</label><input type="text" id="modal-hiredate" placeholder="例：20261209" maxlength="10" inputmode="numeric" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;ime-mode:disabled;"></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">入社日</label><input type="date" id="modal-hiredate" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">雇用形態</label>'
@@ -2065,7 +2073,7 @@ function render(){
         +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規トークン発行</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
         +'<input id="vt-new-name" type="text" placeholder="名称（例: 田中税理士事務所）" style="flex:1;">'
-        +'<input id="vt-new-expires" type="text" placeholder="有効期限 yyyy-mm-dd（省略可）" style="width:160px;">'
+        +'<input id="vt-new-expires" type="date" style="width:160px;">'
         +'</div>'
         +'<input id="vt-new-memo" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
         +'<button id="btn-vt-issue" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する</button>'
@@ -2081,7 +2089,7 @@ function render(){
         )
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
         +'<input id="new-demo-token" type="text" placeholder="デモトークン（例: demo20260430）" style="flex:1;">'
-        +'<input id="new-demo-expire" type="text" placeholder="有効期限（yyyymmdd）" maxlength="8" inputmode="numeric" style="width:130px;">'
+        +'<input id="new-demo-expire" type="date" style="width:130px;">'
         +'</div>'
         +'<button id="btn-save-demo" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">設定・更新</button>'
         +'</div>'
@@ -3019,7 +3027,6 @@ function render(){
       var newN=ln+fn,newY=ly+fy;
       var empId=(document.getElementById("modal-empid")?.value||"").trim();
       var hdRaw=(document.getElementById("modal-hiredate")?.value||"").trim().replace(/\D/g,"");
-      if(hdRaw.length>0&&hdRaw.length!==8){showAlert("入社日は8桁で入力してください（例：20261209）");return;}
       var hd=hdRaw.length===8?hdRaw.slice(0,4)+"/"+hdRaw.slice(4,6)+"/"+hdRaw.slice(6,8):"";
       var loc=document.getElementById("modal-location")?.value||"";
       var dept=document.getElementById("modal-dept")?.value||"";
@@ -3356,7 +3363,7 @@ function openHrmEdit(nm){
   document.getElementById("modal-lname-yomi").value=s?(s.yomiLast!==undefined?s.yomiLast:s.yomi):"";
   document.getElementById("modal-fname-yomi").value=s?(s.yomiFirst||""):"";
   document.getElementById("modal-empid").value=s?(s.employeeId||""):"";
-  document.getElementById("modal-hiredate").value=s&&s.hireDate?s.hireDate.replace(/[-\/]/g,""):"";  // yyyy/mm/dd or yyyy-mm-dd → yyyymmdd
+  document.getElementById("modal-hiredate").value=s&&s.hireDate?s.hireDate.replace(/\//g,"-"):"";  // yyyy/mm/dd or yyyy-mm-dd → yyyy-mm-dd (input type=date)
   document.getElementById("modal-location").value=s?(s.location||""):"";
   document.getElementById("modal-dept").value=s?(s.dept||""):"";
   document.getElementById("modal-emptype").value=s?(s.employmentType||"パート"):"パート";
@@ -3386,7 +3393,7 @@ function closeHrmModal(){
   var m=document.getElementById("hrm-modal");if(m)m.style.display="none";
 }
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
-function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;screen="home";render();}
+function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";screen="home";render();}
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
