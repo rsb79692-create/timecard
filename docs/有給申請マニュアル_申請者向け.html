@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>有給申請マニュアル（申請者向け）</title>
+  <style>
+    @page {
+      size: A4;
+      margin: 20mm 18mm 20mm 18mm;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: "Meiryo", "MS PGothic", "Yu Gothic", "メイリオ", sans-serif;
+      font-size: 10.5pt;
+      line-height: 1.7;
+      color: #111;
+      background: #fff;
+    }
+    .page {
+      max-width: 170mm;
+      margin: 0 auto;
+      padding: 0;
+    }
+
+    /* ヘッダー */
+    .doc-header {
+      border-bottom: 3px solid #333;
+      padding-bottom: 8px;
+      margin-bottom: 18px;
+    }
+    .doc-title {
+      font-size: 18pt;
+      font-weight: bold;
+      letter-spacing: 0.05em;
+      margin-bottom: 4px;
+    }
+    .doc-meta {
+      font-size: 9pt;
+      color: #555;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    /* セクション */
+    .section {
+      margin-bottom: 18px;
+    }
+    .section-title {
+      font-size: 12pt;
+      font-weight: bold;
+      background: #333;
+      color: #fff;
+      padding: 4px 10px;
+      margin-bottom: 8px;
+      border-radius: 2px;
+    }
+    .section-body {
+      padding: 0 6px;
+    }
+
+    /* ステップリスト */
+    .step-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+    .step-list li {
+      display: flex;
+      align-items: flex-start;
+      margin-bottom: 6px;
+      gap: 8px;
+    }
+    .step-num {
+      display: inline-block;
+      min-width: 22px;
+      height: 22px;
+      background: #333;
+      color: #fff;
+      font-size: 10pt;
+      font-weight: bold;
+      text-align: center;
+      line-height: 22px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .step-text {
+      flex: 1;
+    }
+    .step-text strong {
+      display: block;
+      font-weight: bold;
+    }
+    .step-text small {
+      font-size: 9pt;
+      color: #444;
+    }
+
+    /* 箇条書き */
+    ul.plain {
+      list-style: none;
+      padding: 0;
+    }
+    ul.plain li {
+      padding-left: 1.2em;
+      position: relative;
+      margin-bottom: 4px;
+    }
+    ul.plain li::before {
+      content: "・";
+      position: absolute;
+      left: 0;
+    }
+
+    /* ステータス表 */
+    .status-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 10pt;
+      margin-top: 4px;
+    }
+    .status-table th,
+    .status-table td {
+      border: 1px solid #888;
+      padding: 5px 8px;
+      vertical-align: top;
+    }
+    .status-table th {
+      background: #555;
+      color: #fff;
+      font-weight: bold;
+      width: 22%;
+      text-align: center;
+    }
+    .status-table td {
+      background: #fff;
+    }
+
+    /* 注意ボックス */
+    .caution-box {
+      border: 2px solid #333;
+      border-radius: 3px;
+      padding: 8px 12px;
+      background: #f9f9f9;
+    }
+    .caution-box ul.plain li {
+      margin-bottom: 5px;
+    }
+
+    /* FAQ */
+    .faq-item {
+      margin-bottom: 10px;
+    }
+    .faq-q {
+      font-weight: bold;
+      padding-left: 1.4em;
+      position: relative;
+    }
+    .faq-q::before {
+      content: "Q.";
+      position: absolute;
+      left: 0;
+      font-weight: bold;
+    }
+    .faq-a {
+      padding-left: 1.8em;
+      position: relative;
+      color: #222;
+      margin-top: 2px;
+    }
+    .faq-a::before {
+      content: "A.";
+      position: absolute;
+      left: 0;
+      color: #555;
+    }
+
+    /* フッター */
+    .doc-footer {
+      border-top: 1px solid #aaa;
+      margin-top: 20px;
+      padding-top: 6px;
+      font-size: 8.5pt;
+      color: #666;
+      text-align: right;
+    }
+
+    /* 印刷用調整 */
+    @media print {
+      body { font-size: 10.5pt; }
+      .page-break { page-break-before: always; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <!-- ヘッダー -->
+  <div class="doc-header">
+    <div class="doc-title">有給申請マニュアル（申請者向け）</div>
+    <div class="doc-meta">
+      <span>株式会社 穂乃味</span>
+      <span>2026年6月発行</span>
+    </div>
+  </div>
+
+  <!-- 1. 有給申請とは -->
+  <div class="section">
+    <div class="section-title">1. 有給申請とは</div>
+    <div class="section-body">
+      <p>タイムカードアプリから、取得したい日の有給休暇を事前に申請する機能です。申請後は管理者が確認し、承認または却下されます。<br>
+      承認が完了するまでは、有給取得は確定していませんのでご注意ください。</p>
+    </div>
+  </div>
+
+  <!-- 2. 有給申請の流れ -->
+  <div class="section">
+    <div class="section-title">2. 有給申請の流れ</div>
+    <div class="section-body">
+      <ol class="step-list">
+        <li>
+          <span class="step-num">1</span>
+          <div class="step-text">
+            <strong>タイムカード画面を開く</strong>
+            <small>ブラウザで会社指定のタイムカード URL にアクセスします。</small>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">2</span>
+          <div class="step-text">
+            <strong>自分の名前を選ぶ</strong>
+            <small>スタッフ選択画面で自分の名前をタップ・クリックし、PIN を入力してログインします。</small>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">3</span>
+          <div class="step-text">
+            <strong>「有給申請」を開く</strong>
+            <small>打刻画面下部の「有給申請」ボタンをタップします。有給申請エリアが展開されます。</small>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">4</span>
+          <div class="step-text">
+            <strong>取得したい日付を選ぶ</strong>
+            <small>カレンダーまたは日付入力欄で、有給を取得したい日を選択します。</small>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">5</span>
+          <div class="step-text">
+            <strong>内容を確認する</strong>
+            <small>選択した日付と残日数が正しいことを確認します。残日数が 0 日の場合は申請できません。</small>
+          </div>
+        </li>
+        <li>
+          <span class="step-num">6</span>
+          <div class="step-text">
+            <strong>「申請する」ボタンを押す</strong>
+            <small>確認後、「申請する」ボタンをタップして申請を送信します。画面に「申請中」と表示されれば完了です。</small>
+          </div>
+        </li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- 3. 申請後の状態 -->
+  <div class="section">
+    <div class="section-title">3. 申請後の状態</div>
+    <div class="section-body">
+      <table class="status-table">
+        <tr>
+          <th>申請中</th>
+          <td>管理者が確認前の状態です。まだ有給は確定していません。</td>
+        </tr>
+        <tr>
+          <th>承認済み</th>
+          <td>管理者が承認した状態です。有給が確定し、残日数から差し引かれます。</td>
+        </tr>
+        <tr>
+          <th>却下</th>
+          <td>管理者が申請を却下した状態です。理由を確認し、必要に応じて再申請または管理者へ相談してください。</td>
+        </tr>
+        <tr>
+          <th>取消済み</th>
+          <td>申請が取り消された状態です。残日数は元に戻ります。</td>
+        </tr>
+      </table>
+    </div>
+  </div>
+
+  <!-- 4. 注意事項 -->
+  <div class="section">
+    <div class="section-title">4. 注意事項</div>
+    <div class="section-body">
+      <div class="caution-box">
+        <ul class="plain">
+          <li><strong>残日数が足りない場合は申請できません。</strong>申請ボタンが非活性になります。残日数は有給申請エリアで確認できます。</li>
+          <li><strong>承認されるまでは確定ではありません。</strong>「申請中」の状態では、まだ有給は取得されていません。</li>
+          <li><strong>間違えた場合は早めに管理者へ連絡してください。</strong>「申請中」の状態であれば取消が可能な場合があります。承認後の取消は管理者対応が必要です。</li>
+          <li><strong>勤務シフトとの重複に注意してください。</strong>有給申請後も、シフト変更は別途担当者に確認・連絡が必要です。</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <!-- 5. よくあるケース -->
+  <div class="section">
+    <div class="section-title">5. よくあるケース</div>
+    <div class="section-body">
+      <div class="faq-item">
+        <div class="faq-q">申請したが画面に反映されない</div>
+        <div class="faq-a">ブラウザを更新（リロード）してください。それでも表示されない場合は、管理者に申請が届いているか確認してください。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">間違えて申請した</div>
+        <div class="faq-a">すぐに管理者へ連絡してください。「申請中」の段階であれば取消できる場合があります。承認済みの場合は管理者による取消が必要です。</div>
+      </div>
+      <div class="faq-item">
+        <div class="faq-q">残日数が 0 と表示される</div>
+        <div class="faq-a">付与された有給が 0 日か、すでに全日数を使用・申請済みの状態です。付与状況を管理者に確認してください。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- フッター -->
+  <div class="doc-footer">
+    株式会社 穂乃味 &nbsp;|&nbsp; このマニュアルの内容は予告なく変更される場合があります。
+  </div>
+
+</div>
+</body>
+</html>
