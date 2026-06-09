@@ -2048,26 +2048,23 @@ function render(){
         var sl=s.status||"在籍";
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
-        var pinVal=staffPins[s.name];
-        var pinRevealed=pinRevealSet[s.name];
-        var _pinKey=JSON.stringify(s.name).replace(/&/g,'&amp;').replace(/"/g,'&quot;');
+        var _sp=getStoredPin(s.name);
         var pinTd;
-        if(!pinVal){
-          pinTd='<td style="padding:0 14px;white-space:nowrap;"><span style="color:#9ca3af;font-size:.78rem;">未設定</span></td>';
-        } else if(isLegacyPin(pinVal)){
-          if(pinRevealed){
-            pinTd='<td style="padding:0 14px;white-space:nowrap;">'
-              +'<span style="font-family:monospace;font-size:.88rem;color:#0f172a;letter-spacing:.1em;">'+pinVal+'</span>'
-              +'<button onclick="event.stopPropagation();pinRevealSet['+_pinKey+']=false;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">隠す</button>'
-              +'</td>';
-          } else {
-            pinTd='<td style="padding:0 14px;white-space:nowrap;">'
-              +'<span style="color:#9ca3af;font-size:.85rem;letter-spacing:.1em;">••••</span>'
-              +'<button onclick="event.stopPropagation();pinRevealSet['+_pinKey+']=true;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">表示</button>'
-              +'</td>';
-          }
+        if(!_sp.hash){
+          pinTd='<td style="padding:0 14px;white-space:nowrap;">'
+            +'<span style="color:#9ca3af;font-size:.78rem;margin-right:6px;">未設定</span>'
+            +'<button class="btn-pin-reset" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
+            +'</td>';
+        } else if(_sp.plain){
+          pinTd='<td style="padding:0 14px;white-space:nowrap;">'
+            +'<button class="btn-pin-view" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">PIN確認</button>'
+            +'<button class="btn-pin-change" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN変更</button>'
+            +'</td>';
         } else {
-          pinTd='<td style="padding:0 14px;white-space:nowrap;"><span style="color:#6b7280;font-size:.78rem;">設定済み</span></td>';
+          pinTd='<td style="padding:0 14px;white-space:nowrap;">'
+            +'<span style="color:#6b7280;font-size:.78rem;margin-right:6px;">設定済み</span>'
+            +'<button class="btn-pin-reset" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
+            +'</td>';
         }
         return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
           +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
@@ -3256,6 +3253,15 @@ function render(){
         });
       };
     });
+    document.querySelectorAll(".btn-pin-view").forEach(function(b){
+      b.onclick=function(e){e.stopPropagation();adminViewPin(b.dataset.nm);};
+    });
+    document.querySelectorAll(".btn-pin-change").forEach(function(b){
+      b.onclick=function(e){e.stopPropagation();var nm=b.dataset.nm;showAdminPinSetModal(nm,function(pin){adminSavePin(nm,pin);});};
+    });
+    document.querySelectorAll(".btn-pin-reset").forEach(function(b){
+      b.onclick=function(e){e.stopPropagation();var nm=b.dataset.nm;showAdminPinSetModal(nm,function(pin){adminSavePin(nm,pin);});};
+    });
     function filterHrmRows(){
       var idQ=(document.getElementById("srch-id")?.value||"").toLowerCase();
       var nmQ=(document.getElementById("srch-name")?.value||"").toLowerCase();
@@ -3633,18 +3639,22 @@ function openHrmEdit(nm){
   if(cswEl)cswEl.checked=!!(s&&s.canSupportWork);
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
-    pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+(nm&&staffPins[nm]?'設定済み':"未設定")+'</strong>';
-    if(nm&&staffPins[nm]){
-      var pr=document.createElement("button");
-      pr.textContent="リセット";
-      pr.style.cssText="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;";
-      pr.onclick=function(){
-        showConfirm(nm+"のPINをリセットしますか？",function(){
-          delete staffPins[nm];saveData("tc5_pins",staffPins);
-          pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">未設定</strong>';
-        });
-      };
-      pinDiv.appendChild(pr);
+    var _msp=nm?getStoredPin(nm):{hash:null,plain:null};
+    var _pinStatus=!_msp.hash?"未設定":(_msp.plain?"確認可":"設定済み");
+    pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+_pinStatus+'</strong>';
+    if(nm&&_msp.hash&&_msp.plain){
+      var pv=document.createElement("button");
+      pv.textContent="PIN確認";
+      pv.style.cssText="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:6px;";
+      pv.onclick=function(){adminViewPin(nm);};
+      pinDiv.appendChild(pv);
+    }
+    if(nm){
+      var pc=document.createElement("button");
+      pc.textContent=_msp.hash?"PIN変更":"PIN設定";
+      pc.style.cssText="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;";
+      pc.onclick=function(){showAdminPinSetModal(nm,function(pin){adminSavePin(nm,pin);});};
+      pinDiv.appendChild(pc);
     }
   }
   modal.style.display="flex";
@@ -3814,6 +3824,71 @@ async function hashPin(pin){
 }
 function isLegacyPin(val){return /^\d{4}$/.test(val);}
 function adminPinReady(){return !!(ADMIN_PIN_HASH||ADMIN_PIN);}
+// staffPins の値は string（hash or legacy 4桁）または {hash,plain} オブジェクトの混在を吸収
+function getStoredPin(name){
+  var v=staffPins[name];
+  if(!v)return{hash:null,plain:null};
+  if(typeof v==="object")return{hash:v.hash||null,plain:v.plain||null};
+  return{hash:v,plain:null};
+}
+// 管理者: PIN確認ダイアログ
+function adminViewPin(nm){
+  var sp=getStoredPin(nm);
+  if(!sp.plain){showAlert("PIN確認できません\n（PIN再設定してください）");return;}
+  showModal({title:"PIN確認",message:nm+"のPIN：\n"+sp.plain,alertOnly:true,okLabel:"閉じる"});
+}
+// 管理者: PIN新規設定 / 再設定
+function showAdminPinSetModal(nm,onSave){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:320px;width:100%;border:1px solid #adb5bd;";
+  var ttl=document.createElement("div");
+  ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:6px;";
+  ttl.textContent="PIN設定："+nm;
+  card.appendChild(ttl);
+  var sub=document.createElement("div");
+  sub.style.cssText="font-size:.82rem;color:#475569;margin-bottom:14px;";
+  sub.textContent="新しい4桁のPINを入力してください";
+  card.appendChild(sub);
+  function mkLbl(t){var l=document.createElement("div");l.style.cssText="font-size:.8rem;color:#475569;margin-bottom:4px;";l.textContent=t;return l;}
+  function mkInp(){var i=document.createElement("input");i.type="password";i.maxLength=4;i.inputMode="numeric";i.style.cssText="width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:2px;padding:8px 10px;font-size:1.2rem;letter-spacing:.3em;margin-bottom:12px;font-family:monospace;text-align:center;outline:none;";return i;}
+  card.appendChild(mkLbl("新しいPIN"));
+  var inp1=mkInp();card.appendChild(inp1);
+  card.appendChild(mkLbl("確認（もう一度）"));
+  var inp2=mkInp();inp2.style.marginBottom="4px";card.appendChild(inp2);
+  var err=document.createElement("div");
+  err.style.cssText="font-size:.78rem;color:#dc2626;min-height:1.2em;margin-bottom:12px;";
+  card.appendChild(err);
+  var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
+  var cnl=document.createElement("button");
+  cnl.textContent="キャンセル";
+  cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  cnl.onclick=function(){if(ov.parentNode)document.body.removeChild(ov);};
+  var ok=document.createElement("button");
+  ok.textContent="設定する";
+  ok.style.cssText="flex:1;background:#1e40af;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  ok.onclick=function(){
+    var p1=inp1.value.trim(),p2=inp2.value.trim();
+    if(!/^\d{4}$/.test(p1)){err.textContent="4桁の数字を入力してください";return;}
+    if(p1!==p2){err.textContent="PINが一致しません";return;}
+    if(ov.parentNode)document.body.removeChild(ov);
+    onSave(p1);
+  };
+  row.appendChild(cnl);row.appendChild(ok);
+  card.appendChild(row);
+  ov.appendChild(card);
+  ov.onclick=function(e){if(e.target===ov&&ov.parentNode)document.body.removeChild(ov);};
+  document.body.appendChild(ov);
+  setTimeout(function(){inp1.focus();},50);
+}
+async function adminSavePin(nm,pin){
+  var h=await hashPin(pin);
+  staffPins[nm]={hash:h,plain:pin};
+  saveData("tc5_pins",staffPins);
+  render();
+  showAlert(nm+"のPINを設定しました");
+}
 
 // スタッフPIN認証
 function sTap(v){
@@ -3823,16 +3898,16 @@ function sTap(v){
   if(staffPinInput.length===4){setTimeout(sOk,150);}
 }
 async function sOk(){
-  var stored=staffPins[staffName];
-  if(!stored){staffPinError=true;staffPinInput="";render();return;}
+  var sp=getStoredPin(staffName);
+  if(!sp.hash){staffPinError=true;staffPinInput="";render();return;}
   var inputStr=String(staffPinInput);
   var match=false;
-  if(isLegacyPin(stored)){
-    // 旧形式（4桁平文）: 照合後にハッシュへ自動移行
-    match=(stored===inputStr);
-    if(match){var h=await hashPin(inputStr);staffPins[staffName]=h;saveData("tc5_pins",staffPins);}
+  if(isLegacyPin(sp.hash)){
+    // 旧形式（4桁平文）: 照合後に {hash,plain} 形式へ自動移行
+    match=(sp.hash===inputStr);
+    if(match){var h=await hashPin(inputStr);staffPins[staffName]={hash:h,plain:inputStr};saveData("tc5_pins",staffPins);}
   } else {
-    match=((await hashPin(inputStr))===stored);
+    match=((await hashPin(inputStr))===sp.hash);
   }
   if(match){staffPinError=false;screen="punch";render();}
   else{staffPinError=true;staffPinInput="";render();}
@@ -3859,7 +3934,7 @@ async function sNewOk(){
     if(staffPinConfirm.length<4)return;
     if(staffPinInput===staffPinConfirm){
       var h=await hashPin(staffPinInput);
-      staffPins[staffName]=h;
+      staffPins[staffName]={hash:h,plain:staffPinInput};
       saveData("tc5_pins",staffPins);
       staffPinError=false;screen="punch";render();
     } else {
