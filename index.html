@@ -534,6 +534,52 @@ function calcTenure(hireDateStr){
   if(y===0)return m+"ヶ月";
   return y+"年"+(m>0?m+"ヶ月":"");
 }
+// ===== 有給付与スケジュール計算 =====
+function parsePaidLeaveHireDate(dateStr){
+  if(!dateStr)return null;
+  var s=String(dateStr).replace(/\//g,'-').replace(/\./g,'-');
+  if(/^\d{8}$/.test(s))s=s.slice(0,4)+'-'+s.slice(4,6)+'-'+s.slice(6,8);
+  var d=new Date(s);return isNaN(d.getTime())?null:d;
+}
+function calcPaidLeaveSchedule(hireDateStr){
+  var hd=parsePaidLeaveHireDate(hireDateStr);if(!hd)return[];
+  var todayStr=fmtDateKey(new Date());var result=[];
+  for(var n=1;n<=30;n++){
+    var offsetM=6+(n-1)*12;
+    var gd=new Date(hd.getFullYear(),hd.getMonth()+offsetM,hd.getDate());
+    var gdStr=fmtDateKey(gd);if(gdStr>todayStr)break;
+    var exp=new Date(gd.getFullYear(),gd.getMonth()+24,gd.getDate());
+    exp.setDate(exp.getDate()-1);
+    result.push({grantNum:n,grantDate:gdStr,expiresAt:fmtDateKey(exp)});
+  }
+  return result;
+}
+function getPaidLeaveUnregistered(){
+  var idCounts={};
+  staffList.forEach(function(s){if(s.employeeId&&String(s.employeeId).trim()){var k=String(s.employeeId).trim();idCounts[k]=(idCounts[k]||0)+1;}});
+  var dupIds=Object.keys(idCounts).filter(function(k){return idCounts[k]>1;});
+  var noIdList=staffList.filter(function(s){return s.status!=="退職"&&(!s.employeeId||!String(s.employeeId).trim());});
+  var grants=[];
+  staffList.forEach(function(s){
+    if(s.status==="退職")return;
+    if(!s.employeeId||!String(s.employeeId).trim())return;
+    var sid=String(s.employeeId).trim();
+    if(dupIds.indexOf(sid)>=0)return;
+    if(!s.hireDate)return;
+    var schedule=calcPaidLeaveSchedule(s.hireDate);
+    schedule.forEach(function(item){
+      var already=paidLeaveBalances.some(function(b){
+        var nb=normalizePaidLeaveBalance(b);
+        return nb.staffId===sid&&nb.grantDate===item.grantDate;
+      });
+      if(!already){
+        var dn=(s.lastName&&s.firstName)?s.lastName+'　'+s.firstName:s.name;
+        grants.push({staffId:sid,staffName:s.name,staffDisplayName:dn,hireDate:s.hireDate,grantNum:item.grantNum,grantDate:item.grantDate,expiresAt:item.expiresAt});
+      }
+    });
+  });
+  return{grants:grants,dupIds:dupIds,noIdList:noIdList};
+}
 function calcMs(rs){
   var s=rs.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
   var tot=0,brk=0,cin=null,bsin=null;
@@ -611,6 +657,7 @@ var adminTab="records",yomiTab="すべて";
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
+var _paidLeaveGrantsCache=[]; // 未登録付与一覧キャッシュ（paidleaveタブ描画中のみ有効）
 var paidLeaveLoading=false;
 var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
 var paidLeaveBalanceSaving=false; // 承認処理中フラグ（二重クリック防止）
@@ -2647,7 +2694,86 @@ function render(){
           return '<option value="'+s.name+'">'+s.name+'</option>';
         }).join("");
 
-      tc='<div class="admin-card">'
+      // ===== 付与予定通知セクション =====
+      var _plr=getPaidLeaveUnregistered();
+      _paidLeaveGrantsCache=_plr.grants.slice();
+      var _esc=function(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');};
+      var _dupWarnGr=_plr.dupIds.length
+        ?'<div style="background:#fff1f2;border:1px solid #fecdd3;border-radius:6px;padding:10px 14px;margin-bottom:10px;">'
+          +'<div style="font-weight:700;color:#dc2626;font-size:.88rem;margin-bottom:4px;">⛔ 重複する社員番号があります（処理を一時停止しています）</div>'
+          +'<div style="font-size:.78rem;color:#b91c1c;">該当番号：'+_plr.dupIds.map(_esc).join('、')+'</div>'
+          +'</div>'
+        :'';
+      var _noIdWarnGr=_plr.noIdList.length
+        ?'<div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:10px;">'
+          +'<div style="font-weight:700;color:#92400e;font-size:.88rem;margin-bottom:4px;">⚠ 社員番号未設定のスタッフ（'+_plr.noIdList.length+'名）</div>'
+          +'<div style="font-size:.78rem;color:#78350f;">'+_plr.noIdList.map(function(s){return _esc((s.lastName&&s.firstName)?s.lastName+'　'+s.firstName:s.name);}).join('、')+'</div>'
+          +'</div>'
+        :'';
+      var _grantRows=_plr.grants.length===0
+        ?'<tr><td colspan="8" style="padding:14px;text-align:center;color:#8496a7;font-size:.8rem;">未登録の付与予定はありません</td></tr>'
+        :_plr.grants.map(function(g,idx){
+          return '<tr>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.staffId)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;white-space:nowrap;">'+_esc(g.staffDisplayName)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;text-align:center;white-space:nowrap;">第'+_esc(String(g.grantNum))+'回</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.hireDate)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.grantDate)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.expiresAt)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;text-align:center;"><span style="background:#fff1f2;color:#dc2626;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;">未登録</span></td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;white-space:nowrap;">'
+            +'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:3px;">付与登録</button>'
+            +'<button onclick="openPaidLeaveGrantModal('+idx+',true)" style="background:#475569;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;">消化済み</button>'
+            +'</td>'
+            +'</tr>';
+        }).join('');
+      var _plGrantModalHtml='<div id="pl-grant-modal-wrap" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;">'
+        +'<div style="background:#fff;width:100%;max-width:480px;border-radius:2px;border:1px solid #adb5bd;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e4e8ed;">'
+        +'<span id="pl-grant-modal-title" style="font-size:14px;font-weight:700;color:#1a2332;">有給付与登録</span>'
+        +'<button onclick="closePaidLeaveGrantModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:28px;height:28px;border-radius:2px;font-size:14px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+        +'</div>'
+        +'<div style="padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+        +'<div style="grid-column:1/-1;background:#f1f5f9;border-radius:4px;padding:8px 10px;font-size:.78rem;"><span id="pl-grant-modal-info"></span></div>'
+        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日</label>'
+        +'<input type="date" id="pl-grant-date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">失効予定日</label>'
+        +'<input type="date" id="pl-grant-expires" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日数</label>'
+        +'<input type="number" id="pl-grant-days" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
+        +'<div id="pl-grant-remain-wrap"><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">残日数</label>'
+        +'<input type="number" id="pl-grant-remain" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
+        +'<div id="pl-grant-consumed-note" style="grid-column:1/-1;display:none;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:7px 10px;font-size:.72rem;color:#713f12;">'
+        +'消化済みとして登録します。使用日数＝付与日数、残日数は自動で 0 になります。'
+        +'</div>'
+        +'</div>'
+        +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
+        +'<button id="btn-pl-grant-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存する</button>'
+        +'<button onclick="closePaidLeaveGrantModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+        +'</div></div></div>';
+      var _grantNotifyHtml=_plGrantModalHtml
+        +'<div class="admin-card">'
+        +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
+        +'<div class="admin-title" style="margin-bottom:0;">付与予定（未登録）'
+        +(_plr.grants.length>0?'<span style="background:#dc2626;color:#fff;font-size:.58rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;">'+_plr.grants.length+'件</span>':'')+'</div>'
+        +'</div>'
+        +_dupWarnGr+_noIdWarnGr
+        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:560px;">'
+        +'<thead><tr style="background:#eaecef;">'
+        +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">社員番号</th>'
+        +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">氏名</th>'
+        +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">付与回</th>'
+        +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">入社日</th>'
+        +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">付与予定日</th>'
+        +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">失効予定日</th>'
+        +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">状態</th>'
+        +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">操作</th>'
+        +'</tr></thead>'
+        +'<tbody>'+_grantRows+'</tbody>'
+        +'</table></div>'
+        +'</div>';
+
+      tc=_grantNotifyHtml+'<div class="admin-card">'
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<div class="admin-title" style="margin-bottom:0;">有給申請一覧</div>'
         +'<span style="font-size:.78rem;color:#8496a7;margin-left:4px;">申請中: '+paidLeaveRequests.filter(function(r){return r.status==="pending";}).length+'件</span>'
@@ -4731,6 +4857,84 @@ async function initFirebase() {
     firebaseError=true;
     render();
   }
+}
+
+// ===== 有給付与登録モーダル（付与予定通知から呼び出し） =====
+var _plGrantModalData={};
+function openPaidLeaveGrantModal(idx,consumed){
+  var g=_paidLeaveGrantsCache[idx];
+  if(!g)return;
+  _plGrantModalData={staffId:g.staffId,staffName:g.staffName,grantNum:g.grantNum,consumed:!!consumed};
+  var wrap=document.getElementById("pl-grant-modal-wrap");
+  if(!wrap)return;
+  var titleEl=document.getElementById("pl-grant-modal-title");
+  if(titleEl)titleEl.textContent=consumed?"有給付与登録（消化済み）":"有給付与登録";
+  var infoEl=document.getElementById("pl-grant-modal-info");
+  if(infoEl){
+    infoEl.textContent='';
+    var b=document.createElement('b');b.textContent=g.staffDisplayName;
+    infoEl.appendChild(b);
+    infoEl.appendChild(document.createTextNode('（社員番号：'+g.staffId+'）　第'+g.grantNum+'回'));
+  }
+  var gdEl=document.getElementById("pl-grant-date");if(gdEl)gdEl.value=g.grantDate;
+  var eaEl=document.getElementById("pl-grant-expires");if(eaEl)eaEl.value=g.expiresAt;
+  var gDays=document.getElementById("pl-grant-days");if(gDays)gDays.value="";
+  var rDays=document.getElementById("pl-grant-remain");if(rDays){rDays.value="";rDays.disabled=!!consumed;}
+  var noteEl=document.getElementById("pl-grant-consumed-note");if(noteEl)noteEl.style.display=consumed?"block":"none";
+  wrap.style.display="flex";
+  var btn=document.getElementById("btn-pl-grant-save");
+  if(btn){
+    btn.onclick=function(){
+      var sid=_plGrantModalData.staffId;
+      var sname=_plGrantModalData.staffName;
+      var gn=_plGrantModalData.grantNum;
+      var cons=_plGrantModalData.consumed;
+      var grantDateVal=(document.getElementById("pl-grant-date")||{}).value||"";
+      var expiresAtVal=(document.getElementById("pl-grant-expires")||{}).value||"";
+      var grantedDaysRaw=(document.getElementById("pl-grant-days")||{}).value||"";
+      var remainDaysRaw=cons?"0":((document.getElementById("pl-grant-remain")||{}).value||"");
+      if(!grantDateVal||!expiresAtVal){showAlert("付与日・失効予定日を入力してください");return;}
+      var grantedDaysVal=parseFloat(grantedDaysRaw);
+      var remainDaysVal=cons?0:parseFloat(remainDaysRaw);
+      if(isNaN(grantedDaysVal)||grantedDaysVal<0){showAlert("付与日数を正しく入力してください（0以上の数値）");return;}
+      if(!cons&&(isNaN(remainDaysVal)||remainDaysVal<0)){showAlert("残日数を正しく入力してください（0以上の数値）");return;}
+      if(!cons&&remainDaysVal>grantedDaysVal){showAlert("残日数は付与日数以下にしてください");return;}
+      var usedDays=cons?grantedDaysVal:0;
+      var dup=paidLeaveBalances.some(function(b){
+        var nb=normalizePaidLeaveBalance(b);return nb.staffId===sid&&nb.grantDate===grantDateVal;
+      });
+      if(dup){showAlert("同じ社員番号・付与日の有給残がすでに登録されています");return;}
+      var confirmMsg=(cons?"消化済みとして":"通常付与として")+"登録します。\n\n"
+        +"社員番号："+sid+"\n氏名："+sname+"\n付与回：第"+gn+"回\n"
+        +"付与日："+grantDateVal+"\n付与日数："+grantedDaysVal+"日\n"
+        +"残日数："+remainDaysVal+"日\n\n保存しますか？";
+      if(!confirm(confirmMsg))return;
+      savePaidLeaveGrantRecord(sid,sname,gn,grantDateVal,expiresAtVal,grantedDaysVal,usedDays,remainDaysVal);
+    };
+  }
+}
+function closePaidLeaveGrantModal(){
+  var wrap=document.getElementById("pl-grant-modal-wrap");if(wrap)wrap.style.display="none";
+  _plGrantModalData={};
+}
+function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt,grantedDays,usedDays,remainDays){
+  var dup=paidLeaveBalances.some(function(b){
+    var nb=normalizePaidLeaveBalance(b);return nb.staffId===staffId&&nb.grantDate===grantDate;
+  });
+  if(dup){showAlert("二重登録を防止しました（同じ社員番号・付与日がすでに存在します）");return;}
+  var rec={
+    id:"plb_"+staffId+"_"+grantDate+"_"+Date.now(),
+    staffId:staffId,staffName:staffName,grantNum:grantNum,
+    grantDate:grantDate,expiresAt:expiresAt,
+    grantedDays:grantedDays,usedDays:usedDays,remainDays:remainDays,
+    createdAt:new Date().toISOString()
+  };
+  paidLeaveBalances.push(rec);
+  savePaidLeaveBalance(rec).catch(function(){
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
+  closePaidLeaveGrantModal();
+  render();
 }
 
 // まず即座にレンダリング（Firebaseを待たない）
