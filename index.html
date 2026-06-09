@@ -2646,10 +2646,7 @@ function render(){
           var tot=staffTotals[nm]||{granted:0,used:0,remain:0};
           // スタッフ小計行
           plBalRows+='<tr style="background:#f0f4fa;border-top:2px solid #adb5bd;">'
-            +'<td colspan="2" style="padding:6px 8px;font-weight:900;font-size:.88rem;color:#1e3a5f;">'+nm+'</td>'
-            +'<td colspan="2" style="padding:6px 8px;font-size:.78rem;color:#475569;"></td>'
-            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:900;color:#166534;font-size:1rem;">'+Math.round(tot.remain*10)/10+'日</td>'
-            +'<td style="padding:6px 8px;"></td>'
+            +'<td colspan="6" style="padding:6px 8px;font-weight:900;font-size:.88rem;color:#1e3a5f;">'+nm+'</td>'
             +'</tr>';
           rows.forEach(function(b){
             var expired=(b.expiresAt&&b.expiresAt<today_pl);
