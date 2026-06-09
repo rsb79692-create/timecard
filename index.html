@@ -1266,18 +1266,7 @@ function render(){
               +'<select id="pl-type" onchange="window._plType=this.value;render();" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;background:#fff;">'
               +'<option value="full"'+(plTypeVal==="full"?" selected":"")+'>全休</option>'
               +'<option value="half"'+(plTypeVal==="half"?" selected":"")+'>半休</option>'
-              +'<option value="hourly"'+(plTypeVal==="hourly"?" selected":"")+'>時間休</option>'
               +'</select></div>'
-              +(plTypeVal==="hourly"
-                ?'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
-                  +'<div><label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">開始時刻</label>'
-                  +'<input type="time" id="pl-start" value="" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
-                  +'<div><label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">終了時刻</label>'
-                  +'<input type="time" id="pl-end" value="" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
-                  +'</div>'
-                :"")
-              +'<div><label style="font-size:.78rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">備考（任意）</label>'
-              +'<input type="text" id="pl-note" placeholder="例：冠婚葬祭" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;box-sizing:border-box;"></div>'
               +'<div style="display:flex;gap:8px;margin-top:4px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
               +'<button onclick="showPaidLeaveForm=false;window._plType=\'full\';render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
@@ -1291,12 +1280,8 @@ function render(){
       if(plSubmitBtn)plSubmitBtn.onclick=function(){
         var dateVal=(document.getElementById("pl-date")||{}).value||"";
         var typeVal=(document.getElementById("pl-type")||{}).value||"full";
-        var startVal=typeVal==="hourly"?((document.getElementById("pl-start")||{}).value||""):"";
-        var endVal=typeVal==="hourly"?((document.getElementById("pl-end")||{}).value||""):"";
-        var noteVal=(document.getElementById("pl-note")||{}).value||"";
         if(!dateVal){showAlert("取得日を選択してください");return;}
-        if(typeVal==="hourly"&&(!startVal||!endVal)){showAlert("時間休の場合は開始・終了時刻を入力してください");return;}
-        if(typeVal==="hourly"&&startVal>=endVal){showAlert("開始時刻は終了時刻より前にしてください");return;}
+        if(typeVal!=="full"&&typeVal!=="half"){showAlert("区分は全休または半休を選択してください");return;}
         // 同日重複チェック
         var dup=paidLeaveRequests.find(function(r){
           return r.staffName===staffName&&r.date===dateVal&&r.status!=="rejected";
@@ -1309,9 +1294,6 @@ function render(){
           staffName:staffName,
           date:dateVal,
           type:typeVal,
-          startTime:startVal,
-          endTime:endVal,
-          note:noteVal,
           status:"pending",
           createdAt:new Date().toISOString(),
           approvedBy:"",
@@ -2402,14 +2384,12 @@ function render(){
             var sc=plStatusColor[r.status]||"#475569";
             var sbg=plStatusBg[r.status]||"#f3f4f6";
             var typeLabel=PAID_LEAVE_TYPE_LABEL[r.type]||r.type;
-            var timeRange=(r.type==="hourly"&&r.startTime&&r.endTime)?" ("+r.startTime+"〜"+r.endTime+")":"";
             var createdStr=r.createdAt?isoToJSTDateTime(r.createdAt):"";
             return '<tr style="border-bottom:1px solid #e9ecef;">'
               +'<td style="padding:8px 6px;font-size:.8rem;white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;">'+sl+'</span></td>'
               +'<td style="padding:8px 6px;font-weight:700;font-size:.92rem;white-space:nowrap;">'+r.staffName+'</td>'
               +'<td style="padding:8px 6px;font-family:monospace;font-size:.88rem;white-space:nowrap;">'+r.date+'</td>'
-              +'<td style="padding:8px 6px;font-size:.85rem;white-space:nowrap;">'+typeLabel+timeRange+'</td>'
-              +'<td style="padding:8px 6px;font-size:.8rem;color:#475569;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(r.note||"")+'</td>'
+              +'<td style="padding:8px 6px;font-size:.85rem;white-space:nowrap;">'+typeLabel+'</td>'
               +'<td style="padding:8px 6px;font-size:.72rem;color:#8496a7;white-space:nowrap;">'+createdStr+'</td>'
               +'<td style="padding:6px 4px;white-space:nowrap;">'
               +(r.status==="pending"
@@ -2421,7 +2401,7 @@ function render(){
               )
               +'</td></tr>';
           }).join("")
-        :'<tr><td colspan="7" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">有給申請はありません</td></tr>';
+        :'<tr><td colspan="6" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">有給申請はありません</td></tr>';
       // 残日数管理テーブル
       var plBalRows=paidLeaveBalances.length
         ?paidLeaveBalances.map(function(b){
@@ -2453,7 +2433,6 @@ function render(){
           +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">氏名</th>'
           +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">取得日</th>'
           +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">区分</th>'
-          +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">備考</th>'
           +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">申請日時</th>'
           +'<th style="padding:6px 6px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;">操作</th>'
           +'</tr></thead>'
@@ -3977,7 +3956,7 @@ function getApprovedPaidLeaveDates(){
 }
 
 // \u533A\u5206\u30E9\u30D9\u30EB
-var PAID_LEAVE_TYPE_LABEL={full:"\u5168\u4F11",half:"\u534A\u4F11",hourly:"\u6642\u9593\u4F11"};
+var PAID_LEAVE_TYPE_LABEL={full:"\u6709\u7D66",half:"\u6709\u7D66\uFF08\u534A\u65E5\uFF09"};
 
 // \u5BFE\u8C61\u6708\u306Erecords\u306B\u3044\u308B\u9000\u8077\u6E08\u307F\u30B9\u30BF\u30C3\u30D5\u3082\u542B\u3081\u305F\u30B9\u30BF\u30C3\u30D5\u4E00\u89A7\u3092\u8FD4\u3059\uFF08\u4EBA\u5225CSV\u7528\uFF09
 function buildCsvStaffList(mR){
@@ -4012,7 +3991,7 @@ function dlStaffDetailCSV(month,recs,staffArr,approvalsObj){
       if(plLabel&&!dr.length){
         // \u6253\u523B\u306A\u3057\u6709\u7D66\u65E5\uFF08\u5168\u4F11\u306A\u3069\uFF09
         rows.push([nm,(s.location||""),"",dk,DAYS_S[new Date(dk).getDay()],
-          "","","","","","\u6709\u7D66","","\u6709\u7D66("+plLabel+")"].join(","));
+          "","","","","","\u6709\u7D66","",plLabel].join(","));
         return;
       }
       var cin=dr.find(function(r){return r.type==="clockIn";});
@@ -4023,7 +4002,7 @@ function dlStaffDetailCSV(month,recs,staffArr,approvalsObj){
       var approved=approvalsObj[dk+"__"+nm];
       var missing=(!cin||!cout)?"\u6709":"";
       var v=validateAttendanceRecord(nm,dk,dr);
-      var remark=plLabel?"\u6709\u7D66("+plLabel+")":(!v.valid&&v.reason&&v.reason!=="OK")?v.reason:"";
+      var remark=plLabel?plLabel:(!v.valid&&v.reason&&v.reason!=="OK")?v.reason:"";
       var workFac=(cin&&cin.workFacility)||"";
       rows.push([nm,(s.location||""),workFac,dk,DAYS_S[new Date(dk).getDay()],
         cin?cin.time:"",cout?cout.time:"",
