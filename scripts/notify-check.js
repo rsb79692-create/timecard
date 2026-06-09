@@ -75,10 +75,10 @@ function getTodayJST() {
   return `${y}-${m}-${d}`;
 }
 
-// ===== JST 30日前の日付 yyyy-mm-dd =====
-function getCutoffJST() {
+// ===== JST 昨日の日付 yyyy-mm-dd =====
+function getYesterdayJST() {
   const d = new Date();
-  d.setDate(d.getDate() - 30);
+  d.setDate(d.getDate() - 1);
   const parts = new Intl.DateTimeFormat("ja-JP", {
     timeZone: "Asia/Tokyo",
     year: "numeric",
@@ -298,7 +298,14 @@ function formatMissingLines(items) {
   const shown = items.slice(0, MAX_DETAIL_LINES);
   const rest  = items.length - shown.length;
   const lines = shown.map((x) => {
-    const reason = x.hasIn ? "（退勤のみ）" : "（出勤のみ）";
+    let reason;
+    if (x.hasIn !== x.hasOut) {
+      reason = x.hasIn ? "（退勤漏れ）" : "（出勤漏れ）";
+    } else if (x.hasBreakStart && !x.hasBreakEnd) {
+      reason = "（休憩終了漏れ）";
+    } else {
+      reason = "（打刻不整合）";
+    }
     return `・${x.date} ${displayName(x.rawStaff, x.date, x.facility)}${reason}`;
   });
   if (rest > 0) lines.push(`  他 ${rest} 件`);
@@ -308,31 +315,14 @@ function formatMissingLines(items) {
 // =========================================================
 // ■ 通知範囲の提案（方針4 / 選択肢）
 //
-// 現在: 直近30日のうち昨日まで（cutoff〜yesterday）を毎日全件チェック
-// → 古い未処理が解消されるまで毎日再通知される。
+// 現在: 前日分のみ（yesterday）
+// → 古い未処理は再通知されない。当日分は翌日の通知で拾う。
 //
-// 選択肢:
-//   A. 前日分のみ (推奨・最もシンプル):
-//      targetRecords のフィルタを r.date === yesterday に変更
-//      メリット: 古い未処理を再通知しない、ノイズが少ない
-//      デメリット: 古い未処理は管理画面でしか確認できない
-//
-//   B. 直近30日（現状）+ LINE本文に「直近30日分」と明記:
-//      r.date >= cutoff && r.date < today（現行）
-//      メリット: 古い未処理も見落とさない
-//      デメリット: 解消済みでない限り毎日同じ通知が来続ける
-//
-//   C. 初回通知済みフラグ（Firebase書き込みが必要・複雑）:
-//      tc5_notified に {date}__{staff} キーを保存し初回のみ通知
-//      メリット: 古い未処理は再通知しない、かつ見落としも防ぐ
-//      デメリット: Firebase セキュリティルールの変更が必要
-//
-// 現状は B を維持し LINE 通知本文に「直近30日分」と明記する。
-// A に変更する場合: 下記 targetRecords の条件を
-//   r.date >= cutoff && r.date < today
-// から
-//   r.date === yesterday
-// に書き換えるだけでよい。
+// 直近30日全体に戻す場合:
+//   targetRecords のフィルタを以下に変更する:
+//     const cutoff = getCutoffJST();  // 30日前の日付
+//     r.date >= cutoff && r.date < today
+//   LINE本文の期間表記も「直近30日分: ${cutoff}〜${yesterday}」に変更する。
 // =========================================================
 
 // ===== メイン =====
@@ -408,7 +398,7 @@ async function main() {
 
   // 対象レコードを先に絞る（未承認・打刻漏れ両方で共用）
   // 【通知範囲: 前日分のみ（今日当日は含まない）】
-  // 直近30日全体に戻す場合は「通知範囲の提案（方針4）」コメントを参照
+  // 直近30日全体に戻す場合は上記「通知範囲の提案（方針4）」コメントを参照
   const targetRecords = records.filter(
     (r) => r.date === yesterday && !r.deleted
   );
@@ -526,10 +516,14 @@ async function main() {
         hasOut:          false,
         inTime:          null,
         outTime:         null,
+        hasBreakStart:   false,
+        hasBreakEnd:     false,
       };
     }
-    if (r.type === "clockIn")  { punchMap[key].hasIn  = true; punchMap[key].inTime  = r.time || null; }
-    if (r.type === "clockOut") { punchMap[key].hasOut = true; punchMap[key].outTime = r.time || null; }
+    if (r.type === "clockIn")    { punchMap[key].hasIn        = true; punchMap[key].inTime  = r.time || null; }
+    if (r.type === "clockOut")   { punchMap[key].hasOut       = true; punchMap[key].outTime = r.time || null; }
+    if (r.type === "breakStart") { punchMap[key].hasBreakStart = true; }
+    if (r.type === "breakEnd")   { punchMap[key].hasBreakEnd   = true; }
     if (punchMap[key].facility === "施設不明") {
       punchMap[key].facility = r.workFacility || r.facilityName || "施設不明";
     }
@@ -548,12 +542,23 @@ async function main() {
       console.log(`[PAID_LEAVE] 有給承認済みのためスキップ(打刻漏れ): date=${x.date} staff=${x.rawStaff}`);
       return false;
     }
-    return x.hasIn !== x.hasOut;
+    // clockIn/clockOut の不整合
+    if (x.hasIn !== x.hasOut) return true;
+    // breakStart あり・breakEnd なし（出退勤が揃っている場合のみ追加検出）
+    if (x.hasBreakStart && !x.hasBreakEnd) return true;
+    return false;
   });
 
   console.log(`[CHECK] 打刻漏れ: ${missingList.length} 件`);
   missingList.forEach((x) => {
-    const reason = x.hasIn ? "退勤漏れ(clockInのみ)" : "出勤漏れ(clockOutのみ)";
+    let reason;
+    if (x.hasIn !== x.hasOut) {
+      reason = x.hasIn ? "退勤漏れ(clockInのみ)" : "出勤漏れ(clockOutのみ)";
+    } else if (x.hasBreakStart && !x.hasBreakEnd) {
+      reason = "休憩終了漏れ(breakStartのみ)";
+    } else {
+      reason = "打刻不整合";
+    }
     console.log(
       `[MISSING_DETAIL]` +
       ` date=${x.date}` +
@@ -563,6 +568,8 @@ async function main() {
       ` facility=${x.facility}` +
       ` clockIn=${x.inTime  ?? "なし"}` +
       ` clockOut=${x.outTime ?? "なし"}` +
+      ` breakStart=${x.hasBreakStart}` +
+      ` breakEnd=${x.hasBreakEnd}` +
       ` reason=${reason}`
     );
     // 文字化けが検出された場合: Firebase保存データ自体の文字化けかを判別するための charCode ログ

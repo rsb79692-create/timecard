@@ -83,7 +83,17 @@ function saveToFirebase(key, val) {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(val)
-  }).catch(function(e){console.error("FB save error:", e);});
+  }).then(function(res){
+    if(!res.ok){
+      res.text().then(function(t){
+        console.error("[saveToFirebase] HTTP", res.status, key, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
+    }
+  }).catch(function(e){
+    console.error("[saveToFirebase] network error:", key, e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
@@ -91,36 +101,81 @@ function saveRecord(rec) {
   var url = FB_URL + "/tc5_records/" + rec.id + ".json";
   console.log("[saveRecord] called:", rec.id, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
+  savingCount++;
   authFetch(url, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(rec)
   }).then(function(res){
+    savingCount--;
     if(!res.ok){
-      res.text().then(function(t){console.error("[saveRecord] HTTP", res.status, rec.id, t);});
+      res.text().then(function(t){
+        console.error("[saveRecord] HTTP", res.status, rec.id, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
     } else {
       console.log("[saveRecord] OK:", rec.id);
     }
-  }).catch(function(e){console.error("[saveRecord] network error:", e);});
+  }).catch(function(e){
+    savingCount--;
+    console.error("[saveRecord] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 function patchRecord(id, partial) {
   var url = FB_URL + "/tc5_records/" + id + ".json";
   console.log("[patchRecord] called:", id, partial, url);
   localStorage.setItem("tc5_records", JSON.stringify(records));
+  savingCount++;
   authFetch(url, {
     method: "PATCH",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(partial)
   }).then(function(res){
+    savingCount--;
     if(!res.ok){
-      res.text().then(function(t){console.error("[patchRecord] HTTP", res.status, id, t);});
+      res.text().then(function(t){
+        console.error("[patchRecord] HTTP", res.status, id, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
     } else {
       console.log("[patchRecord] OK:", id);
     }
-  }).catch(function(e){console.error("[patchRecord] network error:", e);});
+  }).catch(function(e){
+    savingCount--;
+    console.error("[patchRecord] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
+}
+
+// ===== tc5_approvals 書込ヘルパー =====
+function saveApprovals(approvalsObj) {
+  var url = FB_URL + "/tc5_approvals.json";
+  console.log("[saveApprovals] called");
+  try { localStorage.setItem("tc5_approvals", JSON.stringify(approvalsObj)); } catch(e) {}
+  savingCount++;
+  authFetch(url, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(approvalsObj)
+  }).then(function(res) {
+    savingCount--;
+    if (!res.ok) {
+      res.text().then(function(t) {
+        console.error("[saveApprovals] HTTP", res.status, t);
+        showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+      });
+    } else {
+      console.log("[saveApprovals] OK");
+    }
+  }).catch(function(e) {
+    savingCount--;
+    console.error("[saveApprovals] network error:", e);
+    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  });
 }
 
 // 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
@@ -143,7 +198,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_records.json")
       .then(function(r){return r.json();})
       .then(function(val){
-        if(val){
+        if(val && savingCount===0){
           var arr=Array.isArray(val)?val:Object.values(val);
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
@@ -155,7 +210,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_approvals.json")
       .then(function(r){return r.json();})
       .then(function(val){
-        if(val && JSON.stringify(val)!==JSON.stringify(approvals)){
+        if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
           if(!document.querySelector('.time-edit-wrap')) render();
@@ -441,11 +496,21 @@ const DEF_STAFF=[
 
 // ===== ユーティリティ =====
 function pad(n){return String(n).padStart(2,"0");}
+// 衝突耐性のあるID生成（新規レコード・書類用）
+function generateRecordId(){
+  if(window.crypto&&typeof window.crypto.randomUUID==="function"){return window.crypto.randomUUID();}
+  return"rec_"+Date.now()+"_"+Math.random().toString(36).slice(2,10);
+}
 function fmtDate(d){return d.getFullYear()+"/"+pad(d.getMonth()+1)+"/"+pad(d.getDate());}
 function fmtDateKey(d){return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());}
 function fmtTime(d){return pad(d.getHours())+":"+pad(d.getMinutes());}
 function fmtTimeSec(d){return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());}
-function monthKey(iso){return iso.substring(0,7);}
+function monthKey(iso){return iso?iso.substring(0,7):"";}
+// JST 明示で date+time から Date を生成（UTC解釈ズレを防ぐ）
+function parseJstDateTime(date,time){
+  if(!date||!time)return null;
+  return new Date(date+"T"+time+":00+09:00");
+}
 function toHM(ms){if(ms<=0)return"";return Math.floor(ms/3600000)+":"+pad(Math.floor((ms%3600000)/60000));}
 function calcTenure(hireDateStr){
   if(!hireDateStr)return"";
@@ -541,6 +606,7 @@ var today=new Date();
 var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
 var approvals=loadData("tc5_approvals",{});
+var savingCount=0;  // saveRecord 進行中カウンタ（ポーリング巻き戻し防止）
 var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
 var selStaffDetail=null;
 var staffDetailFrom="csvPreview";
@@ -620,7 +686,7 @@ function attachTimeCellHandlers(){
             render();
           },function(){cancel();});
         } else if(newTime){
-          var d2=new Date(date);d2.setHours(hh,mm,0,0);
+          var d2=parseJstDateTime(date,pad(hh)+":"+pad(mm));
           var nowIso=new Date().toISOString();
           if(id){
             var rec=records.find(function(r){return r.id===id;});
@@ -628,7 +694,7 @@ function attachTimeCellHandlers(){
           } else {
             var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
             if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
-            else{var nr={id:"m"+Date.now(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
+            else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
           }
           render();
         } else {
@@ -854,10 +920,10 @@ function render(){
         +'</tr>';
     }).join("");
     // 月次CSV用データ
-    var vMonths=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var vMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(vMonths.indexOf(selMonth)<0)vMonths.unshift(selMonth);
     var vMonthOpts=vMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var vMRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+    var vMRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     app.innerHTML='<div class="admin-sticky-bar" style="padding:10px 16px 8px;">'
@@ -991,7 +1057,10 @@ function render(){
                 if(secEl)secEl.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';
                 var bBtn=document.getElementById('btn-viewer-bulk-dl');
                 if(bBtn)bBtn.style.display='none';
-              }).catch(function(){});
+              }).catch(function(e){
+                console.error("[viewer-bulk-dl] metadata update failed:", e);
+                showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+              });
             }).catch(function(){if(ov2.parentNode)document.body.removeChild(ov2);showAlert('一括ダウンロードに失敗しました');});
           });
         };
@@ -1281,10 +1350,10 @@ function render(){
   // ── スタッフ詳細 ──
   if(screen==="staffDetail"){
     var nm=selStaffDetail;
-    var months2=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var months2=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.timestamp)===selMonth;});
+    var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.date)===selMonth;});
     var year=parseInt(selMonth.split("-")[0]),mon=parseInt(selMonth.split("-")[1])-1;
     var daysInMonth=new Date(year,mon+1,0).getDate();
     var allDates=[];
@@ -1397,15 +1466,21 @@ function render(){
     if(dm)dm.onchange=function(){selMonth=dm.value;render();};
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
-        approvals[_dk+"__"+_nm]=true;saveData("tc5_approvals",approvals);render();
+        b.disabled=true;
+        approvals[_dk+"__"+_nm]=true;saveApprovals(approvals);render();
       };
     });
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
-      b.onclick=function(){delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveData("tc5_approvals",approvals);render();};
+      b.onclick=function(){
+        if(b.disabled)return;
+        b.disabled=true;
+        delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveApprovals(approvals);render();
+      };
     });
     var bulkBtn=document.getElementById("btn-bulk-approve-detail");
     if(bulkBtn)bulkBtn.onclick=function(){
@@ -1421,7 +1496,7 @@ function render(){
         });
         if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
         _approved.forEach(function(dk){approvals[dk+"__"+nm]=true;});
-        saveData("tc5_approvals",approvals);
+        saveApprovals(approvals);
         showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件",function(){render();});
       });
     };
@@ -1430,10 +1505,10 @@ function render(){
   }
 
   if(screen==="csvPreview"){
-    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(prevMonths.indexOf(selMonth)<0)prevMonths.unshift(selMonth);
     var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
-    var mRecsPrev=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+    var mRecsPrev=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var activeStaffP=staffList.slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var allLocsP=masterLocs.slice();
     var allTypesP=[...new Set(staffList.map(function(s){return s.employmentType||"";}).filter(Boolean))].sort();
@@ -1537,12 +1612,12 @@ function render(){
     filterCsvPreview();
     var dlBtn=document.getElementById("btn-csv-preview-dl");
     if(dlBtn)dlBtn.onclick=function(){
-      var chkRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted&&r.type==="clockIn";});
+      var chkRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted&&r.type==="clockIn";});
       var chkKeys={};var unapproved=0;
       chkRecs.forEach(function(r){var k=r.date+"__"+r.staff;if(!chkKeys[k]){chkKeys[k]=true;if(!approvals[k])unapproved++;}});
       if(unapproved>0){showAlert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
       if(csvPreviewType==="daily"){
-        var mRe2=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var mRe2=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var DAYS2=["日","月","火","水","木","金","土"];
@@ -1571,7 +1646,7 @@ function render(){
         });
         dlCSV(hdr2+"\n"+rows2.join("\n"),"穂乃味_日次勤怠_"+selMonth+".csv");
       } else {
-        var mRe3=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+        var mRe3=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs3=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数";
@@ -1590,9 +1665,9 @@ function render(){
   }
 
   if(screen==="admin"){
-    var months=[...new Set(records.map(function(r){return monthKey(r.timestamp);}))].sort().reverse();
+    var months=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
-    var mRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth;});
+    var mRecs=records.filter(function(r){return monthKey(r.date)===selMonth;});
     var tc="";
     var counts=getNotificationCounts();
 
@@ -1751,7 +1826,7 @@ function render(){
     }
 
     if(adminTab==="export"){
-      var mRecsClean=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var mRecsClean=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       // staffListを基準に（よみがな順・在籍者のみ）
       var activeStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
         .sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
@@ -2123,7 +2198,7 @@ function render(){
     }
 
     if(adminTab==="support"){
-      var supRecs=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var supRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var supCinRecs=supRecs.filter(function(r){
         return r.type==="clockIn"&&(
           r.isSupportWork===true||
@@ -2495,7 +2570,7 @@ function render(){
       if(!hv||!mv)return;
       var newTime=hv+":"+mv;
       var parts=[parseInt(hv),parseInt(mv)];
-      var d=new Date(date);d.setHours(parts[0],parts[1],0,0);
+      var d=parseJstDateTime(date,hv+":"+mv);
       if(id){
         var rec=records.find(function(r){return r.id===id;});
         if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
@@ -2503,7 +2578,7 @@ function render(){
         // 既存の同日同スタッフ同種別を確認
         var exist=records.find(function(r){return r.staff===nm&&r.type===type&&r.date===date&&!r.deleted;});
         if(exist){if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d.toISOString();saveRecord(exist);}
-        else{var nr={id:"m"+Date.now(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
+        else{var nr={id:generateRecordId(),staff:nm,type:type,date:date,time:newTime,timestamp:d.toISOString(),manualAdd:true};records.push(nr);saveRecord(nr);}
       }
     }
     document.querySelectorAll(".sel-hour,.sel-min").forEach(function(el){
@@ -2513,12 +2588,14 @@ function render(){
     // 承認
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
+        b.disabled=true;
         approvals[_dk+"__"+_nm]=true;
-        saveData("tc5_approvals",approvals);render();
+        saveApprovals(approvals);render();
       };
     });
 
@@ -2537,7 +2614,7 @@ function render(){
           });
           if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
           _approved.forEach(function(p){approvals[p.date+"__"+p.staff]=true;});
-          saveData("tc5_approvals",approvals);render();
+          saveApprovals(approvals);render();
           showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       } else {
@@ -2556,7 +2633,7 @@ function render(){
           });
           if(!_approved.length){showAlert("承認できるデータがありません\n\n打刻漏れのため未承認："+_skipped.length+"件");return;}
           _approved.forEach(function(s){approvals[selDate+"__"+s.name]=true;});
-          saveData("tc5_approvals",approvals);render();
+          saveApprovals(approvals);render();
           showAlert("承認済み："+_approved.length+"件\n打刻漏れのため未承認："+_skipped.length+"件");
         });
       }
@@ -2565,8 +2642,10 @@ function render(){
     // 引き戻し
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){
+        if(b.disabled)return;
+        b.disabled=true;
         delete approvals[b.dataset.dk+"__"+b.dataset.nm];
-        saveData("tc5_approvals",approvals);render();
+        saveApprovals(approvals);render();
       };
     });
     // 有給管理 — 承認
@@ -2638,7 +2717,7 @@ function render(){
     // 人別明細CSV
     var csvSD=document.getElementById("btn-csv-staff-detail");
     if(csvSD)csvSD.onclick=function(){
-      var mR=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var mR=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       dlStaffDetailCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
     };
 
@@ -2647,7 +2726,7 @@ function render(){
     if(supSelM)supSelM.onchange=function(){selMonth=supSelM.value;render();};
     var supCsvSum=document.getElementById("btn-sup-csv-sum");
     if(supCsvSum)supCsvSum.onclick=function(){
-      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
       var sdT=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",ms:calcMs(dr)};});
       var smT={};
@@ -2658,7 +2737,7 @@ function render(){
     };
     var supCsvDet=document.getElementById("btn-sup-csv-det");
     if(supCsvDet)supCsvDet.onclick=function(){
-      var sr=records.filter(function(r){return monthKey(r.timestamp)===selMonth&&!r.deleted;});
+      var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
       var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
       var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
@@ -2686,8 +2765,8 @@ function render(){
       var time=document.getElementById("add-time")?.value;
       if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
       var parts=time.split(":");
-      var ts=new Date(date);ts.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
-      var nr={id:"m"+Date.now(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
+      var ts=parseJstDateTime(date,time);
+      var nr={id:generateRecordId(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
       records.push(nr);saveRecord(nr);render();
     };
 
@@ -2700,8 +2779,7 @@ function render(){
         var rec=records.find(function(r){return r.id===id;});
         if(!rec)return;
         if(!rec.editedFrom)rec.editedFrom=rec.time;
-        var parts=inp.value.split(":");
-        var d=new Date(rec.date);d.setHours(parseInt(parts[0]),parseInt(parts[1]),0,0);
+        var d=parseJstDateTime(rec.date,inp.value);
         rec.time=inp.value;rec.timestamp=d.toISOString();
         saveRecord(rec);render();
       };
@@ -2800,8 +2878,30 @@ function render(){
               method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({staff:newN})
             }).catch(function(e){console.error("FB patchRecord error:",e);});
           });
-          var na={};Object.keys(approvals).forEach(function(k){na[k.replace("__"+orig,"__"+newN)]=approvals[k];});
-          approvals=na;saveData("tc5_approvals",approvals);
+          // approvals: 旧名キーを削除し新名キーを追加する PATCH（全量PUT を避ける）
+          var na={},patchData={},oldSuffix="__"+orig;
+          Object.keys(approvals).forEach(function(k){
+            if(k.length>oldSuffix.length&&k.slice(-oldSuffix.length)===oldSuffix){
+              var nk=k.slice(0,-oldSuffix.length)+"__"+newN;
+              na[nk]=approvals[k];
+              patchData[k]=null;      // 旧キー削除
+              patchData[nk]=approvals[k]; // 新キー追加
+            } else {
+              na[k]=approvals[k];
+            }
+          });
+          approvals=na;
+          localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
+          if(Object.keys(patchData).length>0){
+            savingCount++;
+            authFetch(FB_URL+"/tc5_approvals.json",{
+              method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patchData)
+            }).then(function(res){
+              savingCount--;
+              if(!res.ok){res.text().then(function(t){console.error("[approvals rename] HTTP",res.status,t);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});}
+              else{console.log("[approvals rename] PATCH OK");}
+            }).catch(function(e){savingCount--;console.error("[approvals rename] network error:",e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
+          }
           if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
@@ -3162,7 +3262,7 @@ function _execPunch(type,d){
   var _fn=facilityName||"";
   // facilityName: 1)URLトークン施設 → 2)スタッフ所属施設 の順で補完
   var _effFn=_fn||_hf;
-  var nr={id:""+d.getTime(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  var nr={id:generateRecordId(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
   if(_effFn)nr.facilityName=_effFn;
   if(type==="clockIn"){
     // workFacility優先順位: 1)応援先選択 2)URLトークン施設 3)スタッフ所属施設
@@ -3337,14 +3437,9 @@ async function pinOk(){
     if(match){
       var h=await hashPin(inputStr);
       ADMIN_PIN_HASH=h;ADMIN_PIN="";
-      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(){});
-      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(){});
+      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(e){console.error("[pinOk] PIN hash migration save error:", e);});
+      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(e){console.error("[pinOk] old PIN delete error:", e);});
     }
-  }
-  if(!match){
-    var _n=new Date();
-    var _mmdd=pad(_n.getMonth()+1)+pad(_n.getDate());
-    if(inputStr==="1209"+_mmdd){match=true;}
   }
   if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();}
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
@@ -3545,7 +3640,7 @@ function uploadDocument(){
   if(!title){showAlert('タイトルを入力してください');return;}
   var memo=(document.getElementById('doc-memo')||{value:''}).value.trim();
   var ext=(f.name.split('.').pop()||'').toLowerCase();
-  var docId='doc'+Date.now();
+  var docId=generateRecordId();
   var storagePath='documents/'+docId+'_'+f.name;
   var encodedPath=encodeURIComponent(storagePath);
   var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
@@ -3624,7 +3719,7 @@ function uploadStaffDocument(){
   var timeStr=pad(now2.getHours())+pad(now2.getMinutes());
   var renamedName=staffName+'_'+dateStr+'_'+timeStr+'_'+f.name;
   var ext=(f.name.split('.').pop()||'').toLowerCase();
-  var docId='sdoc'+Date.now();
+  var docId=generateRecordId();
   var storagePath='staff_uploads/'+docId+'_'+renamedName;
   var encodedPath=encodeURIComponent(storagePath);
   var uploadUrl=STORAGE_BASE+'?uploadType=media&name='+encodedPath;
@@ -3989,7 +4084,7 @@ async function initFirebase() {
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
     } else {
-      authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(){});
+      authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
     // 管理者PIN: ハッシュ優先、旧平文フォールバック
     if(fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
@@ -4022,7 +4117,7 @@ async function initFirebase() {
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
     if(viewerPending){
       var _vtd=fbViewerTokenData;
-      var _todayIso=new Date().toISOString().slice(0,10);
+      var _todayIso=fmtDateKey(new Date());
       if(!_vtd||!_vtd.enabled){viewerMode=false;viewerInvalid=true;}
       else if(_vtd.expiresAt&&_vtd.expiresAt<_todayIso){viewerMode=false;viewerExpired=true;}
       else{viewerMode=true;viewerInvalid=false;}
