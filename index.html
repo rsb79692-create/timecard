@@ -619,6 +619,7 @@ var plFormDate=""; // 有給申請フォームの選択日付を render() また
 var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日対応、render()またぎ保持）
 var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
 var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
+var pinRevealSet={}; // {staffName: true} スタッフ管理画面でPINを表示中の行を管理
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
 var today=new Date();
@@ -1993,6 +1994,26 @@ function render(){
         var sl=s.status||"在籍";
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
+        var pinVal=staffPins[s.name];
+        var pinRevealed=pinRevealSet[s.name];
+        var pinTd;
+        if(!pinVal){
+          pinTd='<td style="padding:0 14px;white-space:nowrap;"><span style="color:#9ca3af;font-size:.78rem;">未設定</span></td>';
+        } else if(isLegacyPin(pinVal)){
+          if(pinRevealed){
+            pinTd='<td style="padding:0 14px;white-space:nowrap;">'
+              +'<span style="font-family:monospace;font-size:.88rem;color:#0f172a;letter-spacing:.1em;">'+pinVal+'</span>'
+              +'<button onclick="event.stopPropagation();pinRevealSet['+JSON.stringify(s.name)+']=false;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">隠す</button>'
+              +'</td>';
+          } else {
+            pinTd='<td style="padding:0 14px;white-space:nowrap;">'
+              +'<span style="color:#9ca3af;font-size:.85rem;letter-spacing:.1em;">••••</span>'
+              +'<button onclick="event.stopPropagation();pinRevealSet['+JSON.stringify(s.name)+']=true;render();" style="margin-left:6px;background:#f3f4f6;color:#475569;border:1px solid #d1d5db;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">表示</button>'
+              +'</td>';
+          }
+        } else {
+          pinTd='<td style="padding:0 14px;white-space:nowrap;"><span style="color:#6b7280;font-size:.78rem;">設定済み</span></td>';
+        }
         return '<tr class="hrm-row" data-nm="'+s.name+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
           +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
           +'<td style="padding:0 14px;overflow:hidden;">'
@@ -2005,6 +2026,7 @@ function render(){
           +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+sl+'</span>'
           +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">退職日: '+s.retireDate+'</div>':(s.hireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':""))
           +'</td>'
+          +pinTd
           +'<td style="padding:0 14px;white-space:nowrap;">'
           +'<button class="btn-hrm-edit" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">編集</button>'
           +'<button class="btn-hrm-del" data-nm="'+s.name+'" onclick="event.stopPropagation();" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
@@ -2064,13 +2086,14 @@ function render(){
         +'<span style="margin-left:auto;font-size:12px;color:#475569;">全<strong id="hrm-count">'+tabFiltered.length+'</strong>件</span>'
         +'</div>'
         +'<div style="overflow-x:auto;">'
-        +'<table style="width:100%;border-collapse:collapse;min-width:860px;table-layout:fixed;">'
+        +'<table style="width:100%;border-collapse:collapse;min-width:960px;table-layout:fixed;">'
         +'<thead><tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;white-space:nowrap;width:90px;">社員番号</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:200px;">氏名</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:160px;">拠点</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:130px;">雇用形態</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:180px;">権限 / 状態</th>'
+        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;min-width:100px;width:100px;">PIN</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:100px;">操作</th>'
         +'</tr></thead>'
         +'<tbody id="hrm-tbody">'+hrmRows+'</tbody>'
