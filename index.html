@@ -617,6 +617,7 @@ var paidLeaveBalanceSaving=false; // 承認処理中フラグ（二重クリッ�
 var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フラグ
 var plFormDate=""; // 有給申請フォームの選択日付を render() またぎで保持（後方互換用、未使用）
 var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日対応、render()またぎ保持）
+var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
 var today=new Date();
@@ -1338,19 +1339,15 @@ function render(){
       +'</div>';
     if(showPaidLeaveForm){
       var plSubmitBtn=document.getElementById("btn-pl-submit");
-      if(plSubmitBtn)plSubmitBtn.onclick=function(){
+      if(plSubmitBtn)plSubmitBtn.onclick=async function(){
+        if(plSubmitting)return; // 二重クリック防止
+        // ── 同期チェック（Firebase書き込み前）──
         if(plFormDates.length===0){showAlert("取得日を1日以上選択してください");return;}
-        // 社員番号チェック（空・重複の場合は申請不可）
         var reqEmpId=resolveStaffId(staffName);
-        if(!reqEmpId){
-          showAlert(resolveStaffIdError(staffName));
-          return;
-        }
+        if(!reqEmpId){showAlert(resolveStaffIdError(staffName));return;}
         var monthRange=getJSTMonthRange();
-        // 全日付が当月内かチェック
         var outOfRange=plFormDates.filter(function(d){return d<monthRange.first||d>monthRange.last;});
         if(outOfRange.length>0){showAlert("有給申請は当月内の日付のみ可能です");return;}
-        // 同日重複チェック
         var dupDates=[];
         plFormDates.forEach(function(d){
           var dup=paidLeaveRequests.find(function(r){
@@ -1359,15 +1356,39 @@ function render(){
           if(dup)dupDates.push(d);
         });
         if(dupDates.length>0){showAlert(dupDates.join(", ")+" はすでに有給申請があります");return;}
-        // 有効残日数チェック（Firebaseへ書き込む前に止める）
+        // ── Firebaseから最新の有給残日数を直接取得してブロック判定 ──
+        plSubmitting=true;
+        try{
+          var raw=await authFetch(FB_URL+"/tc5_paid_leave_balances.json").then(function(r){return r.json();});
+          if(raw){
+            var arr=typeof raw==="object"&&!Array.isArray(raw)?Object.values(raw):raw;
+            paidLeaveBalances=(arr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
+          } else {
+            paidLeaveBalances=[];
+          }
+        }catch(e){
+          plSubmitting=false;
+          showAlert("残日数の確認中にエラーが発生しました。再試行してください。");
+          return;
+        }
+        // 有効残日数チェック（最新データで判定 / Firebaseへ書き込む前に完全ブロック）
         var validRemain=getValidRemainDays(reqEmpId);
-        if(validRemain===0){showAlert("有効な有給残日数がありません（付与なし・残0・期限切れ）");return;}
-        if(validRemain<plFormDates.length){showAlert("有効残日数が不足しています（残"+validRemain+"日、申請"+plFormDates.length+"日）");return;}
+        if(validRemain===0){
+          plSubmitting=false;
+          showAlert("有給残日数がありません（付与なし・残0・期限切れ）");
+          return;
+        }
+        if(validRemain<plFormDates.length){
+          plSubmitting=false;
+          showAlert("有給残日数が不足しています（必要"+plFormDates.length+"日／残"+validRemain+"日）");
+          return;
+        }
+        // ── 全チェック通過 → tc5_paid_leave_requests に保存 ──
         var sortedDates=plFormDates.slice().sort();
         var reqId="pl"+Date.now();
         var req={
           id:reqId,
-          staffId:reqEmpId,  // 社員番号を設定（先頭ゼロ保護: String型のまま）
+          staffId:reqEmpId,
           staffName:staffName,
           leaveDates:sortedDates,
           date:sortedDates[0],
@@ -1379,7 +1400,8 @@ function render(){
         paidLeaveRequests.push(req);
         savePaidLeaveRequest(req).then(function(){});
         showPaidLeaveForm=false;
-        plFormDates=[]; // 送信後はリセット
+        plFormDates=[];
+        plSubmitting=false;
         var dispDates=sortedDates.length<=3?sortedDates.join(", "):sortedDates[0]+" 他"+(sortedDates.length-1)+"日";
         showAlert("有給申請を送信しました（"+dispDates+"）");
         render();
