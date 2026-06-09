@@ -1327,6 +1327,7 @@ function render(){
               +'</div>'
               +calHtml
               +(existingDates&&Object.keys(existingDates).length>0?'<div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">グレーの日付は申請済みです</div>':"")
+              +(function(){var sid=resolveStaffId(staffName);var vr=sid?getValidRemainDays(sid):null;if(vr===null)return'';var c=vr===0?"#dc2626":vr<selCount?"#d97706":"#166534";return'<div style="font-size:.82rem;margin-top:8px;font-weight:700;color:'+c+';">有効残日数：'+vr+'日</div>';})()
               +'<div style="display:flex;gap:8px;margin-top:10px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
               +'<button onclick="showPaidLeaveForm=false;plFormDates=[];render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
@@ -1358,6 +1359,10 @@ function render(){
           if(dup)dupDates.push(d);
         });
         if(dupDates.length>0){showAlert(dupDates.join(", ")+" はすでに有給申請があります");return;}
+        // 有効残日数チェック（Firebaseへ書き込む前に止める）
+        var validRemain=getValidRemainDays(reqEmpId);
+        if(validRemain===0){showAlert("有効な有給残日数がありません（付与なし・残0・期限切れ）");return;}
+        if(validRemain<plFormDates.length){showAlert("有効残日数が不足しています（残"+validRemain+"日、申請"+plFormDates.length+"日）");return;}
         var sortedDates=plFormDates.slice().sort();
         var reqId="pl"+Date.now();
         var req={
@@ -4447,6 +4452,18 @@ function getLeaveDates(req){
   if(req.leaveDates&&Array.isArray(req.leaveDates)&&req.leaveDates.length>0)return req.leaveDates;
   if(req.date)return [req.date];
   return [];
+}
+
+// staffId\u57FA\u6E96\u306E\u6709\u52B9\u6B8B\u65E5\u6570\uFF08\u671F\u9650\u5185\u30FB\u6B8B>0\u306E\u4ED8\u4E0E\u884C\u306E\u307F\u5408\u8A08\uFF09
+function getValidRemainDays(staffId){
+  if(!staffId)return 0;
+  var today=todayDateStr();
+  return paidLeaveBalances
+    .map(function(b){return normalizePaidLeaveBalance(b);})
+    .filter(function(b){
+      return b.staffId===staffId&&(b.expiresAt>=today)&&(b.remainDays>0);
+    })
+    .reduce(function(sum,b){return Math.round((sum+b.remainDays)*10)/10;},0);
 }
 
 // \u6709\u7D66\u7533\u8ACB\u30D5\u30A9\u30FC\u30E0\u306E\u30AB\u30EC\u30F3\u30C0\u30FC\u3067\u65E5\u4ED8\u30C8\u30B0\u30EB\uFF08\u9078\u629E/\u89E3\u9664\uFF09
