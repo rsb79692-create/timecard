@@ -91,6 +91,22 @@ function getCutoffJST() {
   return `${y}-${m}-${da}`;
 }
 
+// ===== JST 昨日の日付 yyyy-mm-dd =====
+function getYesterdayJST() {
+  const d = new Date();
+  d.setDate(d.getDate() - 1);
+  const parts = new Intl.DateTimeFormat("ja-JP", {
+    timeZone: "Asia/Tokyo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(d);
+  const y  = parts.find((p) => p.type === "year").value;
+  const m  = parts.find((p) => p.type === "month").value;
+  const da = parts.find((p) => p.type === "day").value;
+  return `${y}-${m}-${da}`;
+}
+
 // ===== UTC ISO8601 を JST 日付 yyyy-mm-dd に変換 =====
 function isoToDateJST(isoStr) {
   if (!isoStr) return "";
@@ -222,7 +238,6 @@ function findGarbledMatch(mapObj, date, garbledNormStaff) {
   const candidates = Object.keys(mapObj).filter((k) => {
     if (!k.startsWith(prefix)) return false;
     const existing = k.slice(prefix.length);
-    // 一方が他方の前方一致になっていれば同一人物と見なす
     return existing.startsWith(garbledNormStaff) || garbledNormStaff.startsWith(existing);
   });
   if (candidates.length === 1) return candidates[0];
@@ -247,18 +262,78 @@ function approvalsHas(approvals, date, rawStaff) {
 // 文字化けがある場合は壊れた文字を出さず代替テキストを返す
 function displayName(rawStaff, date, facility) {
   if (isGarbled(rawStaff)) {
-    return `氏名文字化けあり: ${date} / ${facility}`;
+    return `氏名文字化けあり(${facility})`;
   }
   return rawStaff;
 }
 
-// ===== サンプル3件整形 =====
-function formatSamples(items) {
-  if (items.length === 0) return "  (なし)";
-  return items.slice(0, 3)
-    .map((x) => `  ${x.date} ${displayName(x.rawStaff, x.date, x.facility)}`)
-    .join("\n");
+// ===== 文字化け診断 charCode ログ（一時的） =====
+// Firebase保存データ自体の文字化けか、JS処理中の変換失敗かを判別するため。
+// rawStaff に U+FFFD が含まれていれば Firebase 保存データ自体が文字化けしている可能性が高い。
+function logCharCodes(label, str) {
+  if (!str || typeof str !== "string") return;
+  const codes = [...str]
+    .map((c) => "U+" + c.codePointAt(0).toString(16).toUpperCase().padStart(4, "0"))
+    .join(" ");
+  console.log(`[CHARCODE] ${label}: "${str}" → ${codes}`);
 }
+
+// ===== 通知本文用明細行フォーマット =====
+// 最大 MAX_DETAIL_LINES 件を詳細表示し、超える分は「他 N 件」と追記
+const MAX_DETAIL_LINES = 5;
+
+function formatUnapprovedLines(items) {
+  if (items.length === 0) return "（なし）";
+  const shown = items.slice(0, MAX_DETAIL_LINES);
+  const rest  = items.length - shown.length;
+  const lines = shown.map(
+    (x) => `・${x.date} ${displayName(x.rawStaff, x.date, x.facility)}`
+  );
+  if (rest > 0) lines.push(`  他 ${rest} 件`);
+  return lines.join("\n");
+}
+
+function formatMissingLines(items) {
+  if (items.length === 0) return "（なし）";
+  const shown = items.slice(0, MAX_DETAIL_LINES);
+  const rest  = items.length - shown.length;
+  const lines = shown.map((x) => {
+    const reason = x.hasIn ? "（退勤のみ）" : "（出勤のみ）";
+    return `・${x.date} ${displayName(x.rawStaff, x.date, x.facility)}${reason}`;
+  });
+  if (rest > 0) lines.push(`  他 ${rest} 件`);
+  return lines.join("\n");
+}
+
+// =========================================================
+// ■ 通知範囲の提案（方針4 / 選択肢）
+//
+// 現在: 直近30日のうち昨日まで（cutoff〜yesterday）を毎日全件チェック
+// → 古い未処理が解消されるまで毎日再通知される。
+//
+// 選択肢:
+//   A. 前日分のみ (推奨・最もシンプル):
+//      targetRecords のフィルタを r.date === yesterday に変更
+//      メリット: 古い未処理を再通知しない、ノイズが少ない
+//      デメリット: 古い未処理は管理画面でしか確認できない
+//
+//   B. 直近30日（現状）+ LINE本文に「直近30日分」と明記:
+//      r.date >= cutoff && r.date < today（現行）
+//      メリット: 古い未処理も見落とさない
+//      デメリット: 解消済みでない限り毎日同じ通知が来続ける
+//
+//   C. 初回通知済みフラグ（Firebase書き込みが必要・複雑）:
+//      tc5_notified に {date}__{staff} キーを保存し初回のみ通知
+//      メリット: 古い未処理は再通知しない、かつ見落としも防ぐ
+//      デメリット: Firebase セキュリティルールの変更が必要
+//
+// 現状は B を維持し LINE 通知本文に「直近30日分」と明記する。
+// A に変更する場合: 下記 targetRecords の条件を
+//   r.date >= cutoff && r.date < today
+// から
+//   r.date === yesterday
+// に書き換えるだけでよい。
+// =========================================================
 
 // ===== メイン =====
 async function main() {
@@ -289,10 +364,10 @@ async function main() {
     return;
   }
 
-  const today  = getTodayJST();
-  const cutoff = getCutoffJST();
+  const today     = getTodayJST();
+  const yesterday = getYesterdayJST();
   console.log(`[DATE]  基準日(JST今日): ${today}`);
-  console.log(`[DATE]  直近30日範囲: ${cutoff} ～ ${today} (前日まで)`);
+  console.log(`[DATE]  通知対象日(前日): ${yesterday}`);
 
   // ── Firebase 認証 ──
   console.log("[AUTH]  Firebase Anonymous Auth 開始");
@@ -314,9 +389,28 @@ async function main() {
   const approvals = (rawApprovals && typeof rawApprovals === "object") ? rawApprovals : {};
   console.log(`[RTDB]  tc5_approvals 件数: ${Object.keys(approvals).length}`);
 
+  // ── tc5_paid_leave_requests 取得（承認済み有給日を除外に使う）──
+  let approvedPaidLeaveDates = {};
+  try {
+    const rawPL = await fetchRTDB("tc5_paid_leave_requests", idToken);
+    if (rawPL && typeof rawPL === "object") {
+      const plArr = Array.isArray(rawPL) ? rawPL : Object.values(rawPL);
+      plArr.filter(Boolean).forEach((r) => {
+        if (r.status === "approved" && r.staffName && r.date) {
+          approvedPaidLeaveDates[`${r.staffName}__${r.date}`] = true;
+        }
+      });
+    }
+    console.log(`[RTDB]  tc5_paid_leave_requests 承認済み有給: ${Object.keys(approvedPaidLeaveDates).length} 件`);
+  } catch (e) {
+    console.warn("[WARN]  paid_leave_requests 取得失敗（処理続行）:", e.message);
+  }
+
   // 対象レコードを先に絞る（未承認・打刻漏れ両方で共用）
+  // 【通知範囲: 前日分のみ（今日当日は含まない）】
+  // 直近30日全体に戻す場合は「通知範囲の提案（方針4）」コメントを参照
   const targetRecords = records.filter(
-    (r) => r.date >= cutoff && r.date < today && !r.deleted
+    (r) => r.date === yesterday && !r.deleted
   );
   // 非garbledを先に処理し、garbledがマージ対象を見つけられるようにする
   const sortedTarget = [
@@ -326,7 +420,7 @@ async function main() {
 
   // ========================================
   // ■ 未承認チェック
-  // 対象: date < today、deleted=false
+  // 対象: date === yesterday、deleted=false
   // 条件: tc5_approvals にキーなし（raw/正規化/前方一致で照合）
   // ========================================
   console.log("[CHECK] 未承認チェック開始");
@@ -339,12 +433,18 @@ async function main() {
 
     if (isGarbled(r.staff)) {
       const matched = findGarbledMatch(seenUnapproved, r.date, normStaff);
-      if (matched !== null) key = matched; // 既存エントリと同一人物とみなす
+      if (matched !== null) key = matched;
     }
 
     if (seenUnapproved[key]) return;
     seenUnapproved[key] = true;
 
+    // 承認済み有給日はスキップ
+    if (approvedPaidLeaveDates[`${r.date}__${r.staff}`] ||
+        approvedPaidLeaveDates[`${r.date}__${normStaff}`]) {
+      console.log(`[PAID_LEAVE] 有給承認済みのためスキップ(未承認): date=${r.date} staff=${r.staff}`);
+      return;
+    }
     if (!approvalsHas(approvals, r.date, r.staff)) {
       unapprovedList.push({
         rawStaff:        r.staff,
@@ -371,11 +471,15 @@ async function main() {
       ` approvalKey(norm)=${normKey}` +
       ` approvalValue(norm)=${JSON.stringify(approvals[normKey])}`
     );
+    // 文字化けが検出された場合: Firebase保存データ自体の文字化けかを判別するための charCode ログ
+    if (isGarbled(x.rawStaff)) {
+      logCharCodes("UNAPPROVED rawStaff", x.rawStaff);
+    }
   });
 
   // ========================================
   // ■ 打刻漏れチェック
-  // 対象: date < today、deleted=false
+  // 対象: date === yesterday、deleted=false
   // キー: date + "__" + normalizeStaff(r.staff)
   // garbledレコードは非garbledエントリへ前方一致マージ
   // 条件: clockInあり・clockOutなし または clockInなし・clockOutあり
@@ -437,6 +541,13 @@ async function main() {
 
   const missingList = Object.values(punchMap).filter((x) => {
     if (approvalsHas(approvals, x.date, x.rawStaff)) return false;
+    // 承認済み有給日はスキップ
+    const normStaffX = normalizeStaff(x.rawStaff);
+    if (approvedPaidLeaveDates[`${x.date}__${x.rawStaff}`] ||
+        approvedPaidLeaveDates[`${x.date}__${normStaffX}`]) {
+      console.log(`[PAID_LEAVE] 有給承認済みのためスキップ(打刻漏れ): date=${x.date} staff=${x.rawStaff}`);
+      return false;
+    }
     return x.hasIn !== x.hasOut;
   });
 
@@ -454,6 +565,10 @@ async function main() {
       ` clockOut=${x.outTime ?? "なし"}` +
       ` reason=${reason}`
     );
+    // 文字化けが検出された場合: Firebase保存データ自体の文字化けかを判別するための charCode ログ
+    if (isGarbled(x.rawStaff)) {
+      logCharCodes("MISSING rawStaff", x.rawStaff);
+    }
   });
 
   // ========================================
@@ -469,10 +584,10 @@ async function main() {
   console.log(`  打刻漏れ: ${missingCount} 件`);
   console.log(`  合計    : ${total} 件`);
   console.log("========================================");
-  console.log("[SAMPLE] 未承認 サンプル3件:");
-  console.log(formatSamples(unapprovedList));
-  console.log("[SAMPLE] 打刻漏れ サンプル3件:");
-  console.log(formatSamples(missingList));
+  console.log("[DETAIL] 未承認 一覧:");
+  console.log(formatUnapprovedLines(unapprovedList));
+  console.log("[DETAIL] 打刻漏れ 一覧:");
+  console.log(formatMissingLines(missingList));
 
   // ── 対象なしなら通知スキップ ──
   if (total === 0) {
@@ -481,10 +596,21 @@ async function main() {
   }
 
   // ── LINE 通知本文 ──
+  // タイトル: morning-check.js の「朝出勤未確認」と混同しないよう「未承認・打刻漏れ通知」と明記
+  const unapprovedSection =
+    `▼未承認（${unapprovedCount}件）\n` +
+    formatUnapprovedLines(unapprovedList);
+
+  const missingSection =
+    `▼打刻漏れ（${missingCount}件）\n` +
+    formatMissingLines(missingList);
+
   const message =
-    "【穂乃味タイムカード】\n\n" +
-    `未承認：${unapprovedCount}件\n` +
-    `打刻漏れ：${missingCount}件\n\n` +
+    "【穂乃味タイムカード】\n" +
+    "未承認・打刻漏れ通知\n" +
+    `（前日分: ${yesterday}）\n\n` +
+    unapprovedSection + "\n\n" +
+    missingSection + "\n\n" +
     "▼管理者画面\n" +
     "https://rsb79692-create.github.io/timecard/?token=all";
 
