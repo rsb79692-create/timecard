@@ -618,6 +618,7 @@ var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フ
 var plFormDate=""; // 有給申請フォームの選択日付を render() またぎで保持（後方互換用、未使用）
 var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日対応、render()またぎ保持）
 var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
+var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
 var today=new Date();
@@ -2471,17 +2472,27 @@ function render(){
 
     if(adminTab==="paidleave"){
       var today_pl=todayDateStr();
-      var plStatusLabel={pending:"申請中",approved:"承認済",rejected:"却下"};
-      var plStatusColor={pending:"#92400e",approved:"#166534",rejected:"#991b1b"};
-      var plStatusBg={pending:"#fef3c7",approved:"#dcfce7",rejected:"#fee2e2"};
-      var plSortedRequests=paidLeaveRequests.slice().sort(function(a,b){
+      var plStatusLabel={pending:"申請中",approved:"承認済",rejected:"却下",withdrawn:"引戻済",canceled:"取消済"};
+      var plStatusColor={pending:"#92400e",approved:"#166534",rejected:"#991b1b",withdrawn:"#6b7280",canceled:"#6b7280"};
+      var plStatusBg={pending:"#fef3c7",approved:"#dcfce7",rejected:"#fee2e2",withdrawn:"#f3f4f6",canceled:"#f3f4f6"};
+      // 履歴扱いのステータス（通常一覧では非表示）
+      var PL_HIST_ST=["rejected","withdrawn","canceled"];
+      // 通常一覧（申請中・承認済）: pending優先、同区分内は日付降順
+      var plActiveRequests=paidLeaveRequests.filter(function(r){return PL_HIST_ST.indexOf(r.status)<0;}).slice().sort(function(a,b){
         if(a.status==="pending"&&b.status!=="pending")return -1;
         if(a.status!=="pending"&&b.status==="pending")return 1;
-        // 複数日対応: 先頭日付でソート
         var da=getLeaveDates(a)[0]||a.date||"";
         var db=getLeaveDates(b)[0]||b.date||"";
         return db.localeCompare(da);
       });
+      // 履歴（却下・引戻済・取消済）: 日付降順
+      var plHistoryRequests=paidLeaveRequests.filter(function(r){return PL_HIST_ST.indexOf(r.status)>=0;}).slice().sort(function(a,b){
+        var da=getLeaveDates(a)[0]||a.date||"";
+        var db=getLeaveDates(b)[0]||b.date||"";
+        return db.localeCompare(da);
+      });
+      // 表示対象: 通常 + (履歴ON時のみ履歴を末尾追加)
+      var plSortedRequests=showPaidLeaveHistory?plActiveRequests.concat(plHistoryRequests):plActiveRequests;
       var plRows=plSortedRequests.length
         ?plSortedRequests.map(function(r){
             var sl=plStatusLabel[r.status]||r.status;
@@ -2494,7 +2505,8 @@ function render(){
               lds.length<=3?lds.join(", "):
               lds[0]+" 他"+(lds.length-1)+"日";
             var dayCountDisp=lds.length>1?'<span style="font-size:.72rem;color:#475569;margin-left:4px;">'+lds.length+'日</span>':"";
-            return '<tr style="border-bottom:1px solid #e9ecef;">'
+            var isHist=PL_HIST_ST.indexOf(r.status)>=0;
+            return '<tr style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
               +'<td style="padding:8px 6px;font-size:.8rem;white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;">'+sl+'</span></td>'
               +'<td style="padding:8px 6px;font-weight:700;font-size:.92rem;white-space:nowrap;">'+r.staffName+'</td>'
               +'<td style="padding:8px 6px;font-family:monospace;font-size:.82rem;">'+dateDisp+dayCountDisp+'</td>'
@@ -2510,7 +2522,7 @@ function render(){
               )
               +'</td></tr>';
           }).join("")
-        :'<tr><td colspan="5" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">有給申請はありません</td></tr>';
+        :'<tr><td colspan="5" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">'+(showPaidLeaveHistory?"有給申請はありません":"申請中・承認済の有給申請はありません")+'</td></tr>';
 
       // 付与行単位の残日数管理テーブル
       var normBalances=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);});
@@ -2611,10 +2623,12 @@ function render(){
         }).join("");
 
       tc='<div class="admin-card">'
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+        +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<div class="admin-title" style="margin-bottom:0;">有給申請一覧</div>'
         +'<span style="font-size:.78rem;color:#8496a7;margin-left:4px;">申請中: '+paidLeaveRequests.filter(function(r){return r.status==="pending";}).length+'件</span>'
+        +(plHistoryRequests.length>0?'<span style="font-size:.78rem;color:#9ca3af;">｜ 履歴: '+plHistoryRequests.length+'件</span>':"")
         +(paidLeaveBalanceSaving?'<span style="font-size:.75rem;color:#b45309;font-weight:700;margin-left:8px;">処理中...</span>':"")
+        +(plHistoryRequests.length>0?'<button onclick="showPaidLeaveHistory=!showPaidLeaveHistory;render();" style="margin-left:auto;background:'+(showPaidLeaveHistory?"#e0e7ff":"#f3f4f6")+';color:'+(showPaidLeaveHistory?"#1e40af":"#6b7280")+';border:1px solid '+(showPaidLeaveHistory?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:4px 10px;cursor:pointer;font-family:inherit;">'+(showPaidLeaveHistory?"履歴を隠す":"履歴を表示")+'</button>':"")
         +'</div>'
         +(paidLeaveLoading
           ?'<div class="empty">読み込み中...</div>'
