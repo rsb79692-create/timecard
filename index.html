@@ -4045,6 +4045,9 @@ setInterval(function(){
 // ===== Firebase 起動時データ取得（個別パス・root bulk read 廃止 - Phase 2-A）=====
 async function initFirebase() {
   try {
+    // 認証トークンを1回取得してキャッシュ（Promise.all内の14並列fetchが個別にsignInして
+    // Firebase匿名authレート制限に当たるのを防ぐ）
+    await getAuthToken();
     var results=await Promise.all([
       fetchJson(FB_URL+"/tc5_staff.json"),
       fetchJson(FB_URL+"/tc5_records.json"),
@@ -4085,9 +4088,11 @@ async function initFirebase() {
     } else {
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
-    // 管理者PIN: ハッシュ優先、旧平文フォールバック
-    if(fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
-    else if(fbAdminPin){ADMIN_PIN=fbAdminPin;}
+    // 管理者PIN: ハッシュ優先、旧平文フォールバック（文字列チェックでPermission deniedオブジェクトを除外）
+    if(typeof fbAdminPinHash==="string"&&fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
+    else if(typeof fbAdminPin==="string"&&fbAdminPin){ADMIN_PIN=fbAdminPin;}
+    if(!ADMIN_PIN_HASH&&!ADMIN_PIN){console.warn("[initFirebase] admin PIN not loaded. fbAdminPinHash=",fbAdminPinHash,"fbAdminPin=",fbAdminPin);}
+    else{console.log("[initFirebase] admin PIN loaded OK (hash="+(!!ADMIN_PIN_HASH)+")");}
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
