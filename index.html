@@ -224,9 +224,21 @@ function listenFirebase() {
             var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
             paidLeaveRequests=(arr||[]).filter(Boolean);
             // 残日数入力フォーム編集中はrenderをスキップ（入力値消去防止）
-            if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty) render();
+            if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving) render();
           }
         }).catch(function(){});
+      // 残日数も polling で同期（承認処理中・フォーム編集中はスキップ）
+      if(!paidLeaveBalanceSaving&&!paidLeaveBalanceDirty){
+        authFetch(FB_URL+"/tc5_paid_leave_balances.json")
+          .then(function(r){return r.json();})
+          .then(function(val){
+            if(val&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving){
+              var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
+              paidLeaveBalances=(arr||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});
+              if(!document.querySelector('.time-edit-wrap')) render();
+            }
+          }).catch(function(){});
+      }
     }
   }, 10000);
 }
@@ -601,6 +613,7 @@ var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
 var paidLeaveLoading=false;
 var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
+var paidLeaveBalanceSaving=false; // 承認処理中フラグ（二重クリック防止）
 var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フラグ
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
@@ -2366,6 +2379,7 @@ function render(){
     }
 
     if(adminTab==="paidleave"){
+      var today_pl=todayDateStr();
       var plStatusLabel={pending:"申請中",approved:"承認済",rejected:"却下"};
       var plStatusColor={pending:"#92400e",approved:"#166534",rejected:"#991b1b"};
       var plStatusBg={pending:"#fef3c7",approved:"#dcfce7",rejected:"#fee2e2"};
@@ -2391,32 +2405,105 @@ function render(){
                  +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:inherit;">却下</button>'
                 :r.status==="approved"
                   ?'<button class="btn-pl-withdraw" data-plid="'+r.id+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:3px 6px;border-radius:2px;cursor:pointer;font-family:inherit;">引戻</button>'
+                   +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:.65rem;font-weight:700;padding:3px 6px;border-radius:2px;cursor:pointer;font-family:inherit;margin-left:3px;">却下</button>'
                   :""
               )
               +'</td></tr>';
           }).join("")
         :'<tr><td colspan="5" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">有給申請はありません</td></tr>';
-      // 残日数管理テーブル
-      var plBalRows=paidLeaveBalances.length
-        ?paidLeaveBalances.map(function(b){
-            return '<tr style="border-bottom:1px solid #e9ecef;">'
-              +'<td style="padding:8px 10px;font-weight:700;">'+b.staffId+'</td>'
-              +'<td style="padding:8px 10px;font-family:monospace;font-size:.88rem;">'+(b.grantDate||"")+'</td>'
-              +'<td style="padding:8px 10px;text-align:right;font-family:monospace;font-weight:700;color:#1e40af;">'+(b.grantedDays||0)+'日</td>'
-              +'<td style="padding:8px 10px;text-align:right;font-family:monospace;color:#dc2626;">'+(b.usedDays||0)+'日</td>'
-              +'<td style="padding:8px 10px;text-align:right;font-family:monospace;font-weight:700;color:#166534;">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
-              +'</tr>';
-          }).join("")
-        :'<tr><td colspan="5" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">残日数データがありません</td></tr>';
-      // スタッフ選択肢
+
+      // 付与行単位の残日数管理テーブル
+      var normBalances=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);});
+      // スタッフ名一覧（付与日順番号付け用）
+      var staffGrantOrder={};
+      normBalances.slice().sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");}).forEach(function(b){
+        var nm=b.staffName||b.staffId||"";
+        if(!staffGrantOrder[nm])staffGrantOrder[nm]=0;
+        staffGrantOrder[nm]++;
+        b._grantNo=staffGrantOrder[nm];
+      });
+      // スタッフ単位の残日数合計（有効期限内のみ）
+      var staffTotals={};
+      normBalances.forEach(function(b){
+        var nm=b.staffName||b.staffId||"";
+        if(!staffTotals[nm])staffTotals[nm]={granted:0,used:0,remain:0};
+        var expired=(b.expiresAt&&b.expiresAt<today_pl);
+        staffTotals[nm].granted+=b.grantedDays||0;
+        staffTotals[nm].used+=b.usedDays||0;
+        if(!expired)staffTotals[nm].remain+=b.remainDays||0;
+      });
+      // スタッフ名でグループ化して表示（付与日順）
+      var staffOrder=[];
+      normBalances.slice().sort(function(a,b){
+        var na=a.staffName||a.staffId||"";
+        var nb2=b.staffName||b.staffId||"";
+        if(na!==nb2)return na.localeCompare(nb2,"ja");
+        return (a.grantDate||"").localeCompare(b.grantDate||"");
+      }).forEach(function(b){
+        var nm=b.staffName||b.staffId||"";
+        if(staffOrder.indexOf(nm)<0)staffOrder.push(nm);
+      });
+
+      var plBalRows="";
+      if(normBalances.length===0){
+        plBalRows='<tr><td colspan="9" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">残日数データがありません</td></tr>';
+      } else {
+        staffOrder.forEach(function(nm){
+          var rows=normBalances.filter(function(b){return (b.staffName||b.staffId||"")==nm;})
+            .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");});
+          var tot=staffTotals[nm]||{granted:0,used:0,remain:0};
+          // スタッフ小計行
+          plBalRows+='<tr style="background:#f0f4fa;border-top:2px solid #adb5bd;">'
+            +'<td colspan="2" style="padding:6px 8px;font-weight:900;font-size:.88rem;color:#1e3a5f;">'+nm
+            +'<span style="font-size:.72rem;color:#475569;font-weight:400;margin-left:6px;">残日数合計（有効期限内）</span></td>'
+            +'<td colspan="3" style="padding:6px 8px;font-size:.78rem;color:#475569;"></td>'
+            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:#1e40af;">'+Math.round(tot.granted*10)/10+'日</td>'
+            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;color:#dc2626;">'+Math.round(tot.used*10)/10+'日</td>'
+            +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:900;color:#166534;font-size:1rem;">'+Math.round(tot.remain*10)/10+'日</td>'
+            +'<td style="padding:6px 8px;"></td>'
+            +'</tr>';
+          rows.forEach(function(b){
+            var expired=(b.expiresAt&&b.expiresAt<today_pl);
+            var rowBg=expired?"#f8f8f8":"#fff";
+            var textColor=expired?"#9ca3af":"#0f172a";
+            var safeId=b.id.replace(/[^a-zA-Z0-9_\-]/g,"_");
+            plBalRows+='<tr style="border-bottom:1px solid #e9ecef;background:'+rowBg+';">'
+              +'<td style="padding:6px 8px;font-size:.75rem;white-space:nowrap;">'
+              +(expired
+                ?'<span style="background:#e5e7eb;color:#9ca3af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:3px;">期限切れ</span>'
+                :'<span style="background:#d1fae5;color:#065f46;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:3px;">期限内</span>'
+              )
+              +'</td>'
+              +'<td style="padding:6px 8px;font-size:.78rem;color:'+textColor+';white-space:nowrap;">第'+b._grantNo+'回</td>'
+              +'<td style="padding:6px 8px;font-family:monospace;font-size:.82rem;color:'+textColor+';white-space:nowrap;">'+(b.grantDate||"")+'</td>'
+              +'<td style="padding:6px 8px;font-family:monospace;font-size:.78rem;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+(b.expiresAt||"")+'</td>'
+              +'<td style="padding:6px 8px;font-size:.72rem;color:'+textColor+';white-space:nowrap;">'+nm+'</td>'
+              +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#1e40af")+';">'+(b.grantedDays||0)+'日</td>'
+              +'<td style="padding:6px 8px;text-align:right;font-family:monospace;color:'+(expired?"#9ca3af":"#dc2626")+';">'
+              +'<input type="number" id="pl-bal-used-'+safeId+'" value="'+(b.usedDays||0)+'" min="0" step="0.5" '+(expired?'disabled ':'')+'style="width:52px;padding:3px 4px;border:1px solid #adb5bd;border-radius:2px;font-size:.78rem;font-family:monospace;text-align:right;background:'+(expired?"#f3f4f6":"#fff")+';">'
+              +'日</td>'
+              +'<td style="padding:6px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#166534")+';">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
+              +'<td style="padding:4px 4px;white-space:nowrap;">'
+              +(expired?""
+                :'<button class="btn-pl-bal-row-save" data-balid="'+b.id+'" style="background:#1e40af;color:#fff;border:none;font-size:.65rem;font-weight:700;padding:4px 6px;border-radius:2px;cursor:pointer;font-family:inherit;margin-right:2px;">保存</button>'
+              )
+              +'<button class="btn-pl-bal-row-delete" data-balid="'+b.id+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;font-size:.65rem;font-weight:700;padding:4px 6px;border-radius:2px;cursor:pointer;font-family:inherit;">削除</button>'
+              +'</td></tr>';
+          });
+        });
+      }
+
+      // スタッフ選択肢（新規付与フォーム用）
       var plStaffOpts='<option value="">スタッフを選択</option>'
         +staffList.filter(function(s){return !s.status||s.status==="在籍";}).map(function(s){
           return '<option value="'+s.name+'">'+s.name+'</option>';
         }).join("");
+
       tc='<div class="admin-card">'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<div class="admin-title" style="margin-bottom:0;">有給申請一覧</div>'
         +'<span style="font-size:.78rem;color:#8496a7;margin-left:4px;">申請中: '+paidLeaveRequests.filter(function(r){return r.status==="pending";}).length+'件</span>'
+        +(paidLeaveBalanceSaving?'<span style="font-size:.75rem;color:#b45309;font-weight:700;margin-left:8px;">処理中...</span>':"")
         +'</div>'
         +(paidLeaveLoading
           ?'<div class="empty">読み込み中...</div>'
@@ -2434,31 +2521,34 @@ function render(){
         )
         +'</div>'
         +'<div class="admin-card">'
-        +'<div class="admin-title">残日数管理（手動入力）</div>'
+        +'<div class="admin-title">有給残日数管理（付与行単位）</div>'
         +'<div style="overflow-x:auto;">'
-        +'<table style="width:100%;border-collapse:collapse;min-width:380px;margin-bottom:12px;">'
+        +'<table style="width:100%;border-collapse:collapse;min-width:600px;margin-bottom:12px;">'
         +'<thead><tr style="background:#eaecef;border-bottom:2px solid #adb5bd;">'
-        +'<th style="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;text-align:left;">スタッフ</th>'
-        +'<th style="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;text-align:left;">付与日</th>'
-        +'<th style="padding:6px 8px;font-size:.72rem;font-weight:700;color:#1e40af;text-align:right;">付与日数</th>'
-        +'<th style="padding:6px 8px;font-size:.72rem;font-weight:700;color:#dc2626;text-align:right;">使用日数</th>'
-        +'<th style="padding:6px 8px;font-size:.72rem;font-weight:700;color:#166534;text-align:right;">残日数</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">状態</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与回</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与日</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#b45309;text-align:left;white-space:nowrap;">有効期限</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">氏名</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#1e40af;text-align:right;white-space:nowrap;">付与日数</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#dc2626;text-align:right;white-space:nowrap;">使用日数</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#166534;text-align:right;white-space:nowrap;">残日数</th>'
+        +'<th style="padding:6px 6px;font-size:.68rem;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">操作</th>'
         +'</tr></thead>'
         +'<tbody>'+plBalRows+'</tbody>'
         +'</table>'
         +'</div>'
-        +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">残日数を入力・更新</div>'
+        +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;margin-top:4px;">新規付与を追加</div>'
         +'<div style="display:flex;flex-direction:column;gap:8px;">'
-        +'<select id="pl-bal-staff" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+plStaffOpts+'</select>'
-        +'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">'
+        +'<select id="pl-bal-new-staff" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+plStaffOpts+'</select>'
+        +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">'
         +'<div><label style="font-size:.72rem;font-weight:700;color:#475569;display:block;margin-bottom:3px;">付与日</label>'
-        +'<input type="date" id="pl-bal-grant-date" style="width:100%;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;box-sizing:border-box;"></div>'
+        +'<input type="date" id="pl-bal-new-grant-date" style="width:100%;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;box-sizing:border-box;"></div>'
         +'<div><label style="font-size:.72rem;font-weight:700;color:#1e40af;display:block;margin-bottom:3px;">付与日数</label>'
-        +'<input type="number" id="pl-bal-granted" min="0" step="0.5" placeholder="例: 10" style="width:100%;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;box-sizing:border-box;"></div>'
-        +'<div><label style="font-size:.72rem;font-weight:700;color:#dc2626;display:block;margin-bottom:3px;">使用日数</label>'
-        +'<input type="number" id="pl-bal-used" min="0" step="0.5" placeholder="例: 2" style="width:100%;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;box-sizing:border-box;"></div>'
+        +'<input type="number" id="pl-bal-new-granted" min="1" step="0.5" placeholder="例: 10" style="width:100%;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;box-sizing:border-box;"></div>'
         +'</div>'
-        +'<button id="btn-pl-bal-save" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+        +'<div id="pl-bal-new-expiry-disp" style="font-size:.78rem;color:#b45309;font-weight:700;min-height:1.2em;"></div>'
+        +'<button id="btn-pl-bal-save" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">付与を追加</button>'
         +'</div></div>';
     }
 
@@ -2623,63 +2713,169 @@ function render(){
     // 有給管理 — 承認
     document.querySelectorAll(".btn-pl-approve").forEach(function(b){
       b.onclick=function(){
+        if(paidLeaveBalanceSaving)return;
         var plId=b.dataset.plid;
         var req=paidLeaveRequests.find(function(r){return r.id===plId;});
         if(!req)return;
+        // 二重消化防止: すでに approved の場合はスキップ
+        if(req.status==="approved"){console.warn("[PaidLeave] already approved",plId);return;}
+        paidLeaveBalanceSaving=true;
+        b.disabled=true;
         var nowIso=new Date().toISOString();
-        req.status="approved";req.approvedBy="管理者";req.approvedAt=nowIso;
-        patchPaidLeaveRequest(plId,{status:"approved",approvedBy:"管理者",approvedAt:nowIso});
-        render();
+        // FIFO消化を実行してからリクエストをPATCH
+        applyFifoConsumption(req.staffName,1).then(function(result){
+          req.status="approved";req.approvedBy="管理者";req.approvedAt=nowIso;
+          req.consumedSnapshot=result.consumed; // 消化情報を記録（取消用）
+          return patchPaidLeaveRequest(plId,{status:"approved",approvedBy:"管理者",approvedAt:nowIso,consumedSnapshot:result.consumed});
+        }).then(function(){
+          paidLeaveBalanceSaving=false;
+          render();
+        }).catch(function(e){
+          console.error("[PaidLeave] approve error",e);
+          paidLeaveBalanceSaving=false;
+          showAlert("承認処理に失敗しました。再度お試しください。");
+          b.disabled=false;
+        });
       };
     });
     // 有給管理 — 却下
     document.querySelectorAll(".btn-pl-reject").forEach(function(b){
       b.onclick=function(){
+        if(paidLeaveBalanceSaving)return;
         var plId=b.dataset.plid;
         var req=paidLeaveRequests.find(function(r){return r.id===plId;});
         if(!req)return;
         showConfirm("この有給申請を却下してもよいですか？",function(){
-          req.status="rejected";req.approvedBy="管理者";req.approvedAt=new Date().toISOString();
-          patchPaidLeaveRequest(plId,{status:"rejected",approvedBy:"管理者",approvedAt:req.approvedAt});
-          render();
+          paidLeaveBalanceSaving=true;
+          b.disabled=true;
+          var wasApproved=(req.status==="approved");
+          var snapshot=req.consumedSnapshot||[];
+          var p=wasApproved?reverseFifoConsumption(snapshot):Promise.resolve({ok:true});
+          p.then(function(){
+            req.status="rejected";req.approvedBy="管理者";req.approvedAt=new Date().toISOString();
+            if(wasApproved){req.consumedSnapshot=[];}
+            return patchPaidLeaveRequest(plId,{status:"rejected",approvedBy:"管理者",approvedAt:req.approvedAt,consumedSnapshot:wasApproved?[]:snapshot});
+          }).then(function(){
+            paidLeaveBalanceSaving=false;
+            render();
+          }).catch(function(e){
+            console.error("[PaidLeave] reject error",e);
+            paidLeaveBalanceSaving=false;
+            showAlert("却下処理に失敗しました。再度お試しください。");
+            b.disabled=false;
+          });
         });
       };
     });
     // 有給管理 — 引戻
     document.querySelectorAll(".btn-pl-withdraw").forEach(function(b){
       b.onclick=function(){
+        if(paidLeaveBalanceSaving)return;
         var plId=b.dataset.plid;
         var req=paidLeaveRequests.find(function(r){return r.id===plId;});
         if(!req)return;
-        req.status="pending";req.approvedBy="";req.approvedAt="";
-        patchPaidLeaveRequest(plId,{status:"pending",approvedBy:"",approvedAt:""});
-        render();
+        paidLeaveBalanceSaving=true;
+        b.disabled=true;
+        var snapshot=req.consumedSnapshot||[];
+        reverseFifoConsumption(snapshot).then(function(){
+          req.status="pending";req.approvedBy="";req.approvedAt="";req.consumedSnapshot=[];
+          return patchPaidLeaveRequest(plId,{status:"pending",approvedBy:"",approvedAt:"",consumedSnapshot:[]});
+        }).then(function(){
+          paidLeaveBalanceSaving=false;
+          render();
+        }).catch(function(e){
+          console.error("[PaidLeave] withdraw error",e);
+          paidLeaveBalanceSaving=false;
+          showAlert("引戻し処理に失敗しました。再度お試しください。");
+          b.disabled=false;
+        });
       };
     });
     // 有給残日数フォーム — 入力開始でdirtyフラグをセット（polling上書き防止）
-    ["pl-bal-staff","pl-bal-grant-date","pl-bal-granted","pl-bal-used"].forEach(function(id){
+    ["pl-bal-new-staff","pl-bal-new-grant-date","pl-bal-new-granted"].forEach(function(id){
       var el=document.getElementById(id);
       if(el){el.addEventListener("input",function(){paidLeaveBalanceDirty=true;},true);
              el.addEventListener("change",function(){paidLeaveBalanceDirty=true;},true);}
     });
-    // 有給残日数保存
+    // 付与日入力時に有効期限を自動表示
+    var plNewGrantDate=document.getElementById("pl-bal-new-grant-date");
+    var plNewExpiry=document.getElementById("pl-bal-new-expiry-disp");
+    if(plNewGrantDate&&plNewExpiry){
+      plNewGrantDate.oninput=function(){
+        var exp=calcExpiresAt(plNewGrantDate.value||"");
+        plNewExpiry.textContent=exp?"有効期限: "+exp:"";
+        paidLeaveBalanceDirty=true;
+      };
+    }
+    // 新規付与追加保存
     var plBalSaveBtn=document.getElementById("btn-pl-bal-save");
     if(plBalSaveBtn)plBalSaveBtn.onclick=function(){
-      var staffSel=(document.getElementById("pl-bal-staff")||{}).value||"";
-      var grantDate=(document.getElementById("pl-bal-grant-date")||{}).value||"";
-      var grantedRaw=parseFloat((document.getElementById("pl-bal-granted")||{}).value||"0");
-      var usedRaw=parseFloat((document.getElementById("pl-bal-used")||{}).value||"0");
+      var staffSel=(document.getElementById("pl-bal-new-staff")||{}).value||"";
+      var grantDate=(document.getElementById("pl-bal-new-grant-date")||{}).value||"";
+      var grantedRaw=parseFloat((document.getElementById("pl-bal-new-granted")||{}).value||"0");
       if(!staffSel){showAlert("スタッフを選択してください");return;}
-      if(isNaN(grantedRaw)||grantedRaw<0){showAlert("付与日数を正しく入力してください");return;}
-      if(isNaN(usedRaw)||usedRaw<0){showAlert("使用日数を正しく入力してください");return;}
-      var remain=Math.round((grantedRaw-usedRaw)*10)/10;
-      var bal={staffId:staffSel,grantDate:grantDate,grantedDays:grantedRaw,usedDays:usedRaw,remainDays:remain};
-      var existing=paidLeaveBalances.findIndex(function(b2){return b2.staffId===staffSel;});
-      if(existing>=0){paidLeaveBalances[existing]=bal;}else{paidLeaveBalances.push(bal);}
-      savePaidLeaveBalance(bal);
-      paidLeaveBalanceDirty=false; // 保存完了でフラグ解除
-      showAlert(staffSel+"の残日数を保存しました（残"+remain+"日）",function(){render();});
+      if(!grantDate){showAlert("付与日を入力してください");return;}
+      if(isNaN(grantedRaw)||grantedRaw<=0){showAlert("付与日数を正しく入力してください（1以上）");return;}
+      var expires=calcExpiresAt(grantDate);
+      var remain=grantedRaw;
+      var ts=Date.now();
+      var newId="plb_"+staffSel+"_"+grantDate+"_"+ts;
+      var bal={
+        id:newId,
+        staffId:staffSel,
+        staffName:staffSel,
+        grantDate:grantDate,
+        expiresAt:expires,
+        grantedDays:grantedRaw,
+        usedDays:0,
+        remainDays:remain,
+        createdAt:new Date().toISOString()
+      };
+      paidLeaveBalances.push(bal);
+      savePaidLeaveBalance(bal).then(function(){
+        paidLeaveBalanceDirty=false;
+        showAlert(staffSel+"に"+grantedRaw+"日を付与しました（期限: "+expires+"）",function(){render();});
+      }).catch(function(e){
+        showAlert("保存に失敗しました。通信状態を確認してください。");
+        console.error("[PaidLeave] new grant save error",e);
+      });
     };
+    // 既存付与行の保存ボタン（行ごと編集用）
+    document.querySelectorAll(".btn-pl-bal-row-save").forEach(function(btn){
+      btn.onclick=function(){
+        var rowId=btn.dataset.balid;
+        var usedEl=document.getElementById("pl-bal-used-"+rowId);
+        var usedVal=usedEl?parseFloat(usedEl.value||"0"):null;
+        if(usedVal===null||isNaN(usedVal)||usedVal<0){showAlert("使用日数を正しく入力してください");return;}
+        var idx=paidLeaveBalances.findIndex(function(b){return normalizePaidLeaveBalance(b).id===rowId;});
+        if(idx<0){showAlert("対象データが見つかりません");return;}
+        var bal=normalizePaidLeaveBalance(paidLeaveBalances[idx]);
+        var newRemain=Math.round((bal.grantedDays-usedVal)*10)/10;
+        bal.usedDays=usedVal;
+        bal.remainDays=newRemain;
+        paidLeaveBalances[idx]=bal;
+        patchPaidLeaveBalance(rowId,{usedDays:usedVal,remainDays:newRemain}).then(function(){
+          showAlert("保存しました（使用"+usedVal+"日 / 残"+newRemain+"日）",function(){paidLeaveBalanceDirty=false;render();});
+        }).catch(function(e){
+          showAlert("保存に失敗しました。");
+          console.error("[PaidLeave] row save error",e);
+        });
+      };
+    });
+    // 既存付与行の削除ボタン
+    document.querySelectorAll(".btn-pl-bal-row-delete").forEach(function(btn){
+      btn.onclick=function(){
+        var rowId=btn.dataset.balid;
+        showConfirm("この付与行を削除してもよいですか？（復元できません）",function(){
+          var idx=paidLeaveBalances.findIndex(function(b){return normalizePaidLeaveBalance(b).id===rowId;});
+          if(idx>=0)paidLeaveBalances.splice(idx,1);
+          deletePaidLeaveBalance(rowId).then(function(){render();}).catch(function(e){
+            showAlert("削除に失敗しました。");
+            console.error("[PaidLeave] row delete error",e);
+          });
+        });
+      };
+    });
 
     var sm=document.getElementById("sel-month");
     if(sm)sm.onchange=function(){selMonth=sm.value;render();};
@@ -3214,7 +3410,7 @@ function setTab(v){
     ]).then(function(results){
       var plRaw=results[0],plbRaw=results[1];
       if(plRaw){var a=typeof plRaw==="object"&&!Array.isArray(plRaw)?Object.values(plRaw):plRaw;paidLeaveRequests=(a||[]).filter(Boolean);}
-      if(plbRaw){var b=typeof plbRaw==="object"&&!Array.isArray(plbRaw)?Object.values(plbRaw):plbRaw;paidLeaveBalances=(b||[]).filter(Boolean);}
+      if(plbRaw){var b=typeof plbRaw==="object"&&!Array.isArray(plbRaw)?Object.values(plbRaw):plbRaw;paidLeaveBalances=(b||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});}
       paidLeaveLoading=false;render();
     }).catch(function(){paidLeaveLoading=false;render();});
   } else {
@@ -3953,16 +4149,151 @@ function patchPaidLeaveRequest(id,partial){
   }).catch(function(e){console.error("[PaidLeave] patch network error",e);});
 }
 
-// \u6709\u7D66\u6B8B\u65E5\u6570\u3092 Firebase \u306B\u4FDD\u5B58
+// \u2500\u2500 \u6709\u7D66\u4ED8\u4E0E\u884C \u30D8\u30EB\u30D1\u30FC\u95A2\u6570\u7FA4 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+
+// \u4ED8\u4E0E\u65E5\u304B\u3089\u6709\u52B9\u671F\u9650\u3092\u8A08\u7B97\u3059\u308B\uFF08\u4ED8\u4E0E\u65E5\u306E2\u5E74\u5F8C\u306E\u524D\u65E5\uFF09
+// \u4F8B: 2026-04-01 \u2192 2028-03-31
+function calcExpiresAt(grantDate){
+  if(!grantDate)return "";
+  var parts=grantDate.split("-");
+  if(parts.length!==3)return "";
+  var y=parseInt(parts[0],10),m=parseInt(parts[1],10),d=parseInt(parts[2],10);
+  // 2\u5E74\u5F8C\u306E\u540C\u6708\u540C\u65E5\u306E\u524D\u65E5
+  var expY=y+2,expM=m,expD=d-1;
+  if(expD<=0){
+    expM--;
+    if(expM<=0){expM=12;expY--;}
+    expD=new Date(expY,expM,0).getDate(); // \u6708\u672B\u65E5
+  }
+  // \u6708\u672B\u65E5\u8D85\u3048\u3092\u4E38\u3081\u308B\uFF08\u4F8B:2\u670829\u65E5\u4ED8\u4E0E\u21922\u5E74\u5F8C\u306E2\u670828\u65E5\u524D\u65E5=2\u670827\u65E5\u2026\u3067\u306F\u306A\u304FgetDate\u81EA\u52D5\u51E6\u7406\u6E08\u307F\uFF09
+  var maxD=new Date(expY,expM,0).getDate();
+  if(expD>maxD)expD=maxD;
+  return expY+"-"+String(expM).padStart(2,"0")+"-"+String(expD).padStart(2,"0");
+}
+
+// \u65E2\u5B58\u30C7\u30FC\u30BF\u3092\u6B63\u898F\u5316\uFF08expiresAt\u30FBid \u4E0D\u8DB3\u5206\u3092\u88DC\u5B8C\u3001Firebase\u4E0A\u66F8\u304D\u306A\u3057\uFF09
+function normalizePaidLeaveBalance(b){
+  var nb=Object.assign({},b);
+  if(!nb.expiresAt&&nb.grantDate){nb.expiresAt=calcExpiresAt(nb.grantDate);}
+  if(!nb.id){
+    var ts=nb.createdAt?new Date(nb.createdAt).getTime():0;
+    nb.id="plb_"+(nb.staffId||nb.staffName||"unknown")+"_"+(nb.grantDate||"")+"_"+ts;
+  }
+  if(nb.staffName===undefined)nb.staffName=nb.staffId||"";
+  if(nb.remainDays===undefined||nb.remainDays===null){
+    nb.remainDays=Math.round(((nb.grantedDays||0)-(nb.usedDays||0))*10)/10;
+  }
+  return nb;
+}
+
+// \u4ECA\u65E5\u306E\u65E5\u4ED8\u6587\u5B57\u5217 (YYYY-MM-DD) \u3092\u8FD4\u3059
+function todayDateStr(){
+  var d=new Date();
+  return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+}
+
+// \u6709\u7D66\u6B8B\u65E5\u6570\u3092 Firebase \u306B\u65B0\u898F\u4FDD\u5B58\uFF08PUT\u3001id \u30AD\u30FC\u3067\u4FDD\u5B58\uFF09
 function savePaidLeaveBalance(bal){
-  var url=FB_URL+"/tc5_paid_leave_balances/"+bal.staffId+".json";
+  var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(bal.id)+".json";
   return authFetch(url,{
     method:"PUT",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify(bal)
   }).then(function(res){
     if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance save error",res.status,t);});}
+    else{console.log("[PaidLeave] balance saved",bal.id);}
   }).catch(function(e){console.error("[PaidLeave] balance network error",e);});
+}
+
+// \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u306B PATCH\uFF08\u90E8\u5206\u66F4\u65B0\uFF09
+function patchPaidLeaveBalance(id,partial){
+  var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
+  return authFetch(url,{
+    method:"PATCH",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(partial)
+  }).then(function(res){
+    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance patch error",res.status,t);});}
+    else{console.log("[PaidLeave] balance patched",id,partial);}
+  }).catch(function(e){console.error("[PaidLeave] balance patch network error",e);});
+}
+
+// \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u304B\u3089\u524A\u9664
+function deletePaidLeaveBalance(id){
+  var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
+  return authFetch(url,{method:"DELETE"})
+    .then(function(res){
+      if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance delete error",res.status,t);});}
+      else{console.log("[PaidLeave] balance deleted",id);}
+    }).catch(function(e){console.error("[PaidLeave] balance delete network error",e);});
+}
+
+// FIFO\u6D88\u5316\u30ED\u30B8\u30C3\u30AF: \u627F\u8A8D\u6642\u306B\u53E4\u3044\u6709\u52B9\u671F\u9650\u5185\u4ED8\u4E0E\u884C\u304B\u3089\u6D88\u5316
+// \u623B\u308A\u5024: Promise<{ok:boolean, consumed:Array<{id,usedBefore,usedAfter,remainBefore,remainAfter}>}>
+function applyFifoConsumption(staffName,days){
+  var today=todayDateStr();
+  // \u6709\u52B9\u671F\u9650\u5185\u30FB\u6B8B\u3042\u308A\u30FB\u53E4\u3044\u9806 \u3067\u4E26\u3079\u308B
+  var eligible=paidLeaveBalances
+    .map(function(b){return normalizePaidLeaveBalance(b);})
+    .filter(function(b){
+      return (b.staffId===staffName||b.staffName===staffName)
+        &&(b.expiresAt>=today)
+        &&(b.remainDays>0);
+    })
+    .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");});
+
+  var needed=days;
+  var consumed=[];
+  for(var i=0;i<eligible.length&&needed>0;i++){
+    var bal=eligible[i];
+    var take=Math.min(bal.remainDays,needed);
+    take=Math.round(take*10)/10;
+    consumed.push({id:bal.id,usedBefore:bal.usedDays,usedAfter:bal.usedDays+take,remainBefore:bal.remainDays,remainAfter:Math.round((bal.remainDays-take)*10)/10});
+    needed=Math.round((needed-take)*10)/10;
+  }
+  if(needed>0){
+    console.warn("[PaidLeave] FIFO: \u6B8B\u65E5\u6570\u4E0D\u8DB3",staffName,"\u4E0D\u8DB3\u65E5\u6570:",needed);
+    // \u6B8B\u65E5\u6570\u4E0D\u8DB3\u3067\u3082\u6D88\u5316\u306F\u884C\u3046\uFF08\u7533\u8ACB\u3092\u512A\u5148\uFF09
+  }
+  // \u30ED\u30FC\u30AB\u30EB\u66F4\u65B0 + Firebase PATCH
+  var promises=[];
+  consumed.forEach(function(c){
+    var idx=paidLeaveBalances.findIndex(function(b){
+      var nb=normalizePaidLeaveBalance(b);
+      return nb.id===c.id;
+    });
+    if(idx>=0){
+      paidLeaveBalances[idx]=normalizePaidLeaveBalance(paidLeaveBalances[idx]);
+      paidLeaveBalances[idx].usedDays=c.usedAfter;
+      paidLeaveBalances[idx].remainDays=c.remainAfter;
+      promises.push(patchPaidLeaveBalance(c.id,{usedDays:c.usedAfter,remainDays:c.remainAfter}));
+    }
+  });
+  return Promise.all(promises).then(function(){return {ok:true,consumed:consumed};});
+}
+
+// FIFO\u6D88\u5316\u53D6\u6D88\u30ED\u30B8\u30C3\u30AF: \u5374\u4E0B\u30FB\u5F15\u623B\u3057\u6642\u306B\u6D88\u5316\u3057\u305F\u5206\u3092\u623B\u3059
+// consumedSnapshot: \u627F\u8A8D\u6642\u306B\u4FDD\u5B58\u3057\u305F\u6D88\u5316\u60C5\u5831\uFF08request\u30AA\u30D6\u30B8\u30A7\u30AF\u30C8\u306EconsumedSnapshot\u30D5\u30A3\u30FC\u30EB\u30C9\uFF09
+function reverseFifoConsumption(consumedSnapshot){
+  if(!consumedSnapshot||!consumedSnapshot.length)return Promise.resolve({ok:true});
+  var promises=[];
+  consumedSnapshot.forEach(function(c){
+    var idx=paidLeaveBalances.findIndex(function(b){
+      var nb=normalizePaidLeaveBalance(b);
+      return nb.id===c.id;
+    });
+    if(idx>=0){
+      paidLeaveBalances[idx]=normalizePaidLeaveBalance(paidLeaveBalances[idx]);
+      // \u6D88\u5316\u524D\u306B\u623B\u3059\uFF08\u73FE\u5728\u5024\u304B\u3089\u5DEE\u5206\u3092\u623B\u3059\uFF09
+      var diff=c.usedAfter-c.usedBefore;
+      var newUsed=Math.max(0,Math.round((paidLeaveBalances[idx].usedDays-diff)*10)/10);
+      var newRemain=Math.round((paidLeaveBalances[idx].remainDays+diff)*10)/10;
+      paidLeaveBalances[idx].usedDays=newUsed;
+      paidLeaveBalances[idx].remainDays=newRemain;
+      promises.push(patchPaidLeaveBalance(c.id,{usedDays:newUsed,remainDays:newRemain}));
+    }
+  });
+  return Promise.all(promises).then(function(){return {ok:true};});
 }
 
 // \u627F\u8A8D\u6E08\u307F\u6709\u7D66\u65E5\u4ED8\u306E\u30BB\u30C3\u30C8\uFF08notify-check.js \u9023\u643A\u7528\uFF09\u3092\u8FD4\u3059
@@ -4104,11 +4435,11 @@ async function initFirebase() {
         ?Object.values(fbPaidLeaveRequests):fbPaidLeaveRequests;
       paidLeaveRequests=(_plArr||[]).filter(Boolean);
     }
-    // 有給残日数
+    // 有給残日数（正規化して読み込み）
     if(fbPaidLeaveBalances){
       var _plbArr=typeof fbPaidLeaveBalances==="object"&&!Array.isArray(fbPaidLeaveBalances)
         ?Object.values(fbPaidLeaveBalances):fbPaidLeaveBalances;
-      paidLeaveBalances=(_plbArr||[]).filter(Boolean);
+      paidLeaveBalances=(_plbArr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
     }
     // 管理者URLトークン認証（hash比較優先、旧平文フォールバック）
     if(adminUrlUsed){
