@@ -658,6 +658,7 @@ var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
 var _paidLeaveGrantsCache=[]; // 未登録付与一覧キャッシュ（paidleaveタブ描画中のみ有効）
+var _plGrantModalOpen=false; // 有給付与登録モーダル表示中フラグ（render()でのclose防止用）
 var paidLeaveLoading=false;
 var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
 var paidLeaveBalanceSaving=false; // 承認処理中フラグ（二重クリック防止）
@@ -2727,32 +2728,9 @@ function render(){
             +'</td>'
             +'</tr>';
         }).join('');
-      var _plGrantModalHtml='<div id="pl-grant-modal-wrap" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;">'
-        +'<div style="background:#fff;width:100%;max-width:480px;border-radius:2px;border:1px solid #adb5bd;">'
-        +'<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e4e8ed;">'
-        +'<span id="pl-grant-modal-title" style="font-size:14px;font-weight:700;color:#1a2332;">有給付与登録</span>'
-        +'<button onclick="closePaidLeaveGrantModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:28px;height:28px;border-radius:2px;font-size:14px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
-        +'</div>'
-        +'<div style="padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
-        +'<div style="grid-column:1/-1;background:#f1f5f9;border-radius:4px;padding:8px 10px;font-size:.78rem;"><span id="pl-grant-modal-info"></span></div>'
-        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日</label>'
-        +'<input type="date" id="pl-grant-date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
-        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">失効予定日</label>'
-        +'<input type="date" id="pl-grant-expires" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
-        +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日数</label>'
-        +'<input type="number" id="pl-grant-days" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
-        +'<div id="pl-grant-remain-wrap"><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">残日数</label>'
-        +'<input type="number" id="pl-grant-remain" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
-        +'<div id="pl-grant-consumed-note" style="grid-column:1/-1;display:none;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:7px 10px;font-size:.72rem;color:#713f12;">'
-        +'消化済みとして登録します。使用日数＝付与日数、残日数は自動で 0 になります。'
-        +'</div>'
-        +'</div>'
-        +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
-        +'<button id="btn-pl-grant-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存する</button>'
-        +'<button onclick="closePaidLeaveGrantModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
-        +'</div></div></div>';
-      var _grantNotifyHtml=_plGrantModalHtml
-        +'<div class="admin-card">'
+      // モーダルHTML は body直下固定管理（ensurePaidLeaveGrantModal()で生成・再利用）
+      // renderPaidLeaveTab() 再描画でモーダルDOMを破壊しないようここには含めない
+      var _grantNotifyHtml='<div class="admin-card">'
         +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">'
         +'<div class="admin-title" style="margin-bottom:0;">付与予定（未登録）'
         +(_plr.grants.length>0?'<span style="background:#dc2626;color:#fff;font-size:.58rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;">'+_plr.grants.length+'件</span>':'')+'</div>'
@@ -4859,14 +4837,49 @@ async function initFirebase() {
   }
 }
 
-// ===== 有給付与登録モーダル（付与予定通知から呼び出し） =====
+// ===== 有給付与登録モーダル（body直下固定管理 — render()再描画から完全分離） =====
 var _plGrantModalData={};
+// モーダルDOMをbody直下に1度だけ生成し、以後は再利用する。
+// renderPaidLeaveTab()のinnerHTML再描画でDOMが破壊されない。
+function ensurePaidLeaveGrantModal(){
+  var wrap=document.getElementById("pl-grant-modal-wrap");
+  if(wrap)return wrap; // 既存なら再利用
+  wrap=document.createElement("div");
+  wrap.id="pl-grant-modal-wrap";
+  wrap.style.cssText="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;";
+  wrap.innerHTML=''
+    +'<div style="background:#fff;width:100%;max-width:480px;border-radius:2px;border:1px solid #adb5bd;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e4e8ed;">'
+    +'<span id="pl-grant-modal-title" style="font-size:14px;font-weight:700;color:#1a2332;">有給付与登録</span>'
+    +'<button onclick="closePaidLeaveGrantModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:28px;height:28px;border-radius:2px;font-size:14px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+    +'</div>'
+    +'<div style="padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+    +'<div style="grid-column:1/-1;background:#f1f5f9;border-radius:4px;padding:8px 10px;font-size:.78rem;"><span id="pl-grant-modal-info"></span></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日</label>'
+    +'<input type="date" id="pl-grant-date" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">失効予定日</label>'
+    +'<input type="date" id="pl-grant-expires" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">付与日数</label>'
+    +'<input type="number" id="pl-grant-days" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
+    +'<div id="pl-grant-remain-wrap"><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">残日数</label>'
+    +'<input type="number" id="pl-grant-remain" min="0" max="40" step="0.5" style="width:100%;font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;" placeholder="例：10"></div>'
+    +'<div id="pl-grant-consumed-note" style="grid-column:1/-1;display:none;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:7px 10px;font-size:.72rem;color:#713f12;">'
+    +'消化済みとして登録します。使用日数＝付与日数、残日数は自動で 0 になります。'
+    +'</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
+    +'<button id="btn-pl-grant-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存する</button>'
+    +'<button onclick="closePaidLeaveGrantModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+    +'</div></div>';
+  document.body.appendChild(wrap);
+  return wrap;
+}
 function openPaidLeaveGrantModal(idx,consumed){
   var g=_paidLeaveGrantsCache[idx];
   if(!g)return;
   _plGrantModalData={staffId:g.staffId,staffName:g.staffName,grantNum:g.grantNum,consumed:!!consumed};
-  var wrap=document.getElementById("pl-grant-modal-wrap");
-  if(!wrap)return;
+  _plGrantModalOpen=true;
+  var wrap=ensurePaidLeaveGrantModal(); // body直下に生成 or 再利用
   var titleEl=document.getElementById("pl-grant-modal-title");
   if(titleEl)titleEl.textContent=consumed?"有給付与登録（消化済み）":"有給付与登録";
   var infoEl=document.getElementById("pl-grant-modal-info");
@@ -4914,8 +4927,10 @@ function openPaidLeaveGrantModal(idx,consumed){
   }
 }
 function closePaidLeaveGrantModal(){
-  var wrap=document.getElementById("pl-grant-modal-wrap");if(wrap)wrap.style.display="none";
+  var wrap=document.getElementById("pl-grant-modal-wrap");
+  if(wrap)wrap.style.display="none";
   _plGrantModalData={};
+  _plGrantModalOpen=false;
 }
 function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt,grantedDays,usedDays,remainDays){
   var dup=paidLeaveBalances.some(function(b){
@@ -4936,6 +4951,11 @@ function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt
   closePaidLeaveGrantModal();
   render();
 }
+
+// 有給付与登録モーダル: Escキーで閉じる（body直下固定なので常時有効）
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&_plGrantModalOpen){closePaidLeaveGrantModal();}
+});
 
 // まず即座にレンダリング（Firebaseを待たない）
 render();
