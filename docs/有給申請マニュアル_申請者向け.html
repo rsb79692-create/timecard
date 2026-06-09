@@ -5,12 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>有給申請マニュアル（申請者向け）- 株式会社 穂乃味</title>
 <style>
-/* ============================================================
-   印刷・PDF 用スタイル
-   ============================================================ */
 @page {
   size: A4 portrait;
-  margin: 18mm 14mm 18mm 14mm;
+  margin: 10mm 12mm 10mm 12mm;
 }
 @media print {
   .page-break { page-break-before: always; break-before: page; }
@@ -19,14 +16,11 @@
   .page-wrapper { box-shadow: none !important; }
 }
 
-/* ============================================================
-   基本
-   ============================================================ */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
   font-family: "Meiryo", "Yu Gothic UI", "Hiragino Kaku Gothic ProN", "Noto Sans JP", sans-serif;
-  font-size: 15px;
-  line-height: 1.7;
+  font-size: 14px;
+  line-height: 1.6;
   color: #1a2332;
   background: #e8edf3;
 }
@@ -36,216 +30,106 @@ body {
   background: #fff;
 }
 
-/* ============================================================
-   ページ共通
-   ============================================================ */
 .page {
   padding: 0;
-  min-height: 267mm;
   position: relative;
-  overflow: hidden;
-}
-
-/* ============================================================
-   タイトルページ
-   ============================================================ */
-.title-page {
-  background: linear-gradient(160deg, #1e40af 0%, #1d4ed8 50%, #2563eb 100%);
-  min-height: 267mm;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  text-align: center;
-  padding: 40px 30px;
-  color: #fff;
-}
-.title-logo {
-  width: 80px;
-  height: 80px;
-  background: rgba(255,255,255,0.18);
-  border-radius: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 40px;
-  margin-bottom: 28px;
-  border: 2px solid rgba(255,255,255,0.35);
-}
-.title-main {
-  font-size: 42px;
-  font-weight: 900;
-  letter-spacing: .04em;
-  margin-bottom: 12px;
-  text-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-.title-sub {
-  font-size: 26px;
-  font-weight: 700;
-  color: #bfdbfe;
-  margin-bottom: 32px;
-  letter-spacing: .08em;
-}
-.title-company {
-  font-size: 18px;
-  color: #dbeafe;
-  font-weight: 700;
-  letter-spacing: .1em;
-}
-.title-divider {
-  width: 60px;
-  height: 4px;
-  background: rgba(255,255,255,0.5);
-  border-radius: 2px;
-  margin: 24px auto;
-}
-.title-overview {
-  max-width: 460px;
-  background: rgba(255,255,255,0.14);
-  border: 1px solid rgba(255,255,255,0.25);
-  border-radius: 12px;
-  padding: 20px 28px;
-  margin-top: 28px;
-  text-align: left;
-}
-.title-overview p {
-  font-size: 15px;
-  color: #dbeafe;
-  line-height: 1.8;
-}
-.title-overview strong {
-  color: #fff;
-}
-.title-steps-row {
-  display: flex;
-  gap: 16px;
-  margin-top: 36px;
-  flex-wrap: wrap;
-  justify-content: center;
-}
-.title-step-chip {
-  background: rgba(255,255,255,0.15);
-  border: 1px solid rgba(255,255,255,0.3);
-  border-radius: 8px;
-  padding: 10px 18px;
-  font-size: 14px;
-  color: #dbeafe;
-  font-weight: 700;
-}
-.title-step-chip span {
-  display: inline-block;
-  background: #fff;
-  color: #1e40af;
-  border-radius: 4px;
-  padding: 2px 8px;
-  font-size: 12px;
-  margin-right: 6px;
-  font-weight: 900;
-}
-.title-footer {
-  position: absolute;
-  bottom: 24px;
-  left: 0; right: 0;
-  text-align: center;
-  color: rgba(255,255,255,0.4);
-  font-size: 12px;
 }
 
 /* ============================================================
    コンテンツページ共通
    ============================================================ */
 .content-page {
-  padding: 28px 28px 48px;
+  padding: 14px 16px 18px;
 }
 .page-header {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 24px;
-  padding-bottom: 12px;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding-bottom: 7px;
   border-bottom: 3px solid #1e40af;
 }
 .page-header-num {
   background: #1e40af;
   color: #fff;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 900;
-  padding: 4px 12px;
+  padding: 3px 10px;
   border-radius: 4px;
   letter-spacing: .06em;
   white-space: nowrap;
 }
 .page-header-title {
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 900;
   color: #1e40af;
-  letter-spacing: .04em;
+  letter-spacing: .03em;
 }
 
 /* ============================================================
    STEP ブロック
    ============================================================ */
 .step-block {
-  margin-bottom: 28px;
+  margin-bottom: 10px;
   background: #f8fafc;
-  border-radius: 10px;
+  border-radius: 8px;
   border: 1px solid #e2e8f0;
   overflow: hidden;
 }
 .step-header {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 14px 20px 12px;
+  gap: 10px;
+  padding: 8px 14px 7px;
   background: #fff;
   border-bottom: 2px solid #e2e8f0;
 }
 .step-badge {
   background: #1e40af;
   color: #fff;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 900;
-  width: 42px;
-  height: 42px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  letter-spacing: .04em;
+  letter-spacing: .03em;
   text-align: center;
-  line-height: 1.3;
+  line-height: 1.2;
 }
 .step-title {
-  font-size: 20px;
+  font-size: 16px;
   font-weight: 900;
   color: #1a2332;
   line-height: 1.3;
 }
 .step-title-sub {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   color: #64748b;
-  margin-top: 2px;
+  margin-top: 1px;
 }
 .step-body {
   display: flex;
-  gap: 20px;
-  padding: 18px 20px;
+  gap: 14px;
+  padding: 10px 14px;
   align-items: flex-start;
 }
 .step-body.col {
   flex-direction: column;
-  gap: 14px;
+  gap: 8px;
 }
 .step-image-wrap {
   flex-shrink: 0;
-  width: 230px;
+  width: 170px;
 }
 .step-image-wrap img {
   width: 100%;
   border: 1.5px solid #cbd5e1;
-  border-radius: 8px;
+  border-radius: 6px;
   display: block;
 }
 .step-desc {
@@ -255,18 +139,6 @@ body {
 .step-desc-full {
   width: 100%;
 }
-.step-image-wrap-full {
-  width: 100%;
-}
-.step-image-wrap-full img {
-  width: 100%;
-  max-height: 280px;
-  object-fit: contain;
-  object-position: top;
-  border: 1.5px solid #cbd5e1;
-  border-radius: 8px;
-  display: block;
-}
 
 /* ============================================================
    説明リスト
@@ -275,22 +147,22 @@ body {
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 7px;
 }
 .desc-list li {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   align-items: flex-start;
-  font-size: 14px;
-  line-height: 1.65;
+  font-size: 13px;
+  line-height: 1.55;
 }
 .desc-num {
   background: #e02020;
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 900;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   display: flex;
   align-items: center;
@@ -319,8 +191,8 @@ body {
   color: #166534;
   border: 1px solid #86efac;
   border-radius: 3px;
-  padding: 1px 8px;
-  font-size: 13px;
+  padding: 1px 7px;
+  font-size: 12px;
   font-weight: 700;
 }
 .blue-btn {
@@ -328,8 +200,8 @@ body {
   background: #1e40af;
   color: #fff;
   border-radius: 3px;
-  padding: 1px 10px;
-  font-size: 13px;
+  padding: 1px 9px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -341,31 +213,25 @@ body {
   border: 1.5px solid #bfdbfe;
   border-left: 5px solid #1e40af;
   border-radius: 6px;
-  padding: 12px 16px;
-  font-size: 13.5px;
+  padding: 7px 11px;
+  font-size: 12px;
   color: #1e3a5f;
-  line-height: 1.7;
-  margin-top: 12px;
+  line-height: 1.6;
+  margin-top: 8px;
 }
-.point-box strong {
-  color: #1e40af;
-  font-weight: 900;
-}
+.point-box strong { color: #1e40af; font-weight: 900; }
 .warn-box {
   background: #fffbeb;
   border: 1.5px solid #fcd34d;
   border-left: 5px solid #d97706;
   border-radius: 6px;
-  padding: 12px 16px;
-  font-size: 13.5px;
+  padding: 7px 11px;
+  font-size: 12px;
   color: #78350f;
-  line-height: 1.7;
-  margin-top: 12px;
+  line-height: 1.6;
+  margin-top: 8px;
 }
-.warn-box strong {
-  color: #b45309;
-  font-weight: 900;
-}
+.warn-box strong { color: #b45309; font-weight: 900; }
 
 /* ============================================================
    ステータス表
@@ -373,87 +239,88 @@ body {
 .status-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
+  font-size: 13px;
   margin-top: 4px;
 }
 .status-table th {
   background: #1e40af;
   color: #fff;
-  padding: 10px 14px;
+  padding: 7px 10px;
   text-align: left;
   font-weight: 700;
 }
 .status-table td {
-  padding: 11px 14px;
+  padding: 7px 10px;
   border-bottom: 1px solid #e2e8f0;
   vertical-align: top;
-  line-height: 1.6;
+  line-height: 1.5;
 }
-.status-table tr:last-child td {
-  border-bottom: none;
-}
-.badge-pending  { background:#fef9c3; color:#92400e; border:1px solid #fde68a; padding:2px 10px; border-radius:4px; font-weight:700; font-size:13px; white-space:nowrap; }
-.badge-approved { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; padding:2px 10px; border-radius:4px; font-weight:700; font-size:13px; white-space:nowrap; }
-.badge-rejected { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; padding:2px 10px; border-radius:4px; font-weight:700; font-size:13px; white-space:nowrap; }
-.badge-canceled { background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; padding:2px 10px; border-radius:4px; font-weight:700; font-size:13px; white-space:nowrap; }
+.status-table tr:last-child td { border-bottom: none; }
+.badge-pending  { background:#fef9c3; color:#92400e; border:1px solid #fde68a; padding:2px 8px; border-radius:4px; font-weight:700; font-size:12px; white-space:nowrap; }
+.badge-approved { background:#d1fae5; color:#065f46; border:1px solid #6ee7b7; padding:2px 8px; border-radius:4px; font-weight:700; font-size:12px; white-space:nowrap; }
+.badge-rejected { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; padding:2px 8px; border-radius:4px; font-weight:700; font-size:12px; white-space:nowrap; }
+.badge-canceled { background:#f1f5f9; color:#334155; border:1px solid #cbd5e1; padding:2px 8px; border-radius:4px; font-weight:700; font-size:12px; white-space:nowrap; }
 
 /* ============================================================
-   注意事項ページ
+   注意事項（コンパクト版）
    ============================================================ */
 .caution-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 .caution-card {
   background: #fff;
   border: 1.5px solid #e2e8f0;
   border-top: 4px solid #1e40af;
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 6px;
+  padding: 8px 10px;
 }
-.caution-card.warn { border-top-color: #d97706; }
+.caution-card.warn   { border-top-color: #d97706; }
 .caution-card.danger { border-top-color: #dc2626; }
-.caution-card.info { border-top-color: #0891b2; }
-.caution-icon {
-  font-size: 28px;
-  margin-bottom: 8px;
-  display: block;
-}
+.caution-card.info   { border-top-color: #0891b2; }
 .caution-title {
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 900;
   color: #1a2332;
-  margin-bottom: 6px;
+  margin-bottom: 3px;
 }
 .caution-desc {
-  font-size: 13px;
+  font-size: 11.5px;
   color: #475569;
-  line-height: 1.65;
+  line-height: 1.5;
 }
 
 /* ============================================================
-   FAQ
+   FAQ（コンパクト版）
    ============================================================ */
+.section-title {
+  font-size: 14px;
+  font-weight: 900;
+  color: #1e40af;
+  border-left: 5px solid #1e40af;
+  padding-left: 8px;
+  margin-bottom: 7px;
+}
 .faq-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
 }
 .faq-item {
   background: #fff;
   border: 1px solid #e2e8f0;
-  border-radius: 8px;
+  border-radius: 6px;
   overflow: hidden;
 }
 .faq-q {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 12px 16px;
+  gap: 8px;
+  padding: 7px 12px;
   background: #f8fafc;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: #1a2332;
   border-bottom: 1px solid #e2e8f0;
@@ -461,53 +328,53 @@ body {
 .faq-q-icon {
   background: #1e40af;
   color: #fff;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 900;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 .faq-a {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
-  padding: 12px 16px;
-  font-size: 13.5px;
+  gap: 8px;
+  padding: 7px 12px;
+  font-size: 12.5px;
   color: #334155;
-  line-height: 1.65;
+  line-height: 1.55;
 }
 .faq-a-icon {
   background: #d1fae5;
   color: #065f46;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  font-size: 11px;
   font-weight: 900;
   flex-shrink: 0;
+  margin-top: 1px;
 }
 
 /* ============================================================
    フッター
    ============================================================ */
 .content-footer {
-  position: absolute;
-  bottom: 14px;
-  left: 28px; right: 28px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: 10px;
   color: #94a3b8;
   border-top: 1px solid #e2e8f0;
-  padding-top: 8px;
+  padding-top: 5px;
+  margin-top: 10px;
 }
 </style>
 </head>
@@ -516,128 +383,18 @@ body {
 <div class="page-wrapper">
 
 <!-- ============================================================
-     PAGE 1: タイトルページ
+     PAGE 1: STEP 3 + 4
      ============================================================ -->
-<div class="page title-page">
-  <div class="title-logo">&#x1F4C5;</div>
-  <div class="title-main">有給申請マニュアル</div>
-  <div class="title-sub">申請者向け</div>
-  <div class="title-divider"></div>
-  <div class="title-company">株式会社 穂乃味</div>
-
-  <div class="title-overview">
-    <p>このマニュアルでは、<strong>タイムカードアプリから有給休暇を申請する手順</strong>を画面を見ながら説明します。</p>
-    <p style="margin-top:10px;">スマートフォン・タブレットから簡単に申請できます。不明な点は管理者にご相談ください。</p>
-  </div>
-
-  <div class="title-steps-row">
-    <div class="title-step-chip"><span>STEP 1</span>名前を選ぶ</div>
-    <div class="title-step-chip"><span>STEP 2</span>PIN 入力</div>
-    <div class="title-step-chip"><span>STEP 3</span>有給申請ボタン</div>
-    <div class="title-step-chip"><span>STEP 4</span>日付を選択</div>
-    <div class="title-step-chip"><span>STEP 5</span>申請する</div>
-    <div class="title-step-chip"><span>STEP 6</span>状態を確認</div>
-  </div>
-
-  <div class="title-footer">穂乃味タイムカード&nbsp;|&nbsp;有給申請マニュアル（申請者向け）</div>
-</div>
-
-
-<!-- ============================================================
-     PAGE 2: STEP 1 - 2
-     ============================================================ -->
-<div class="page content-page page-break">
+<div class="page content-page">
   <div class="page-header">
     <div class="page-header-num">STEP 1 &#8211; 2</div>
-    <div class="page-header-title">タイムカードを開いてPINを入力する</div>
-  </div>
-
-  <!-- STEP 1 -->
-  <div class="step-block">
-    <div class="step-header">
-      <div class="step-badge">STEP<br>1</div>
-      <div>
-        <div class="step-title">タイムカード画面を開いて自分の名前を選ぶ</div>
-        <div class="step-title-sub">スタッフ選択画面</div>
-      </div>
-    </div>
-    <div class="step-body">
-      <div class="step-image-wrap">
-        <img src="manual-assets/step1_home.png" alt="スタッフ選択画面">
-      </div>
-      <div class="step-desc">
-        <ul class="desc-list">
-          <li>
-            <div class="desc-num">1</div>
-            <div class="desc-text">画面に「<strong>スタッフを選択してください</strong>」と表示されていることを確認してください。表示がない場合は再読み込みをしてください。</div>
-          </li>
-          <li>
-            <div class="desc-num">2</div>
-            <div class="desc-text">一覧から<strong>自分の名前のボタン</strong>をタップします。「あ行」「か行」などのタブで絞り込みもできます。</div>
-          </li>
-        </ul>
-        <div class="warn-box">
-          <strong>注意：</strong>必ず<strong>自分の名前</strong>を選んでください。他の人の名前を選ぶとその人の記録になってしまいます。
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- STEP 2 -->
-  <div class="step-block">
-    <div class="step-header">
-      <div class="step-badge">STEP<br>2</div>
-      <div>
-        <div class="step-title">4桁のPINを入力してログインする</div>
-        <div class="step-title-sub">個人認証</div>
-      </div>
-    </div>
-    <div class="step-body">
-      <div class="step-image-wrap">
-        <img src="manual-assets/step2_pin.png" alt="PIN入力画面">
-      </div>
-      <div class="step-desc">
-        <ul class="desc-list">
-          <li>
-            <div class="desc-num">1</div>
-            <div class="desc-text">数字ボタンをタップして<strong>4桁のPIN</strong>を入力します。入力した桁数が「&#9679;」で表示されます。</div>
-          </li>
-          <li>
-            <div class="desc-num">2</div>
-            <div class="desc-text">4桁入力したら<span class="blue-btn">&#8594;</span>ボタンを押して確定します。</div>
-          </li>
-          <li>
-            <div class="desc-num" style="background:#64748b;">!</div>
-            <div class="desc-text"><strong>初回ログイン時：</strong>「初回ログインです。4桁のPINを設定してください。」と表示されます。自分で決めた4桁の数字を2回入力してPINを設定してください。</div>
-          </li>
-        </ul>
-        <div class="point-box">
-          <strong>入力ミスした場合：</strong>「&#9003;」ボタンで1桁ずつ削除できます。最初からやり直す場合も「&#9003;」を押し続けてください。
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="content-footer">
-    <span>穂乃味タイムカード | 有給申請マニュアル（申請者向け）</span>
-    <span>2 / 5</span>
-  </div>
-</div>
-
-
-<!-- ============================================================
-     PAGE 3: STEP 3 - 4
-     ============================================================ -->
-<div class="page content-page page-break">
-  <div class="page-header">
-    <div class="page-header-num">STEP 3 &#8211; 4</div>
     <div class="page-header-title">有給申請ボタンを開いて日付を選択する</div>
   </div>
 
   <!-- STEP 3 -->
   <div class="step-block">
     <div class="step-header">
-      <div class="step-badge">STEP<br>3</div>
+      <div class="step-badge">STEP<br>1</div>
       <div>
         <div class="step-title">打刻画面を下にスクロールして「有給申請」ボタンをタップ</div>
         <div class="step-title-sub">有給申請フォームを開く</div>
@@ -655,11 +412,11 @@ body {
           </li>
           <li>
             <div class="desc-num">2</div>
-            <div class="desc-text">画面の下部に緑色の<span class="green-btn">有給申請</span>ボタンが表示されます。タップすると申請フォームが開きます。</div>
+            <div class="desc-text">緑色の<span class="green-btn">有給申請</span>ボタンが表示されます。タップすると申請フォームが開きます。</div>
           </li>
         </ul>
         <div class="point-box">
-          <strong>有給申請ボタンが表示されない場合：</strong>有給残日数が0日、または管理者が有給を付与していない可能性があります。管理者にご連絡ください。
+          <strong>ボタンが表示されない場合：</strong>有給残日数が0日か管理者が付与していません。管理者にご連絡ください。
         </div>
       </div>
     </div>
@@ -668,7 +425,7 @@ body {
   <!-- STEP 4 -->
   <div class="step-block">
     <div class="step-header">
-      <div class="step-badge">STEP<br>4</div>
+      <div class="step-badge">STEP<br>2</div>
       <div>
         <div class="step-title">カレンダーで取得日を選択する</div>
         <div class="step-title-sub">日付の選択（複数可）</div>
@@ -682,15 +439,15 @@ body {
         <ul class="desc-list">
           <li>
             <div class="desc-num">1</div>
-            <div class="desc-text"><strong>カレンダーから有給を取りたい日</strong>をタップして選択します。選んだ日が<strong>青く</strong>なります。複数日まとめて選択できます。</div>
+            <div class="desc-text"><strong>有給を取りたい日</strong>をタップして選択します。選んだ日が<strong>青く</strong>なります。複数日まとめて選択できます。</div>
           </li>
           <li>
             <div class="desc-num" style="background:#9ca3af;">&#8212;</div>
-            <div class="desc-text"><span style="color:#9ca3af;font-weight:700;">グレー</span>の日付はすでに申請済みのため選択できません。</div>
+            <div class="desc-text"><span style="color:#9ca3af;font-weight:700;">グレー</span>の日付はすでに申請済みで選択できません。</div>
           </li>
           <li>
             <div class="desc-num">2</div>
-            <div class="desc-text">「有効残日数」と「有給の期限」を確認してから<span class="blue-btn">申請する</span>ボタンをタップします。</div>
+            <div class="desc-text">「有効残日数」と「有給の期限」を確認してから<span class="blue-btn">申請する</span>をタップします。</div>
           </li>
         </ul>
         <div class="warn-box">
@@ -702,192 +459,126 @@ body {
 
   <div class="content-footer">
     <span>穂乃味タイムカード | 有給申請マニュアル（申請者向け）</span>
-    <span>3 / 5</span>
+    <span>1 / 2</span>
   </div>
 </div>
 
 
 <!-- ============================================================
-     PAGE 4: STEP 5 - 6
+     PAGE 2: STEP 5 + 6 + 注意事項 + FAQ
      ============================================================ -->
 <div class="page content-page page-break">
   <div class="page-header">
-    <div class="page-header-num">STEP 5 &#8211; 6</div>
-    <div class="page-header-title">申請を送信して状態を確認する</div>
+    <div class="page-header-num">STEP 3 &#8211; 4 &amp; 注意事項</div>
+    <div class="page-header-title">申請の送信・状態確認・注意事項</div>
   </div>
 
-  <!-- STEP 5 -->
-  <div class="step-block">
-    <div class="step-header">
-      <div class="step-badge">STEP<br>5</div>
-      <div>
-        <div class="step-title">「申請する」ボタンを押して送信する</div>
-        <div class="step-title-sub">申請の送信</div>
+  <!-- STEP 5 + 6 を横並び -->
+  <div style="display:flex; gap:10px; margin-bottom:8px;">
+
+    <!-- STEP 5 -->
+    <div class="step-block" style="flex:1; margin-bottom:0;">
+      <div class="step-header" style="padding:6px 12px 5px;">
+        <div class="step-badge" style="width:30px;height:30px;font-size:9px;">STEP<br>3</div>
+        <div class="step-title" style="font-size:13px;">「申請する」を押して送信</div>
       </div>
-    </div>
-    <div class="step-body">
-      <div class="step-image-wrap">
-        <img src="manual-assets/step5_submitted.png" alt="申請完了メッセージ">
-      </div>
-      <div class="step-desc">
-        <ul class="desc-list">
-          <li>
-            <div class="desc-num">1</div>
-            <div class="desc-text">「<strong>有給申請を送信しました（日付）</strong>」というメッセージが表示されたら申請完了です。</div>
-          </li>
-          <li>
-            <div class="desc-num">2</div>
-            <div class="desc-text">「<span class="blue-btn">OK</span>」をタップして画面を閉じます。</div>
-          </li>
+      <div style="padding:8px 12px; display:flex; gap:10px; align-items:flex-start;">
+        <img src="manual-assets/step5_submitted.png" alt="申請完了" style="width:130px;border:1.5px solid #cbd5e1;border-radius:6px;flex-shrink:0;">
+        <ul class="desc-list" style="font-size:12px; gap:5px;">
+          <li><div class="desc-num" style="width:18px;height:18px;font-size:10px;">1</div><div class="desc-text">「<strong>有給申請を送信しました</strong>」と表示されたら完了です。</div></li>
+          <li><div class="desc-num" style="width:18px;height:18px;font-size:10px;">2</div><div class="desc-text"><span class="blue-btn">OK</span>をタップして閉じます。</div></li>
+          <li><div class="desc-num" style="width:18px;height:18px;font-size:10px;background:#1e40af;">!</div><div class="desc-text">承認されるまでは<strong>確定ではありません</strong>。</div></li>
         </ul>
-        <div class="point-box">
-          <strong>送信後の注意：</strong>申請はすぐに管理者に届きます。ただし<strong>承認されるまでは確定ではありません</strong>。承認されたかどうかは管理者に確認するか、次のSTEP 6で確認してください。
-        </div>
       </div>
     </div>
-  </div>
 
-  <!-- STEP 6 -->
-  <div class="step-block">
-    <div class="step-header">
-      <div class="step-badge">STEP<br>6</div>
-      <div>
-        <div class="step-title">申請後の状態を確認する</div>
-        <div class="step-title-sub">ステータスの種類</div>
+    <!-- STEP 6 -->
+    <div class="step-block" style="flex:1; margin-bottom:0;">
+      <div class="step-header" style="padding:6px 12px 5px;">
+        <div class="step-badge" style="width:30px;height:30px;font-size:9px;">STEP<br>4</div>
+        <div class="step-title" style="font-size:13px;">申請後の状態を確認する</div>
       </div>
-    </div>
-    <div class="step-body col">
-      <div style="max-width:340px;">
-        <img src="manual-assets/step6_status.png" alt="申請状態の種類" style="width:100%;border:1.5px solid #cbd5e1;border-radius:8px;">
-      </div>
-      <div class="step-desc-full">
-        <table class="status-table">
-          <tr>
-            <th style="width:110px;">ステータス</th>
-            <th>意味</th>
-            <th>次のアクション</th>
-          </tr>
-          <tr>
-            <td><span class="badge-pending">申請中</span></td>
-            <td>管理者が確認・承認待ちの状態</td>
-            <td>そのままお待ちください</td>
-          </tr>
-          <tr>
-            <td><span class="badge-approved">承認済み</span></td>
-            <td>管理者が承認し有給取得が確定</td>
-            <td>対応不要です</td>
-          </tr>
-          <tr>
-            <td><span class="badge-rejected">却下</span></td>
-            <td>申請が却下された</td>
-            <td>管理者に理由を確認してください</td>
-          </tr>
-          <tr>
-            <td><span class="badge-canceled">取消済み</span></td>
-            <td>申請が取り消された</td>
-            <td>必要なら再申請してください</td>
-          </tr>
+      <div style="padding:8px 12px;">
+        <table class="status-table" style="font-size:12px;">
+          <tr><th style="width:74px;padding:5px 8px;">ステータス</th><th style="padding:5px 8px;">意味・次のアクション</th></tr>
+          <tr><td style="padding:5px 8px;"><span class="badge-pending">申請中</span></td><td style="padding:5px 8px;">管理者が確認待ち。そのままお待ちください。</td></tr>
+          <tr><td style="padding:5px 8px;"><span class="badge-approved">承認済み</span></td><td style="padding:5px 8px;">有給取得が確定しました。</td></tr>
+          <tr><td style="padding:5px 8px;"><span class="badge-rejected">却下</span></td><td style="padding:5px 8px;">管理者に理由を確認してください。</td></tr>
+          <tr><td style="padding:5px 8px;"><span class="badge-canceled">取消済み</span></td><td style="padding:5px 8px;">必要なら再申請してください。</td></tr>
         </table>
       </div>
     </div>
+
   </div>
 
-  <div class="content-footer">
-    <span>穂乃味タイムカード | 有給申請マニュアル（申請者向け）</span>
-    <span>4 / 5</span>
-  </div>
-</div>
-
-
-<!-- ============================================================
-     PAGE 5: 注意事項・よくある Q&A
-     ============================================================ -->
-<div class="page content-page page-break">
-  <div class="page-header">
-    <div class="page-header-num">注意事項 &amp; FAQ</div>
-    <div class="page-header-title">よくあるケースと注意事項</div>
-  </div>
-
-  <div class="caution-grid">
-    <div class="caution-card">
-      <span class="caution-icon">&#x1F4C5;</span>
-      <div class="caution-title">申請は当月内の日付のみ</div>
-      <div class="caution-desc">有給申請できるのは<strong>今月の日付だけ</strong>です。翌月分の申請は翌月になってから行ってください。</div>
+  <!-- 注意事項（1行4列） -->
+  <div style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:7px; margin-bottom:8px;">
+    <div class="caution-card" style="padding:7px 8px;">
+      <div class="caution-title" style="font-size:11px;">&#x1F4C5; 当月内のみ申請可</div>
+      <div class="caution-desc" style="font-size:11px;">翌月分は翌月に申請。</div>
     </div>
-    <div class="caution-card warn">
-      <span class="caution-icon">&#x1F4CA;</span>
-      <div class="caution-title">残日数がないと申請できない</div>
-      <div class="caution-desc">有給残日数が0日、または期限切れの場合はエラーになり申請できません。管理者に残日数を確認してください。</div>
+    <div class="caution-card warn" style="padding:7px 8px;">
+      <div class="caution-title" style="font-size:11px;">&#x1F4CA; 残日数不足は申請不可</div>
+      <div class="caution-desc" style="font-size:11px;">管理者に残日数を確認。</div>
     </div>
-    <div class="caution-card info">
-      <span class="caution-icon">&#x23F3;</span>
-      <div class="caution-title">承認されるまで確定ではない</div>
-      <div class="caution-desc">申請後は「申請中」状態です。管理者が<strong>承認</strong>して初めて有給取得が確定します。早めに申請しましょう。</div>
+    <div class="caution-card info" style="padding:7px 8px;">
+      <div class="caution-title" style="font-size:11px;">&#x23F3; 承認まで確定ではない</div>
+      <div class="caution-desc" style="font-size:11px;">早めに申請しましょう。</div>
     </div>
-    <div class="caution-card danger">
-      <span class="caution-icon">&#x1F4DE;</span>
-      <div class="caution-title">間違えた場合は管理者へ連絡</div>
-      <div class="caution-desc">間違えた日付で申請した場合や、申請を取り消したい場合は<strong>管理者に連絡</strong>してください。</div>
+    <div class="caution-card danger" style="padding:7px 8px;">
+      <div class="caution-title" style="font-size:11px;">&#x1F4DE; 間違えたら管理者へ</div>
+      <div class="caution-desc" style="font-size:11px;">取消はスタッフ不可。</div>
     </div>
   </div>
 
-  <div style="margin-bottom:14px; font-size:16px; font-weight:900; color:#1e40af; border-left:5px solid #1e40af; padding-left:10px;">よくある質問 Q&amp;A</div>
-  <div class="faq-list">
+  <!-- FAQ -->
+  <div class="section-title" style="font-size:13px; margin-bottom:6px;">よくある質問 Q&amp;A</div>
+  <div class="faq-list" style="gap:5px;">
     <div class="faq-item">
-      <div class="faq-q">
-        <div class="faq-q-icon">Q</div>
-        <div>有給申請ボタンが表示されない / タップできない</div>
+      <div class="faq-q" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-q-icon" style="width:18px;height:18px;font-size:10px;">Q</div>
+        <div>有給申請ボタンが表示されない</div>
       </div>
-      <div class="faq-a">
-        <div class="faq-a-icon">A</div>
-        <div>有給残日数が0日または期限切れの場合は表示されません。管理者に「有給付与がされているか」を確認してください。</div>
+      <div class="faq-a" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-a-icon" style="width:18px;height:18px;font-size:10px;">A</div>
+        <div>残日数が0日または期限切れです。管理者に「有給付与がされているか」確認してください。</div>
       </div>
     </div>
     <div class="faq-item">
-      <div class="faq-q">
-        <div class="faq-q-icon">Q</div>
-        <div>同じ日に2回申請してしまった</div>
+      <div class="faq-q" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-q-icon" style="width:18px;height:18px;font-size:10px;">Q</div>
+        <div>間違えた日付で申請してしまった</div>
       </div>
-      <div class="faq-a">
-        <div class="faq-a-icon">A</div>
-        <div>申請済みの日はカレンダーでグレー表示になり、重複申請はできない仕組みになっています。不安な場合は管理者に確認してください。</div>
+      <div class="faq-a" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-a-icon" style="width:18px;height:18px;font-size:10px;">A</div>
+        <div>スタッフ側からの取消はできません。管理者に「申請の取消」を依頼してください。</div>
       </div>
     </div>
     <div class="faq-item">
-      <div class="faq-q">
-        <div class="faq-q-icon">Q</div>
+      <div class="faq-q" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-q-icon" style="width:18px;height:18px;font-size:10px;">Q</div>
         <div>PINを忘れてしまった</div>
       </div>
-      <div class="faq-a">
-        <div class="faq-a-icon">A</div>
-        <div>管理者にPINリセットを依頼してください。リセット後、再ログイン時に新しいPINを設定できます。</div>
+      <div class="faq-a" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-a-icon" style="width:18px;height:18px;font-size:10px;">A</div>
+        <div>管理者にPINリセットを依頼してください。再ログイン時に新しいPINを設定できます。</div>
       </div>
     </div>
     <div class="faq-item">
-      <div class="faq-q">
-        <div class="faq-q-icon">Q</div>
-        <div>申請したのに「申請中」のまま長時間経っている</div>
+      <div class="faq-q" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-q-icon" style="width:18px;height:18px;font-size:10px;">Q</div>
+        <div>「申請中」のまま長時間変わらない</div>
       </div>
-      <div class="faq-a">
-        <div class="faq-a-icon">A</div>
-        <div>管理者がまだ確認していない可能性があります。急ぎの場合は管理者に直接確認してください。</div>
-      </div>
-    </div>
-    <div class="faq-item">
-      <div class="faq-q">
-        <div class="faq-q-icon">Q</div>
-        <div>申請した有給をキャンセルしたい</div>
-      </div>
-      <div class="faq-a">
-        <div class="faq-a-icon">A</div>
-        <div>スタッフ側からのキャンセル操作はありません。管理者に「申請の取消」を依頼してください。</div>
+      <div class="faq-a" style="padding:6px 10px; font-size:12px;">
+        <div class="faq-a-icon" style="width:18px;height:18px;font-size:10px;">A</div>
+        <div>管理者がまだ確認していない可能性があります。急ぎの場合は管理者に直接連絡してください。</div>
       </div>
     </div>
   </div>
 
   <div class="content-footer">
     <span>穂乃味タイムカード | 有給申請マニュアル（申請者向け）</span>
-    <span>5 / 5</span>
+    <span>2 / 2</span>
   </div>
 </div>
 
