@@ -223,7 +223,8 @@ function listenFirebase() {
           if(val){
             var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
             paidLeaveRequests=(arr||[]).filter(Boolean);
-            if(!document.querySelector('.time-edit-wrap')) render();
+            // 残日数入力フォーム編集中はrenderをスキップ（入力値消去防止）
+            if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty) render();
           }
         }).catch(function(){});
     }
@@ -599,6 +600,7 @@ var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
 var paidLeaveLoading=false;
+var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
 var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フラグ
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
@@ -2654,6 +2656,12 @@ function render(){
         render();
       };
     });
+    // 有給残日数フォーム — 入力開始でdirtyフラグをセット（polling上書き防止）
+    ["pl-bal-staff","pl-bal-grant-date","pl-bal-granted","pl-bal-used"].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el){el.addEventListener("input",function(){paidLeaveBalanceDirty=true;},true);
+             el.addEventListener("change",function(){paidLeaveBalanceDirty=true;},true);}
+    });
     // 有給残日数保存
     var plBalSaveBtn=document.getElementById("btn-pl-bal-save");
     if(plBalSaveBtn)plBalSaveBtn.onclick=function(){
@@ -2669,6 +2677,7 @@ function render(){
       var existing=paidLeaveBalances.findIndex(function(b2){return b2.staffId===staffSel;});
       if(existing>=0){paidLeaveBalances[existing]=bal;}else{paidLeaveBalances.push(bal);}
       savePaidLeaveBalance(bal);
+      paidLeaveBalanceDirty=false; // 保存完了でフラグ解除
       showAlert(staffSel+"の残日数を保存しました（残"+remain+"日）",function(){render();});
     };
 
@@ -3186,6 +3195,8 @@ function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
   adminTab=v;
+  // タブ切り替え時は残日数フォームのdirtyフラグをリセット
+  if(v!=="paidleave") paidLeaveBalanceDirty=false;
   if(v==="documents"){
     docLoading=true;docList=[];render();
     loadDocumentList(function(docs){docList=docs;docLoading=false;render();});
