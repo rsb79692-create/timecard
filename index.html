@@ -1314,7 +1314,7 @@ function render(){
       +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
-      +(!adminPinReady()?'<div style="color:#4b5563;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
+      +(!adminPinReady()&&!firebaseReady?'<div style="color:#4b5563;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':!adminPinReady()&&firebaseReady?'<div style="color:#b45309;text-align:center;font-size:.85rem;margin-bottom:10px;">管理者PINが未設定です。Firebaseで設定してください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
       +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">⌫</button>'
@@ -3407,7 +3407,12 @@ function pinTap(v){
   if(pinInput.length===8){setTimeout(pinOk,150);}
 }
 async function pinOk(){
-  if(!adminPinReady()){pinInput="";render();return;}
+  if(!adminPinReady()){
+    pinInput="";
+    if(firebaseReady){showAlert("管理者PINが未設定です。Firebase で config/adminPinHash を設定してください");}
+    render();
+    return;
+  }
   var inputStr=pinInput;
   var match=false;
   if(ADMIN_PIN_HASH){
