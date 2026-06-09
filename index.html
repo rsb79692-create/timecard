@@ -1411,6 +1411,8 @@ function render(){
           if(dup)dupDates.push(d);
         });
         if(dupDates.length>0){showAlert(dupDates.join(", ")+" はすでに有給申請があります");return;}
+        // ── 申請前確認 ──
+        showModal({title:"確認",message:"シフト作成者または施設責任者への\n申請・許可は済んでいますか？",okLabel:"はい",onOK:async function(){
         // ── Firebaseから最新の有給残日数を直接取得してブロック判定 ──
         plSubmitting=true;
         try{
@@ -1460,6 +1462,7 @@ function render(){
         var dispDates=sortedDates.length<=3?sortedDates.join(", "):sortedDates[0]+" 他"+(sortedDates.length-1)+"日";
         showAlert("有給申請を送信しました（"+dispDates+"）");
         render();
+        }});
       };
     }
     return;
