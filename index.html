@@ -686,6 +686,7 @@ function saveData(k,v){
   saveToFirebase(k, v);
 }
 
+function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
 // ===== 状態 =====
 var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
@@ -1583,7 +1584,7 @@ function render(){
         var badge=wasEdited
           ?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;margin-left:2px;">修正</span>':"";
         var reasonLine=(wasEdited&&rec.adjustReason)
-          ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+rec.adjustReasonLabel+(rec.adjustComment?' / '+rec.adjustComment:'')+'</div>':"";
+          ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+esc(rec.adjustReasonLabel)+(rec.adjustComment?' / '+esc(rec.adjustComment):'')+'</div>':"";
         if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge+reasonLine;
         return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge+reasonLine;
       }
@@ -1921,7 +1922,7 @@ function render(){
             ?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
             :"";
           var reasonLine=(wasEdited&&rec.adjustReason)
-            ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+rec.adjustReasonLabel+(rec.adjustComment?' / '+rec.adjustComment:'')+'</div>'
+            ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+esc(rec.adjustReasonLabel)+(rec.adjustComment?' / '+esc(rec.adjustComment):'')+'</div>'
             :"";
           if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.18rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+reasonLine+'</td>';
           return'<td style="padding:6px 8px;text-align:center;">'
@@ -2874,7 +2875,7 @@ function render(){
         ?adjStaffNames.map(function(nm){
           var c=adjByStaff[nm];
           return'<tr style="border-bottom:1px solid #e9ecef;">'
-            +'<td style="padding:6px 10px;font-weight:700;font-size:.88rem;">'+nm+'</td>'
+            +'<td style="padding:6px 10px;font-weight:700;font-size:.88rem;">'+esc(nm)+'</td>'
             +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.miss+'</td>'
             +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.late+'</td>'
             +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.order+'</td>'
@@ -2891,13 +2892,13 @@ function render(){
           if(r.type==="clockIn"){corrIn=r.time;}
           if(r.type==="clockOut"){corrOut=r.time;}
           return'<tr style="border-bottom:1px solid #e9ecef;">'
-            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+r.date+'</td>'
-            +'<td style="padding:5px 8px;font-size:.85rem;font-weight:700;">'+r.staff+'</td>'
-            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#6b7280;">'+(origIn||"−")+'　'+(origOut||"−")+'</td>'
-            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#0f172a;font-weight:700;">'+(corrIn||"−")+'　'+(corrOut||"−")+'</td>'
-            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+r.adjustReasonLabel+'</td>'
-            +'<td style="padding:5px 8px;font-size:.78rem;color:#6b7280;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(r.adjustComment||"−")+'</td>'
-            +'<td style="padding:5px 8px;font-size:.75rem;color:#8496a7;white-space:nowrap;">'+adjDt+'</td>'
+            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+esc(r.date)+'</td>'
+            +'<td style="padding:5px 8px;font-size:.85rem;font-weight:700;">'+esc(r.staff)+'</td>'
+            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#6b7280;">'+esc(origIn||"−")+'　'+esc(origOut||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#0f172a;font-weight:700;">'+esc(corrIn||"−")+'　'+esc(corrOut||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+esc(r.adjustReasonLabel)+'</td>'
+            +'<td style="padding:5px 8px;font-size:.78rem;color:#6b7280;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(r.adjustComment||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-size:.75rem;color:#8496a7;white-space:nowrap;">'+esc(adjDt)+'</td>'
             +'</tr>';
         }).join("")
         :'<tr><td colspan="7" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">当月の修正履歴はありません</td></tr>';
