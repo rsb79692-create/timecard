@@ -1714,7 +1714,8 @@ function render(){
               +'<button onclick="showPaidLeaveForm=false;plFormDates=[];render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
               +'</div></div>';
           })()
-        :'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
+        :'<button onclick="showCorrectionRequestModal(staffName);" style="margin-top:8px;width:100%;background:#f1f5f9;color:#475569;border:1px solid #94a3b8;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">時刻修正申請</button>'
+          +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
       +'</div>';
     if(showPaidLeaveForm){
