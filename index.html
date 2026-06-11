@@ -448,6 +448,49 @@ function showEditHistoryModal(nm,type,recId){
   card.appendChild(ok);ov.appendChild(card);document.body.appendChild(ov);ok.focus();
 }
 
+// ===== 修正理由モーダル =====
+var ADJUST_REASONS=[
+  {value:"miss",label:"打刻漏れ"},
+  {value:"late",label:"遅刻"},
+  {value:"order",label:"業務指示"},
+  {value:"other",label:"その他"}
+];
+function showAdjustReasonModal(onConfirm,onCancel){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;";
+  var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:14px;";
+  ttl.textContent="修正理由を選択してください";card.appendChild(ttl);
+  var sel=document.createElement("select");
+  sel.style.cssText="width:100%;padding:8px 10px;font-size:.92rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:12px;outline:none;";
+  var defOpt=document.createElement("option");defOpt.value="";defOpt.textContent="-- 選択してください --";sel.appendChild(defOpt);
+  ADJUST_REASONS.forEach(function(r){var o=document.createElement("option");o.value=r.value;o.textContent=r.label;sel.appendChild(o);});
+  card.appendChild(sel);
+  var cmtWrap=document.createElement("div");cmtWrap.style.cssText="display:none;margin-bottom:12px;";
+  var cmtLabel=document.createElement("div");cmtLabel.style.cssText="font-size:.82rem;font-weight:700;color:#475569;margin-bottom:4px;";cmtLabel.textContent="コメント（必須）";cmtWrap.appendChild(cmtLabel);
+  var cmt=document.createElement("textarea");cmt.style.cssText="width:100%;padding:8px 10px;font-size:.88rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;resize:vertical;min-height:64px;outline:none;box-sizing:border-box;";cmt.placeholder="理由を入力してください";cmtWrap.appendChild(cmt);
+  card.appendChild(cmtWrap);
+  sel.onchange=function(){cmtWrap.style.display=sel.value==="other"?"block":"none";};
+  var btnRow=document.createElement("div");btnRow.style.cssText="display:flex;gap:10px;";
+  function close(){if(ov.parentNode)document.body.removeChild(ov);}
+  function dismiss(){close();if(onCancel)onCancel();}
+  var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  cnl.onclick=dismiss;btnRow.appendChild(cnl);
+  var ok=document.createElement("button");ok.textContent="確定";ok.style.cssText="flex:1;background:#1e40af;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  ok.onclick=function(){
+    var rv=sel.value;
+    if(!rv){alert("修正理由を選択してください");return;}
+    if(rv==="other"&&!cmt.value.trim()){alert("「その他」を選んだ場合はコメントを入力してください");return;}
+    var rl=ADJUST_REASONS.find(function(r){return r.value===rv;})||{label:""};
+    close();
+    onConfirm({reason:rv,label:rl.label,comment:rv==="other"?cmt.value.trim():""});
+  };
+  btnRow.appendChild(ok);card.appendChild(btnRow);
+  ov.onclick=function(e){if(e.target===ov)dismiss();};
+  ov.appendChild(card);document.body.appendChild(ov);sel.focus();
+}
+
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
 var ADMIN_PIN=""; // メモリのみ保持（localStorageには保存しない）
@@ -756,17 +799,27 @@ function attachTimeCellHandlers(){
             render();
           },function(){cancel();});
         } else if(newTime){
-          var d2=parseJstDateTime(date,pad(hh)+":"+pad(mm));
-          var nowIso=new Date().toISOString();
-          if(id){
-            var rec=records.find(function(r){return r.id===id;});
-            if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(rec);}
-          } else {
-            var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-            if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=newTime;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",newTime);saveRecord(exist);}
-            else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:newTime,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{}};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,newTime);saveRecord(nr);}
-          }
-          render();
+          var _newTime2=newTime,_hh2=hh,_mm2=mm;
+          showAdjustReasonModal(function(adj){
+            var d2=parseJstDateTime(date,pad(_hh2)+":"+pad(_mm2));
+            var nowIso=new Date().toISOString();
+            var _origCin="",_origCout="";
+            var _cins=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockIn"&&!r.deleted;});
+            var _couts=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockOut"&&!r.deleted;});
+            if(_cins.length)_origCin=_cins[0].time;
+            if(_couts.length)_origCout=_couts[0].time;
+            var _corrCin=type==="clockIn"?_newTime2:_origCin;
+            var _corrCout=type==="clockOut"?_newTime2:_origCout;
+            if(id){
+              var rec=records.find(function(r){return r.id===id;});
+              if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=_newTime2;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;rec.adjustReason=adj.reason;rec.adjustReasonLabel=adj.label;rec.adjustComment=adj.comment;rec.adjustedAt=nowIso;rec.adjustedBy="管理者";rec.originalClockIn=_origCin;rec.originalClockOut=_origCout;rec.correctedClockIn=_corrCin;rec.correctedClockOut=_corrCout;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);saveRecord(rec);}
+            } else {
+              var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+              if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=_newTime2;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;exist.adjustReason=adj.reason;exist.adjustReasonLabel=adj.label;exist.adjustComment=adj.comment;exist.adjustedAt=nowIso;exist.adjustedBy="管理者";exist.originalClockIn=_origCin;exist.originalClockOut=_origCout;exist.correctedClockIn=_corrCin;exist.correctedClockOut=_corrCout;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);saveRecord(exist);}
+              else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:_newTime2,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{},adjustReason:adj.reason,adjustReasonLabel:adj.label,adjustComment:adj.comment,adjustedAt:nowIso,adjustedBy:"管理者",originalClockIn:_origCin,originalClockOut:_origCout,correctedClockIn:_corrCin,correctedClockOut:_corrCout};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,_newTime2,"理由:",adj.label);saveRecord(nr);}
+            }
+            render();
+          },function(){cancel();});
         } else {
           cancel();
         }
@@ -1526,10 +1579,13 @@ function render(){
       var workedColor=otMs>0?"#dc2626":"#1a2332";
       function tCell(rec,type){
         var time=rec?rec.time:"";var id=rec?rec.id:"";
-        var badge=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type])
+        var wasEdited=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type]);
+        var badge=wasEdited
           ?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;margin-left:2px;">修正</span>':"";
-        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge;
-        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge;
+        var reasonLine=(wasEdited&&rec.adjustReason)
+          ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+rec.adjustReasonLabel+(rec.adjustComment?' / '+rec.adjustComment:'')+'</div>':"";
+        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge+reasonLine;
+        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge+reasonLine;
       }
       function brkPairDisp(bsR,beR){
         if(locked2){
@@ -1864,12 +1920,15 @@ function render(){
           var histLine=wasEdited
             ?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
             :"";
-          if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.18rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+'</td>';
+          var reasonLine=(wasEdited&&rec.adjustReason)
+            ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+rec.adjustReasonLabel+(rec.adjustComment?' / '+rec.adjustComment:'')+'</div>'
+            :"";
+          if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.18rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+reasonLine+'</td>';
           return'<td style="padding:6px 8px;text-align:center;">'
             +'<span class="time-cell" data-id="'+(rec?rec.id:"")
             +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
             +'" style="font-family:monospace;font-size:1.18rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
-            +histLine+'</td>';
+            +histLine+reasonLine+'</td>';
         }
         function brkPairCell(bsRec,beRec,locked2){
           var bsEdited=(bsRec&&bsRec.editedByAdmin&&bsRec.editedFields&&bsRec.editedFields.breakStart);
@@ -2798,6 +2857,84 @@ function render(){
         +'</div></div>';
     }
 
+    if(adminTab==="adjustlog"){
+      var adjNow=new Date();
+      var adjCurMonth=adjNow.getFullYear()+"-"+pad(adjNow.getMonth()+1);
+      var adjRecs=records.filter(function(r){return !r.deleted&&r.adjustReason&&monthKey(r.date)===adjCurMonth;});
+      adjRecs.sort(function(a,b){return (b.adjustedAt||b.editedAt||"").localeCompare(a.adjustedAt||a.editedAt||"");});
+      var adjByStaff={};
+      adjRecs.forEach(function(r){
+        if(!adjByStaff[r.staff])adjByStaff[r.staff]={miss:0,late:0,order:0,other:0,total:0};
+        var k=r.adjustReason;
+        if(adjByStaff[r.staff][k]!==undefined)adjByStaff[r.staff][k]++;
+        adjByStaff[r.staff].total++;
+      });
+      var adjStaffNames=Object.keys(adjByStaff).sort(function(a,b){return a.localeCompare(b,"ja");});
+      var adjSummaryRows=adjStaffNames.length
+        ?adjStaffNames.map(function(nm){
+          var c=adjByStaff[nm];
+          return'<tr style="border-bottom:1px solid #e9ecef;">'
+            +'<td style="padding:6px 10px;font-weight:700;font-size:.88rem;">'+nm+'</td>'
+            +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.miss+'</td>'
+            +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.late+'</td>'
+            +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.order+'</td>'
+            +'<td style="padding:6px 10px;text-align:center;font-size:.85rem;">'+c.other+'</td>'
+            +'<td style="padding:6px 10px;text-align:center;font-size:.88rem;font-weight:700;color:#1e40af;">'+c.total+'</td>'
+            +'</tr>';
+        }).join("")
+        :'<tr><td colspan="6" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">当月の修正データはありません</td></tr>';
+      var adjLogRows=adjRecs.length
+        ?adjRecs.map(function(r){
+          var adjDt=(r.adjustedAt||r.editedAt||"").replace("T"," ").slice(0,16);
+          var origIn=r.originalClockIn||"−",origOut=r.originalClockOut||"−";
+          var corrIn=r.correctedClockIn||r.time,corrOut=r.correctedClockOut||"−";
+          if(r.type==="clockIn"){corrIn=r.time;}
+          if(r.type==="clockOut"){corrOut=r.time;}
+          return'<tr style="border-bottom:1px solid #e9ecef;">'
+            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+r.date+'</td>'
+            +'<td style="padding:5px 8px;font-size:.85rem;font-weight:700;">'+r.staff+'</td>'
+            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#6b7280;">'+(origIn||"−")+'　'+(origOut||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-family:monospace;font-size:.82rem;white-space:nowrap;color:#0f172a;font-weight:700;">'+(corrIn||"−")+'　'+(corrOut||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+r.adjustReasonLabel+'</td>'
+            +'<td style="padding:5px 8px;font-size:.78rem;color:#6b7280;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(r.adjustComment||"−")+'</td>'
+            +'<td style="padding:5px 8px;font-size:.75rem;color:#8496a7;white-space:nowrap;">'+adjDt+'</td>'
+            +'</tr>';
+        }).join("")
+        :'<tr><td colspan="7" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">当月の修正履歴はありません</td></tr>';
+      var adjThS="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
+      tc='<div class="admin-card admin-wrap">'
+        +'<div class="admin-title">修正集計（当月：'+adjCurMonth+'）</div>'
+        +'<div style="overflow-x:auto;">'
+        +'<table style="width:100%;border-collapse:collapse;min-width:400px;margin-bottom:4px;">'
+        +'<thead><tr style="background:#eaecef;">'
+        +'<th style="'+adjThS+'text-align:left;">氏名</th>'
+        +'<th style="'+adjThS+'text-align:center;">打刻漏れ</th>'
+        +'<th style="'+adjThS+'text-align:center;">遅刻</th>'
+        +'<th style="'+adjThS+'text-align:center;">業務指示</th>'
+        +'<th style="'+adjThS+'text-align:center;">その他</th>'
+        +'<th style="'+adjThS+'text-align:center;color:#1e40af;">合計</th>'
+        +'</tr></thead>'
+        +'<tbody>'+adjSummaryRows+'</tbody>'
+        +'</table></div>'
+        +'</div>'
+        +'<div class="admin-card admin-wrap" style="margin-top:10px;">'
+        +'<div class="admin-title">修正履歴一覧（当月：'+adjCurMonth+'）</div>'
+        +'<div style="overflow-x:auto;">'
+        +'<table style="width:100%;border-collapse:collapse;min-width:620px;">'
+        +'<thead><tr style="background:#eaecef;">'
+        +'<th style="'+adjThS+'text-align:left;">日付</th>'
+        +'<th style="'+adjThS+'text-align:left;">氏名</th>'
+        +'<th style="'+adjThS+'text-align:left;">修正前</th>'
+        +'<th style="'+adjThS+'text-align:left;">修正後</th>'
+        +'<th style="'+adjThS+'text-align:left;">理由</th>'
+        +'<th style="'+adjThS+'text-align:left;">コメント</th>'
+        +'<th style="'+adjThS+'text-align:left;">修正日時</th>'
+        +'</tr></thead>'
+        +'<tbody>'+adjLogRows+'</tbody>'
+        +'</table></div>'
+        +'</div>';
+    }
+
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
@@ -2834,6 +2971,7 @@ function render(){
       +'通知'+(counts.total>0?'<span style="display:inline-block;background:#dc2626;color:#fff;border-radius:9999px;padding:0 5px;font-size:.6rem;font-weight:700;margin-left:3px;vertical-align:middle;">'+counts.total+'</span>':'')
       +'</button>'
       +'<button class="tab-btn '+(adminTab==="paidleave"?"tab-on":"tab-off")+'" onclick="setTab(\'paidleave\')">有給管理</button>'
+      +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
       +'</div>'
       +'</div>'+tc;
 
