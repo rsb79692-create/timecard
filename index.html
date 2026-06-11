@@ -1499,7 +1499,6 @@ function render(){
           .forEach(function(r){_alertDatesSeen[r.date]=true;});
         var _missingAlerts=[];
         Object.keys(_alertDatesSeen).sort().reverse().forEach(function(dk){
-          if(approvals[dk+"__"+staffName])return;
           var sr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;});
           var v=validateAttendanceRecord(staffName,dk,sr);
           if(v.valid||v.reason==="勤務時間異常"||v.reason==="データ不足")return;
