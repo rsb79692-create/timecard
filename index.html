@@ -541,6 +541,20 @@ function showCorrectionRequestModal(staffNm){
   typeSel.style.cssText="width:100%;padding:8px 10px;font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:10px;outline:none;";
   [{v:"clockIn",l:"出勤"},{v:"clockOut",l:"退勤"},{v:"breakStart",l:"休憩開始"},{v:"breakEnd",l:"休憩終了"}].forEach(function(x){var o=document.createElement("option");o.value=x.v;o.textContent=x.l;typeSel.appendChild(o);});
   card.appendChild(typeSel);
+  var curTimeWrap=document.createElement("div");
+  curTimeWrap.style.cssText="background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;";
+  var curTimeLbl=document.createElement("span");curTimeLbl.style.cssText="font-size:.75rem;font-weight:700;color:#64748b;white-space:nowrap;";curTimeLbl.textContent="現在の打刻時刻：";
+  var curTimeVal=document.createElement("span");curTimeVal.style.cssText="font-size:.92rem;font-weight:700;font-family:monospace;";
+  curTimeWrap.appendChild(curTimeLbl);curTimeWrap.appendChild(curTimeVal);card.appendChild(curTimeWrap);
+  function updateCurTime(){
+    var dt=dateInp.value,tp=typeSel.value;
+    var rec=dt&&tp?records.find(function(r){return r.staff===staffNm&&r.date===dt&&r.type===tp&&!r.deleted;}):null;
+    curTimeVal.textContent=rec?rec.time:"未打刻";
+    curTimeVal.style.color=rec?"#0f172a":"#9ca3af";
+  }
+  updateCurTime();
+  dateInp.onchange=updateCurTime;
+  typeSel.onchange=updateCurTime;
   card.appendChild(lbl("修正後の時刻"));
   var timeInp=document.createElement("input");timeInp.type="time";
   timeInp.style.cssText="width:100%;padding:7px 10px;font-size:1rem;font-family:monospace;border:1px solid #adb5bd;border-radius:2px;margin-bottom:10px;box-sizing:border-box;outline:none;";
@@ -569,7 +583,8 @@ function showCorrectionRequestModal(staffNm){
     if(!rv){alert("修正理由を選択してください");return;}
     if(rv==="other"&&!cmtVal){alert("「その他」を選んだ場合はコメントを入力してください");return;}
     var rl=ADJUST_REASONS.find(function(r){return r.value===rv;})||{label:""};
-    var req={id:"crq_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),staff:staffNm,date:dt,type:tp,requestedTime:pad(hh)+":"+pad(mm),adjustReason:rv,adjustReasonLabel:rl.label,adjustComment:rv==="other"?cmtVal:"",requestedAt:new Date().toISOString(),status:"pending"};
+    var _origRec=records.find(function(r){return r.staff===staffNm&&r.date===dt&&r.type===tp&&!r.deleted;});
+    var req={id:"crq_"+Date.now()+"_"+Math.random().toString(36).slice(2,8),staff:staffNm,date:dt,type:tp,requestedTime:pad(hh)+":"+pad(mm),originalTime:_origRec?_origRec.time:"",adjustReason:rv,adjustReasonLabel:rl.label,adjustComment:rv==="other"?cmtVal:"",requestedAt:new Date().toISOString(),status:"pending"};
     correctionRequests.push(req);
     saveCorrectionRequestFb(req);
     close();
@@ -1476,7 +1491,7 @@ function render(){
         var pendingHTML=myCrqs.length
           ?'<div style="margin-top:8px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 12px;">'
             +'<div style="font-size:.78rem;font-weight:700;color:#92400e;margin-bottom:6px;">申請中の修正（'+myCrqs.length+'件）</div>'
-            +myCrqs.map(function(r){return'<div style="font-size:.78rem;color:#78350f;margin-bottom:3px;display:flex;justify-content:space-between;"><span>'+esc(r.date)+' '+esc(TYPE_LABEL[r.type]||r.type)+'　→　'+esc(r.requestedTime)+'　（'+esc(r.adjustReasonLabel)+'）</span><span style="color:#b45309;font-weight:700;">承認待ち</span></div>';}).join("")
+            +myCrqs.map(function(r){var _od=r.originalTime?esc(r.originalTime):"未打刻";return'<div style="font-size:.78rem;color:#78350f;margin-bottom:3px;display:flex;justify-content:space-between;"><span>'+esc(r.date)+' '+esc(TYPE_LABEL[r.type]||r.type)+'　'+_od+'→'+esc(r.requestedTime)+'　（'+esc(r.adjustReasonLabel)+'）</span><span style="color:#b45309;font-weight:700;">承認待ち</span></div>';}).join("")
             +'</div>'
           :'';
         return pendingHTML
@@ -1987,15 +2002,16 @@ function render(){
           +'<div style="font-size:.9rem;font-weight:900;color:#92400e;margin-bottom:8px;">⏳ スタッフからの修正申請（承認待ち '+_pendingCrqs.length+'件）</div>'
           +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:480px;">'
           +'<thead><tr><th style="'+_crqThS+'">日付</th><th style="'+_crqThS+'">スタッフ</th>'
-          +'<th style="'+_crqThS+'">対象</th><th style="'+_crqThS+'">修正後時刻</th>'
+          +'<th style="'+_crqThS+'">対象</th><th style="'+_crqThS+'">現在　→　修正後</th>'
           +'<th style="'+_crqThS+'">理由</th><th style="'+_crqThS+'">コメント</th>'
           +'<th style="'+_crqThS+'"></th></tr></thead><tbody>'
           +_pendingCrqs.map(function(r){
+            var _origDisp=r.originalTime?esc(r.originalTime):'<span style="color:#9ca3af;">未打刻</span>';
             return'<tr style="border-bottom:1px solid #fef3c7;">'
               +'<td style="padding:5px 8px;font-size:.83rem;white-space:nowrap;">'+esc(r.date)+'</td>'
               +'<td style="padding:5px 8px;font-size:.85rem;font-weight:700;">'+esc(r.staff)+'</td>'
               +'<td style="padding:5px 8px;font-size:.83rem;">'+esc(TYPE_LABEL[r.type]||r.type)+'</td>'
-              +'<td style="padding:5px 8px;font-family:monospace;font-size:.9rem;font-weight:700;color:#1e40af;">'+esc(r.requestedTime)+'</td>'
+              +'<td style="padding:5px 8px;font-family:monospace;font-size:.88rem;white-space:nowrap;">'+_origDisp+'<span style="color:#adb5bd;margin:0 4px;">→</span><span style="font-weight:700;color:#1e40af;">'+esc(r.requestedTime)+'</span></td>'
               +'<td style="padding:5px 8px;font-size:.82rem;white-space:nowrap;">'+esc(r.adjustReasonLabel)+'</td>'
               +'<td style="padding:5px 8px;font-size:.78rem;color:#6b7280;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+esc(r.adjustComment||"−")+'</td>'
               +'<td style="padding:5px 6px;white-space:nowrap;">'
