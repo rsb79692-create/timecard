@@ -1623,6 +1623,8 @@ function render(){
         }});
       };
     }
+    var crqOpenBtn=document.getElementById("btn-crq-open");
+    if(crqOpenBtn)crqOpenBtn.onclick=function(){showCorrectionRequestModal(staffName);};
     return;
   }
 
@@ -1802,8 +1804,6 @@ function render(){
       });
     };
     attachTimeCellHandlers();
-    var crqOpenBtn=document.getElementById("btn-crq-open");
-    if(crqOpenBtn)crqOpenBtn.onclick=function(){showCorrectionRequestModal(staffName);};
     return;
   }
 
