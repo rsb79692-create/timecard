@@ -1,0 +1,33 @@
+name: 打刻修正申請 FCM Push通知
+
+on:
+  schedule:
+    # 毎30分実行 JST 8:00-22:00 ≈ UTC 23:00-13:00
+    - cron: "0,30 23,0,1,2,3,4,5,6,7,8,9,10,11,12 * * *"
+  workflow_dispatch:
+    inputs:
+      dryRun:
+        description: "dryRun=true にすると FCM 送信せずログのみ"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  fcm-notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run fcm-check
+        env:
+          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
+        run: node scripts/fcm-check.js

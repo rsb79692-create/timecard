@@ -11,6 +11,8 @@
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon-v2.png">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" integrity="sha384-sEVIly94UBRLKWdkYoPpSG7GD/e79YHMrxVyZaOk712Ga7+EAw6w1EFi+xBzBdd+" crossorigin="anonymous"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js" integrity="sha384-XtSlZdmg0Ad5zf0AX4W9TGdm+dGjaNK4KG3lNFjfgbnxkCEuT9ugWXkLExgQTJ+6" crossorigin="anonymous"></script>
 <title>穂乃味 タイムカード</title>
 <script>
 // ===== PWAインストール =====
@@ -37,6 +39,10 @@ var NOTIFY_API_URL="https://timecard-rho.vercel.app/api/discord-notify";
 // ===== Phase 3-A: Anonymous Auth (REST API) =====
 // Firebase Console > プロジェクトの設定 > 全般 > ウェブ API キー を設定してください
 var FB_API_KEY="AIzaSyDkYQ5d8mskHo94WIysaFYP8VT2bIZ9Vtc";
+// ===== FCM Push通知設定（Firebase Console > プロジェクトの設定 で確認）=====
+var FCM_MESSAGING_SENDER_ID="972990519633"; // 送信者 ID（数値）
+var FCM_APP_ID="1:972990519633:web:68913a33250e5be920db70";                 // アプリ ID（1:xxxx:web:xxxx）
+var FCM_VAPID_KEY="BFMW2J95vc3NZcS_7Y8biP9ysFhi3s5gOpeQOZQAIj3ZHd3xIOWhjKeqeeh421VkNKrzSPxDWtu1I_gF6WyV2tY";           // Cloud Messaging > ウェブ設定 > ウェブプッシュ証明書
 var _fbIdToken="";
 var _fbRefreshToken="";
 var _fbTokenExpiry=0;
@@ -1017,6 +1023,39 @@ function getNotificationCounts(){
 function updateAppBadge(count){
   if(!('setAppBadge' in navigator))return;
   try{if(count>0){navigator.setAppBadge(count).catch(function(){});}else{navigator.clearAppBadge().catch(function(){});}}catch(e){}
+}
+
+// ===== FCM Push通知（管理者端末のみ）=====
+function initFcmForAdmin(){
+  if(!('Notification' in window))return;
+  if(FCM_VAPID_KEY.startsWith('REPLACE'))return;
+  if(!window._swRegistration)return;
+  var app;
+  try{app=firebase.app();}catch(e){
+    app=firebase.initializeApp({
+      apiKey:FB_API_KEY,
+      projectId:"honomi-timecard",
+      messagingSenderId:FCM_MESSAGING_SENDER_ID,
+      appId:FCM_APP_ID
+    });
+  }
+  var msg=firebase.messaging(app);
+  Notification.requestPermission().then(function(perm){
+    if(perm!=="granted")return;
+    msg.getToken({vapidKey:FCM_VAPID_KEY,serviceWorkerRegistration:window._swRegistration})
+      .then(function(token){if(token)_saveFcmToken(token);})
+      .catch(function(e){console.warn("[FCM] getToken error",e);});
+  });
+}
+function _saveFcmToken(token){
+  var key=token.replace(/[^A-Za-z0-9_-]/g,"").slice(0,40);
+  getAuthToken().then(function(idToken){
+    fetch(FB_URL+"/tc5_fcm_tokens/"+key+".json?auth="+idToken,{
+      method:"PUT",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:token,savedAt:new Date().toISOString()})
+    }).catch(function(e){console.warn("[FCM] token save error",e);});
+  });
 }
 
 // ===== レンダリング =====
@@ -4348,7 +4387,7 @@ async function pinOk(){
       authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(e){console.error("[pinOk] old PIN delete error:", e);});
     }
   }
-  if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();}
+  if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();initFcmForAdmin();}
   else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
 }
 
@@ -5427,7 +5466,9 @@ initFirebase();
 <script>
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
-    navigator.serviceWorker.register('/timecard/sw.js');
+    navigator.serviceWorker.register('/timecard/sw.js')
+      .then(function(reg){ window._swRegistration=reg; })
+      .catch(function(e){ console.warn('[SW] register failed',e); });
   });
 }
 </script>
