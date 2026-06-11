@@ -523,8 +523,9 @@ function showAdjustReasonModal(onConfirm,onCancel){
   ov.appendChild(card);document.body.appendChild(ov);sel.focus();
 }
 
-function showCorrectionRequestModal(staffNm){
-  var dk=fmtDateKey(new Date());
+function showCorrectionRequestModal(staffNm,opts){
+  opts=opts||{};
+  var dk=opts.date||fmtDateKey(new Date());
   var ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
   var card=document.createElement("div");
@@ -540,6 +541,7 @@ function showCorrectionRequestModal(staffNm){
   var typeSel=document.createElement("select");
   typeSel.style.cssText="width:100%;padding:8px 10px;font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:10px;outline:none;";
   [{v:"clockIn",l:"出勤"},{v:"clockOut",l:"退勤"},{v:"breakStart",l:"休憩開始"},{v:"breakEnd",l:"休憩終了"}].forEach(function(x){var o=document.createElement("option");o.value=x.v;o.textContent=x.l;typeSel.appendChild(o);});
+  if(opts.type)typeSel.value=opts.type;
   card.appendChild(typeSel);
   var curTimeWrap=document.createElement("div");
   curTimeWrap.style.cssText="background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;";
@@ -564,6 +566,7 @@ function showCorrectionRequestModal(staffNm){
   reasonSel.style.cssText="width:100%;padding:8px 10px;font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:10px;outline:none;";
   var defOpt=document.createElement("option");defOpt.value="";defOpt.textContent="-- 選択してください --";reasonSel.appendChild(defOpt);
   ADJUST_REASONS.forEach(function(r){var o=document.createElement("option");o.value=r.value;o.textContent=r.label;reasonSel.appendChild(o);});
+  if(opts.reason)reasonSel.value=opts.reason;
   card.appendChild(reasonSel);
   var cmtWrap=document.createElement("div");cmtWrap.style.cssText="display:none;margin-bottom:10px;";
   var cmtLbl=document.createElement("div");cmtLbl.style.cssText="font-size:.78rem;font-weight:700;color:#475569;margin-bottom:3px;";cmtLbl.textContent="コメント（必須）";cmtWrap.appendChild(cmtLbl);
@@ -1001,7 +1004,7 @@ function getNotificationCounts(){
     if(_seenU[key])return;_seenU[key]=true;
     if(!approvals[key])notifyIds[key+"__unapproved"]=true;
   });
-  missingList.forEach(function(x){notifyIds[x.date+"__"+x.staff+"__missing"]=true;});
+  // 打刻漏れ(missingPunch)は管理者通知合計から除外。スタッフ本人の打刻画面に移管。
   var pendingCrq=correctionRequests.filter(function(r){return r.status==="pending";}).length;
   var total=Object.keys(notifyIds).length+pendingCrq;
   return{unapproved:unapproved,missingPunch:mp,total:total,pendingCorrectionRequests:pendingCrq,_missingList:missingList};
@@ -1485,8 +1488,43 @@ function render(){
         )
       ) */
       /* CAMERA_UPLOAD_DISABLED_END */
-      // ── 時刻修正申請ボタン・申請状況 ──
+      // ── 未打刻アラート・修正申請ボタン・申請状況 ──
       +(function(){
+        // ── 未打刻アラート生成 ──
+        var _todayStr=fmtDateKey(new Date());
+        var _cutoffD=new Date();_cutoffD.setDate(_cutoffD.getDate()-14);
+        var _cutoffStr=fmtDateKey(_cutoffD);
+        var _alertDatesSeen={};
+        records.filter(function(r){return r.staff===staffName&&!r.deleted&&r.date<=_todayStr&&r.date>=_cutoffStr;})
+          .forEach(function(r){_alertDatesSeen[r.date]=true;});
+        var _missingAlerts=[];
+        Object.keys(_alertDatesSeen).sort().reverse().forEach(function(dk){
+          if(approvals[dk+"__"+staffName])return;
+          var sr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;});
+          var v=validateAttendanceRecord(staffName,dk,sr);
+          if(v.valid||v.reason==="勤務時間異常"||v.reason==="データ不足")return;
+          var type=v.reason==="退勤漏れ"?"clockOut":"clockIn";
+          var typeLabel=v.reason==="退勤漏れ"?"退勤":"出勤";
+          var hasPending=correctionRequests.some(function(r){return r.staff===staffName&&r.date===dk&&r.type===type&&(r.status==="pending"||r.status==="approved");});
+          _missingAlerts.push({date:dk,type:type,typeLabel:typeLabel,hasPending:hasPending});
+        });
+        var _alertsHTML=_missingAlerts.length
+          ?'<div style="margin-top:8px;background:#fff5f5;border:1px solid #fca5a5;border-radius:8px;padding:10px 12px;">'
+            +'<div style="font-size:.78rem;font-weight:700;color:#991b1b;margin-bottom:8px;">⚠ 打刻漏れの可能性があります</div>'
+            +_missingAlerts.map(function(a){
+              var _yd=new Date();_yd.setDate(_yd.getDate()-1);
+              var _dLabel=a.date===_todayStr?"本日":a.date===fmtDateKey(_yd)?"昨日":a.date.slice(5).replace("-","月")+"日";
+              return'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;flex-wrap:wrap;gap:4px;">'
+                +'<span style="font-size:.83rem;color:#7f1d1d;">'+esc(_dLabel)+'の'+esc(a.typeLabel)+'が未打刻です。時刻修正申請してください。</span>'
+                +(a.hasPending
+                  ?'<span style="font-size:.72rem;background:#fef3c7;color:#92400e;border:1px solid #fcd34d;border-radius:3px;padding:2px 8px;font-weight:700;">申請中</span>'
+                  :'<button class="btn-missing-punch-crq" data-date="'+esc(a.date)+'" data-type="'+esc(a.type)+'" style="background:#dc2626;color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
+                )
+                +'</div>';
+            }).join("")
+            +'</div>'
+          :'';
+        // ── 申請中の修正一覧 ──
         var myCrqs=correctionRequests.filter(function(r){return r.staff===staffName&&r.status==="pending";});
         var pendingHTML=myCrqs.length
           ?'<div style="margin-top:8px;background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 12px;">'
@@ -1494,7 +1532,7 @@ function render(){
             +myCrqs.map(function(r){var _od=r.originalTime?esc(r.originalTime):"未打刻";return'<div style="font-size:.78rem;color:#78350f;margin-bottom:3px;display:flex;justify-content:space-between;"><span>'+esc(r.date)+' '+esc(TYPE_LABEL[r.type]||r.type)+'　'+_od+'→'+esc(r.requestedTime)+'　（'+esc(r.adjustReasonLabel)+'）</span><span style="color:#b45309;font-weight:700;">承認待ち</span></div>';}).join("")
             +'</div>'
           :'';
-        return pendingHTML
+        return _alertsHTML+pendingHTML
           +'<div style="margin-top:12px;text-align:center;">'
           +'<button id="btn-crq-open" style="background:#fff;color:#1e40af;border:2px solid #1e40af;border-radius:6px;padding:10px 24px;font-size:.92rem;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.04em;">🔧 時刻修正申請</button>'
           +'</div>';
@@ -1640,6 +1678,9 @@ function render(){
     }
     var crqOpenBtn=document.getElementById("btn-crq-open");
     if(crqOpenBtn)crqOpenBtn.onclick=function(){showCorrectionRequestModal(staffName);};
+    document.querySelectorAll(".btn-missing-punch-crq").forEach(function(b){
+      b.onclick=function(){showCorrectionRequestModal(staffName,{date:b.dataset.date,type:b.dataset.type,reason:"miss"});};
+    });
     return;
   }
 
@@ -2731,17 +2772,18 @@ function render(){
         :'<tr><td colspan="3" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">🔔 通知管理</div>'
-        +'<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">'
+        +'<div style="font-size:.8rem;color:#64748b;margin-bottom:12px;">打刻漏れはスタッフ本人の打刻画面に通知されます。管理者には修正申請の承認待ちと未承認打刻を表示します。</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">'
         +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">未承認打刻</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.unapproved+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +'<button onclick="goUnapprovedRecords()" style="margin-top:8px;background:#dc2626;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
         +'</div>'
-        +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
-        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">打刻漏れ</div>'
-        +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.missingPunch+'</div>'
-        +'<div style="font-size:.7rem;color:#8496a7;">件（直近30日）</div>'
+        +'<div style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">修正申請待ち</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:#92400e;">'+_nc.pendingCorrectionRequests+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +'</div>'
         +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">合計</div>'
@@ -2749,13 +2791,6 @@ function render(){
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +'</div>'
         +'</div>'
-        +'<div style="font-weight:700;font-size:.85rem;color:#334155;margin-bottom:8px;">打刻漏れ一覧（直近30日）</div>'
-        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
-        +'<thead><tr>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">日付</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">スタッフ</th>'
-        +'<th style="text-align:left;padding:6px 10px;background:#f1f5f9;border-bottom:2px solid #cbd5e1;">理由</th>'
-        +'</tr></thead><tbody>'+_missingRows+'</tbody></table></div>'
         +'</div>';
     }
 
