@@ -533,15 +533,20 @@ function showCorrectionRequestModal(staffNm,opts){
   function close(){if(ov.parentNode)document.body.removeChild(ov);}
   var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:16px;";ttl.textContent="時刻修正申請";card.appendChild(ttl);
   function lbl(t){var d=document.createElement("div");d.style.cssText="font-size:.78rem;font-weight:700;color:#475569;margin-bottom:3px;";d.textContent=t;return d;}
+  var _fromNotif=!!opts.type;
   card.appendChild(lbl("対象日付"));
   var dateInp=document.createElement("input");dateInp.type="date";dateInp.value=dk;
-  dateInp.style.cssText="width:100%;padding:7px 10px;font-size:.88rem;border:1px solid #adb5bd;border-radius:2px;font-family:inherit;margin-bottom:10px;box-sizing:border-box;outline:none;";
+  dateInp.style.cssText="width:100%;padding:7px 10px;font-size:.88rem;border:1px solid #adb5bd;border-radius:2px;font-family:inherit;margin-bottom:10px;box-sizing:border-box;outline:none;"
+    +(_fromNotif?"background:#f1f5f9;color:#64748b;":"");
+  if(_fromNotif)dateInp.disabled=true;
   card.appendChild(dateInp);
   card.appendChild(lbl("修正対象"));
   var typeSel=document.createElement("select");
-  typeSel.style.cssText="width:100%;padding:8px 10px;font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:10px;outline:none;";
+  typeSel.style.cssText="width:100%;padding:8px 10px;font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;margin-bottom:10px;outline:none;"
+    +(_fromNotif?"background:#f1f5f9;color:#64748b;":"");
   [{v:"clockIn",l:"出勤"},{v:"clockOut",l:"退勤"},{v:"breakStart",l:"休憩開始"},{v:"breakEnd",l:"休憩終了"}].forEach(function(x){var o=document.createElement("option");o.value=x.v;o.textContent=x.l;typeSel.appendChild(o);});
   if(opts.type)typeSel.value=opts.type;
+  if(_fromNotif)typeSel.disabled=true;
   card.appendChild(typeSel);
   var curTimeWrap=document.createElement("div");
   curTimeWrap.style.cssText="background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;";
@@ -1531,10 +1536,7 @@ function render(){
             +myCrqs.map(function(r){var _od=r.originalTime?esc(r.originalTime):"未打刻";return'<div style="font-size:.78rem;color:#78350f;margin-bottom:3px;display:flex;justify-content:space-between;"><span>'+esc(r.date)+' '+esc(TYPE_LABEL[r.type]||r.type)+'　'+_od+'→'+esc(r.requestedTime)+'　（'+esc(r.adjustReasonLabel)+'）</span><span style="color:#b45309;font-weight:700;">承認待ち</span></div>';}).join("")
             +'</div>'
           :'';
-        return _alertsHTML+pendingHTML
-          +'<div style="margin-top:12px;text-align:center;">'
-          +'<button id="btn-crq-open" style="background:#fff;color:#1e40af;border:2px solid #1e40af;border-radius:6px;padding:10px 24px;font-size:.92rem;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:.04em;">🔧 時刻修正申請</button>'
-          +'</div>';
+        return _alertsHTML+pendingHTML;
       })()
       // ── 有給申請ボタン・フォーム ──
       +(showPaidLeaveForm
@@ -1675,8 +1677,6 @@ function render(){
         }});
       };
     }
-    var crqOpenBtn=document.getElementById("btn-crq-open");
-    if(crqOpenBtn)crqOpenBtn.onclick=function(){showCorrectionRequestModal(staffName);};
     document.querySelectorAll(".btn-missing-punch-crq").forEach(function(b){
       b.onclick=function(){showCorrectionRequestModal(staffName,{date:b.dataset.date,type:b.dataset.type,reason:"miss"});};
     });
