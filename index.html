@@ -1026,25 +1026,92 @@ function updateAppBadge(count){
 }
 
 // ===== FCM Push通知（管理者端末のみ）=====
+function _showFcmStatus(msg){
+  var el=document.createElement('div');
+  el.style.cssText='position:fixed;bottom:24px;left:50%;transform:translateX(-50%);'
+    +'background:rgba(25,118,210,0.92);color:#fff;padding:9px 20px;border-radius:8px;'
+    +'font-size:13px;z-index:99999;pointer-events:none;white-space:nowrap;';
+  el.textContent=msg;
+  document.body.appendChild(el);
+  setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el);},4000);
+}
 function initFcmForAdmin(){
-  if(!('Notification' in window))return;
-  if(FCM_VAPID_KEY.startsWith('REPLACE'))return;
-  if(!window._swRegistration)return;
-  var app;
-  try{app=firebase.app();}catch(e){
-    app=firebase.initializeApp({
-      apiKey:FB_API_KEY,
-      projectId:"honomi-timecard",
-      messagingSenderId:FCM_MESSAGING_SENDER_ID,
-      appId:FCM_APP_ID
-    });
+  console.log('[FCM] initFcmForAdmin() 開始');
+  _showFcmStatus('通知設定確認中...');
+  if(!('Notification' in window)){
+    console.warn('[FCM] Notification API 非対応');
+    _showFcmStatus('通知: このブラウザは非対応');
+    return;
   }
-  var msg=firebase.messaging(app);
-  Notification.requestPermission().then(function(perm){
-    if(perm!=="granted")return;
-    msg.getToken({vapidKey:FCM_VAPID_KEY,serviceWorkerRegistration:window._swRegistration})
-      .then(function(token){if(token)_saveFcmToken(token);})
-      .catch(function(e){console.warn("[FCM] getToken error",e);});
+  console.log('[FCM] Notification.permission =',Notification.permission);
+  if(Notification.permission==='denied'){
+    console.warn('[FCM] 通知が拒否済み（ブラウザ設定から許可してください）');
+    _showFcmStatus('通知: ブラウザで拒否済み — 設定から許可してください');
+    return;
+  }
+  if(FCM_VAPID_KEY.startsWith('REPLACE')){
+    console.warn('[FCM] VAPID KEY 未設定');
+    return;
+  }
+  if(!('serviceWorker' in navigator)){
+    console.warn('[FCM] ServiceWorker 非対応');
+    return;
+  }
+  // _swRegistration を待たず navigator.serviceWorker.ready で確実に取得
+  navigator.serviceWorker.ready.then(function(reg){
+    console.log('[FCM] SW ready:', reg.scope);
+    window._swRegistration=reg;
+    var app;
+    try{app=firebase.app();}catch(e){
+      try{
+        app=firebase.initializeApp({
+          apiKey:FB_API_KEY,
+          projectId:"honomi-timecard",
+          messagingSenderId:FCM_MESSAGING_SENDER_ID,
+          appId:FCM_APP_ID
+        });
+        console.log('[FCM] firebase.initializeApp 完了');
+      }catch(e2){
+        console.error('[FCM] firebase.initializeApp エラー',e2);
+        _showFcmStatus('通知: Firebase 初期化失敗');
+        return;
+      }
+    }
+    var msg;
+    try{msg=firebase.messaging(app);}catch(e){
+      console.error('[FCM] firebase.messaging エラー',e);
+      _showFcmStatus('通知: Messaging 初期化失敗');
+      return;
+    }
+    console.log('[FCM] Notification.requestPermission() 呼び出し');
+    Notification.requestPermission().then(function(perm){
+      console.log('[FCM] permission 結果:',perm);
+      if(perm!=='granted'){
+        _showFcmStatus('通知: 許可されませんでした');
+        return;
+      }
+      _showFcmStatus('通知設定中...');
+      msg.getToken({vapidKey:FCM_VAPID_KEY,serviceWorkerRegistration:reg})
+        .then(function(token){
+          if(token){
+            console.log('[FCM] token 取得成功:',token.slice(0,20)+'...');
+            _saveFcmToken(token);
+            _showFcmStatus('通知設定完了');
+          }else{
+            console.warn('[FCM] token が空 — FCM 設定を確認してください');
+            _showFcmStatus('通知: トークン取得失敗');
+          }
+        })
+        .catch(function(e){
+          console.error('[FCM] getToken エラー',e);
+          _showFcmStatus('通知: トークン取得エラー — '+e.message);
+        });
+    }).catch(function(e){
+      console.error('[FCM] requestPermission エラー',e);
+    });
+  }).catch(function(e){
+    console.error('[FCM] serviceWorker.ready エラー',e);
+    _showFcmStatus('通知: SW 準備失敗');
   });
 }
 function _saveFcmToken(token){
@@ -1054,7 +1121,9 @@ function _saveFcmToken(token){
       method:"PUT",
       headers:{"Content-Type":"application/json"},
       body:JSON.stringify({token:token,savedAt:new Date().toISOString()})
-    }).catch(function(e){console.warn("[FCM] token save error",e);});
+    }).then(function(){
+      console.log('[FCM] token 保存完了 (key:'+key+')');
+    }).catch(function(e){console.error("[FCM] token save エラー",e);});
   });
 }
 
@@ -5304,7 +5373,7 @@ async function initFirebase() {
       var authOk=false;
       if(ADMIN_TOKEN_HASH){authOk=((await hashPin(adminParam||""))===ADMIN_TOKEN_HASH);}
       else if(ADMIN_TOKEN){authOk=(adminParam===ADMIN_TOKEN);}
-      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";}
+      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();}
       else{adminTokenValid=false;adminTokenInvalid=true;}
     }
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
@@ -5321,7 +5390,7 @@ async function initFirebase() {
       else{
         var dn=new Date();var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
         if(dTodayStr>demoAccessConfig.expireDate){demoExpired=true;}
-        else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";}
+        else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();}
       }
     }
     if(KANA_ROWS.concat(["すべて"]).indexOf(yomiTab)<0){yomiTab="すべて";}
