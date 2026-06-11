@@ -1617,6 +1617,11 @@ function render(){
           if(v.valid||v.reason==="勤務時間異常"||v.reason==="データ不足")return;
           var type=v.reason==="退勤漏れ"?"clockOut":"clockIn";
           var typeLabel=v.reason==="退勤漏れ"?"退勤":"出勤";
+          if(type==="clockOut"&&dk===_todayStr){
+            var _cinRec=sr.find(function(r){return r.type==="clockIn";});
+            var workedMinutes=_cinRec?(Date.now()-new Date(_cinRec.timestamp).getTime())/60000:0;
+            if(workedMinutes<30)return;
+          }
           var hasPending=correctionRequests.some(function(r){return r.staff===staffName&&r.date===dk&&r.type===type&&(r.status==="pending"||r.status==="approved");});
           _missingAlerts.push({date:dk,type:type,typeLabel:typeLabel,hasPending:hasPending});
         });
