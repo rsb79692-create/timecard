@@ -170,6 +170,7 @@ async function fetchRTDB(path, idToken) {
 
 // ===== LINE Push 送信 =====
 async function sendLineMessage(text) {
+  return;
   const toPrefix = LINE_TO.charAt(0);
   const toLength = LINE_TO.length;
   console.log("[LINE]  Push送信開始");
