@@ -2940,9 +2940,13 @@ function render(){
               lds[0]+" 他"+(lds.length-1)+"日";
             var dayCountDisp=lds.length>1?'<span style="font-size:.72rem;color:#475569;margin-left:4px;">'+lds.length+'日</span>':"";
             var isHist=PL_HIST_ST.indexOf(r.status)>=0;
+            // 管理者代理申請の識別バッジ（通常申請と見た目を大きく変えない控えめな表示）
+            var isProxy=(r.adminProxy===true)||(r.requestSource==="admin_proxy");
+            var proxyBadge=isProxy?'<span title="管理者による代理申請" style="margin-left:5px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;white-space:nowrap;">管理者代理</span>':"";
+            var noteDisp=(isProxy&&r.note)?'<span title="'+String(r.note).replace(/"/g,"&quot;")+'" style="margin-left:4px;color:#8496a7;font-size:.62rem;cursor:help;">📝</span>':"";
             return '<tr style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
               +'<td style="padding:8px 6px;font-size:.8rem;white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;">'+sl+'</span></td>'
-              +'<td style="padding:8px 6px;font-weight:700;font-size:.92rem;white-space:nowrap;">'+r.staffName+'</td>'
+              +'<td style="padding:8px 6px;font-weight:700;font-size:.92rem;white-space:nowrap;">'+r.staffName+proxyBadge+noteDisp+'</td>'
               +'<td style="padding:8px 6px;font-family:monospace;font-size:.82rem;">'+dateDisp+dayCountDisp+'</td>'
               +'<td style="padding:8px 6px;font-size:.72rem;color:#8496a7;white-space:nowrap;">'+createdStr+'</td>'
               +'<td style="padding:6px 4px;white-space:nowrap;">'
@@ -3106,6 +3110,7 @@ function render(){
         +'<span style="font-size:.78rem;color:#8496a7;margin-left:4px;">申請中: '+paidLeaveRequests.filter(function(r){return r.status==="pending";}).length+'件</span>'
         +(plHistoryRequests.length>0?'<span style="font-size:.78rem;color:#9ca3af;">｜ 履歴: '+plHistoryRequests.length+'件</span>':"")
         +(paidLeaveBalanceSaving?'<span style="font-size:.75rem;color:#b45309;font-weight:700;margin-left:8px;">処理中...</span>':"")
+        +'<button onclick="openProxyLeaveModal()" style="margin-left:auto;background:#1e40af;color:#fff;border:none;border-radius:2px;font-size:.72rem;font-weight:700;padding:5px 11px;cursor:pointer;font-family:inherit;white-space:nowrap;">有給代理申請</button>'
         +(plHistoryRequests.length>0?'<button onclick="showPaidLeaveHistory=!showPaidLeaveHistory;_paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;" style="margin-left:auto;background:'+(showPaidLeaveHistory?"#e0e7ff":"#f3f4f6")+';color:'+(showPaidLeaveHistory?"#1e40af":"#6b7280")+';border:1px solid '+(showPaidLeaveHistory?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:4px 10px;cursor:pointer;font-family:inherit;">'+(showPaidLeaveHistory?"履歴を隠す":"履歴を表示")+'</button>':"")
         +'</div>'
         +(paidLeaveLoading
@@ -5524,9 +5529,144 @@ function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt
   render();
 }
 
-// 有給付与登録モーダル: Escキーで閉じる（body直下固定なので常時有効）
+// ===== 有給「管理者代理申請」モーダル（body直下固定 — render()再描画から完全分離） =====
+// 既存の有給申請・承認ロジックは一切変更せず、申請データ生成と既存承認経路の再利用のみで実現する。
+var _proxyLeaveModalOpen=false;
+var _proxyLeaveSubmitting=false;
+function ensureProxyLeaveModal(){
+  var wrap=document.getElementById("pl-proxy-modal-wrap");
+  if(wrap)return wrap; // 既存なら再利用
+  wrap=document.createElement("div");
+  wrap.id="pl-proxy-modal-wrap";
+  wrap.style.cssText="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;";
+  wrap.innerHTML=''
+    +'<div style="background:#fff;width:100%;max-width:460px;border-radius:2px;border:1px solid #adb5bd;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e4e8ed;">'
+    +'<span style="font-size:14px;font-weight:700;color:#1a2332;">有給代理申請（管理者）</span>'
+    +'<button onclick="closeProxyLeaveModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:28px;height:28px;border-radius:2px;font-size:14px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+    +'</div>'
+    +'<div style="padding:14px 18px;display:grid;grid-template-columns:1fr;gap:12px;">'
+    +'<div style="background:#f1f5f9;border-radius:4px;padding:8px 10px;font-size:.74rem;color:#475569;">管理者がスタッフに代わって有給を申請します。1日単位（全休）のみ対応。</div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">対象スタッフ</label>'
+    +'<select id="pl-proxy-staff" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></select>'
+    +'<div style="font-size:.66rem;color:#8496a7;margin-top:3px;">※社員番号が未設定・重複しているスタッフは選択できません</div></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">有給日</label>'
+    +'<input type="date" id="pl-proxy-date" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">理由・メモ（任意）</label>'
+    +'<textarea id="pl-proxy-note" rows="2" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;resize:vertical;" placeholder="例：本人から電話連絡あり"></textarea></div>'
+    +'<label style="display:flex;align-items:center;gap:8px;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:9px 11px;font-size:.8rem;color:#713f12;cursor:pointer;">'
+    +'<input type="checkbox" id="pl-proxy-approve" style="width:16px;height:16px;cursor:pointer;">申請と同時に承認する（残日数を即時消化）</label>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
+    +'<button id="btn-pl-proxy-save" onclick="submitProxyLeaveRequest()" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
+    +'<button onclick="closeProxyLeaveModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+    +'</div></div>';
+  document.body.appendChild(wrap);
+  return wrap;
+}
+function openProxyLeaveModal(){
+  var wrap=ensureProxyLeaveModal();
+  // スタッフ選択肢を生成（在籍 / 社員番号あり / 社員番号重複なし / 氏名重複で解決可能 のみ）
+  var empIdCount={};
+  staffList.forEach(function(s){var e=(s.employeeId||"").trim();if(e)empIdCount[e]=(empIdCount[e]||0)+1;});
+  var opts='<option value="">スタッフを選択</option>'
+    +staffList.filter(function(s){
+        if(s.status&&s.status!=="在籍")return false;
+        var e=(s.employeeId||"").trim();
+        if(!e)return false;              // 社員番号が空白
+        if(empIdCount[e]>1)return false; // 社員番号が重複
+        if(!resolveStaffId(s.name))return false; // 氏名重複等で一意解決不可
+        return true;
+      }).map(function(s){
+        var nm=String(s.name).replace(/"/g,"&quot;");
+        return '<option value="'+nm+'">'+s.name+'（'+(s.employeeId||"").trim()+'）</option>';
+      }).join("");
+  var sel=document.getElementById("pl-proxy-staff");if(sel)sel.innerHTML=opts;
+  var dt=document.getElementById("pl-proxy-date");if(dt)dt.value="";
+  var nt=document.getElementById("pl-proxy-note");if(nt)nt.value="";
+  var ap=document.getElementById("pl-proxy-approve");if(ap)ap.checked=false;
+  _proxyLeaveModalOpen=true;
+  wrap.style.display="flex";
+}
+function closeProxyLeaveModal(){
+  var wrap=document.getElementById("pl-proxy-modal-wrap");
+  if(wrap)wrap.style.display="none";
+  _proxyLeaveModalOpen=false;
+}
+function submitProxyLeaveRequest(){
+  if(_proxyLeaveSubmitting||paidLeaveBalanceSaving)return;
+  var name=((document.getElementById("pl-proxy-staff")||{}).value||"").trim();
+  var date=((document.getElementById("pl-proxy-date")||{}).value||"").trim();
+  var note=((document.getElementById("pl-proxy-note")||{}).value||"").trim();
+  var doApprove=!!((document.getElementById("pl-proxy-approve")||{}).checked);
+  // ── バリデーション ──
+  if(!name){showAlert("対象スタッフを選択してください");return;}
+  if(!date){showAlert("有給日を入力してください");return;}
+  // 社員番号解決（空白・重複・氏名重複は null → エラー。既存ヘルパを再利用）
+  var staffId=resolveStaffId(name);
+  if(!staffId){showAlert(resolveStaffIdError(name));return;}
+  // 重複申請チェック（本人申請と同一ロジック）
+  var dup=paidLeaveRequests.find(function(r){
+    return r.staffName===name&&getLeaveDates(r).indexOf(date)>=0&&r.status!=="rejected";
+  });
+  if(dup){showAlert(date+" はすでに有給申請があります");return;}
+  // 即承認時のみ残日数不足をブロック（既存承認と同じ getValidRemainDays を使用）
+  if(doApprove){
+    var remain=getValidRemainDays(staffId);
+    if(remain<1){showAlert("有給残日数が不足しているため即承認できません（残"+remain+"日）。申請のみ登録するか、有給を付与してください。");return;}
+  }
+  // ── 申請データ生成（本人申請と同形 + 代理識別フィールド）──
+  var reqId="pl"+Date.now();
+  var nowIso=new Date().toISOString();
+  var req={
+    id:reqId,
+    staffId:staffId,
+    staffName:name,
+    leaveDates:[date],
+    date:date,
+    status:"pending",
+    createdAt:nowIso,
+    approvedBy:"",
+    approvedAt:"",
+    note:note,
+    requestedBy:"admin",
+    requestSource:"admin_proxy",
+    adminProxy:true
+  };
+  paidLeaveRequests.push(req);
+  _proxyLeaveSubmitting=true;
+  var saveBtn=document.getElementById("btn-pl-proxy-save");if(saveBtn)saveBtn.disabled=true;
+  savePaidLeaveRequest(req).then(function(){
+    _proxyLeaveSubmitting=false;
+    if(saveBtn)saveBtn.disabled=false;
+    closeProxyLeaveModal();
+    if(doApprove){
+      // 既存の承認経路（.btn-pl-approve ハンドラ → applyFifoConsumption）をそのまま再利用。
+      // 残数チェック・FIFO消化・残日数更新・consumedSnapshot記録を重複実装しない。
+      _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+      var btn=document.querySelector('.btn-pl-approve[data-plid="'+reqId+'"]');
+      if(btn){btn.click();}
+      else{showAlert("代理申請を登録しました（"+date+"）。一覧から承認してください。");}
+    }else{
+      showAlert("管理者代理で有給申請を登録しました（"+date+"）");
+      _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+    }
+  }).catch(function(e){
+    _proxyLeaveSubmitting=false;
+    if(saveBtn)saveBtn.disabled=false;
+    // 失敗時はローカル配列から巻き戻す
+    var idx=paidLeaveRequests.findIndex(function(r){return r.id===reqId;});
+    if(idx>=0)paidLeaveRequests.splice(idx,1);
+    console.error("[PaidLeave] proxy submit error",e);
+    showAlert("代理申請の保存に失敗しました。通信状態を確認して再度お試しください。");
+  });
+}
+
+// 有給付与登録モーダル・代理申請モーダル: Escキーで閉じる（body直下固定なので常時有効）
 document.addEventListener("keydown",function(e){
-  if(e.key==="Escape"&&_plGrantModalOpen){closePaidLeaveGrantModal();}
+  if(e.key!=="Escape")return;
+  if(_plGrantModalOpen){closePaidLeaveGrantModal();}
+  if(_proxyLeaveModalOpen){closeProxyLeaveModal();}
 });
 
 // まず即座にレンダリング（Firebaseを待たない）
