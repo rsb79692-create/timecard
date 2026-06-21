@@ -3276,11 +3276,11 @@ function render(){
       var mdGrandTotal=0;
       var mdImportCellCount=0;
       var mdRetiredCount=staffList.filter(function(s){return s.status==="退職";}).length;
-      var _mcol='min-width:52px;'; // 月列の最小幅
-      var _mth='padding:12px 10px;font-weight:700;font-size:14px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
-      var _mtd='padding:11px 12px;font-size:15px;font-family:monospace;text-align:';
-      var _mtot='padding:11px 14px;font-size:16px;font-family:monospace;font-weight:800;text-align:right;color:#1e3a8a;background:#dbeafe;border-left:2px solid #93c5fd;';
-      var _mname='padding:11px 14px;font-size:15px;font-weight:700;white-space:nowrap;min-width:132px;';
+      var _mcol='min-width:60px;'; // 月列の最小幅
+      var _mth='padding:15px 12px;font-weight:700;font-size:16px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
+      var _mtd='padding:15px 14px;font-size:18px;font-family:monospace;text-align:';
+      var _mtot='padding:15px 16px;font-size:20px;font-family:monospace;font-weight:800;text-align:right;color:#1e3a8a;background:#dbeafe;border-left:2px solid #93c5fd;';
+      var _mname='padding:15px 18px;font-size:19px;font-weight:600;white-space:nowrap;min-width:190px;';
       var mdStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
       var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
       var mdRows=mdStaff.map(function(s,ri){
@@ -3306,7 +3306,7 @@ function render(){
       }).join("");
       var mdFootCells="";
       for(var fmo=0;fmo<12;fmo++){
-        mdFootCells+='<td style="'+_mtd+'right;'+_mcol+'font-weight:700;font-size:15px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'')+'</td>';
+        mdFootCells+='<td style="'+_mtd+'right;'+_mcol+'font-weight:700;font-size:17px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'')+'</td>';
       }
       var mdMonthHead="";
       for(var hmo=0;hmo<12;hmo++){
@@ -3315,17 +3315,17 @@ function render(){
       var mdYearOpts=mdYears.map(function(y){return'<option value="'+y+'"'+(y===mdYear?" selected":"")+'>'+y+'年</option>';}).join("");
       var mdTableHtml=mdStaff.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
-          +'<table style="width:100%;border-collapse:collapse;min-width:880px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
           +'<thead><tr>'
           +'<th style="'+_mth+'left;'+mdStickyHead+'">氏名</th>'
           +mdMonthHead
-          +'<th style="'+_mth+'right;font-size:15px;background:#bfdbfe;color:#1e3a8a;border-left:2px solid #93c5fd;">合計</th>'
+          +'<th style="'+_mth+'right;font-size:17px;background:#bfdbfe;color:#1e3a8a;border-left:2px solid #93c5fd;">合計</th>'
           +'</tr></thead>'
           +'<tbody>'+mdRows+'</tbody>'
           +'<tfoot><tr>'
           +'<td style="'+_mname+mdStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">月計</td>'
           +mdFootCells
-          +'<td style="'+_mtot+'border-top:2px solid #94a3b8;font-size:17px;">'+(mdGrandTotal>0?mdGrandTotal:'')+'</td>'
+          +'<td style="'+_mtot+'border-top:2px solid #94a3b8;font-size:22px;">'+(mdGrandTotal>0?mdGrandTotal:'')+'</td>'
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません</div>';
