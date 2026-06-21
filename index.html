@@ -2982,17 +2982,17 @@ function render(){
             var proxyBadge=isProxy?'<span title="管理者による代理申請" style="margin-left:5px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;white-space:nowrap;">管理者代理</span>':"";
             var noteDisp=(isProxy&&r.note)?'<span title="'+String(r.note).replace(/"/g,"&quot;")+'" style="margin-left:4px;color:#8496a7;font-size:.62rem;cursor:help;">📝</span>':"";
             return '<tr style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
-              +'<td style="padding:11px 6px;font-size:15px;white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 6px;border-radius:3px;white-space:nowrap;">'+sl+'</span></td>'
-              +'<td style="padding:11px 6px;font-weight:400;font-size:16px;white-space:nowrap;">'+r.staffName+proxyBadge+noteDisp+'</td>'
-              +'<td style="padding:11px 6px;font-family:monospace;font-size:14px;">'+dateDisp+dayCountDisp+'</td>'
-              +'<td style="padding:11px 6px;font-size:13px;color:#8496a7;white-space:nowrap;">'+createdStr+'</td>'
-              +'<td style="padding:9px 4px;white-space:nowrap;">'
+              +'<td style="padding:13px 7px;font-size:16px;white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';font-size:13px;font-weight:700;padding:3px 8px;border-radius:3px;white-space:nowrap;">'+sl+'</span></td>'
+              +'<td style="padding:13px 7px;font-weight:400;font-size:17px;white-space:nowrap;">'+r.staffName+proxyBadge+noteDisp+'</td>'
+              +'<td style="padding:13px 7px;font-family:monospace;font-size:16px;">'+dateDisp+dayCountDisp+'</td>'
+              +'<td style="padding:13px 7px;font-size:14px;color:#8496a7;white-space:nowrap;">'+createdStr+'</td>'
+              +'<td style="padding:11px 5px;white-space:nowrap;">'
               +(r.status==="pending"
-                ?'<button class="btn-pl-approve" data-plid="'+r.id+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:inherit;margin-right:3px;">承認</button>'
-                 +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:5px 8px;border-radius:2px;cursor:pointer;font-family:inherit;">却下</button>'
+                ?'<button class="btn-pl-approve" data-plid="'+r.id+'" style="background:#16a34a;color:#fff;border:none;font-size:14px;font-weight:700;padding:7px 11px;border-radius:2px;cursor:pointer;font-family:inherit;margin-right:3px;">承認</button>'
+                 +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:14px;font-weight:700;padding:7px 11px;border-radius:2px;cursor:pointer;font-family:inherit;">却下</button>'
                 :r.status==="approved"
-                  ?'<button class="btn-pl-withdraw" data-plid="'+r.id+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:3px 6px;border-radius:2px;cursor:pointer;font-family:inherit;">引戻</button>'
-                   +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:.65rem;font-weight:700;padding:3px 6px;border-radius:2px;cursor:pointer;font-family:inherit;margin-left:3px;">却下</button>'
+                  ?'<button class="btn-pl-withdraw" data-plid="'+r.id+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:13px;font-weight:700;padding:5px 9px;border-radius:2px;cursor:pointer;font-family:inherit;">引戻</button>'
+                   +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;font-size:13px;font-weight:700;padding:5px 9px;border-radius:2px;cursor:pointer;font-family:inherit;margin-left:3px;">却下</button>'
                   :""
               )
               +'</td></tr>';
@@ -3041,7 +3041,7 @@ function render(){
           var tot=staffTotals[nm]||{granted:0,used:0,remain:0};
           // スタッフ小計行
           plBalRows+='<tr style="background:#f0f4fa;border-top:2px solid #adb5bd;">'
-            +'<td colspan="6" style="padding:11px 10px;font-weight:400;font-size:16px;color:#1e3a5f;">'+nm+'</td>'
+            +'<td colspan="6" style="padding:14px 12px;font-weight:400;font-size:17px;color:#1e3a5f;">'+nm+'</td>'
             +'</tr>';
           rows.forEach(function(b){
             var expired=(b.expiresAt&&b.expiresAt<today_pl);
@@ -3059,21 +3059,21 @@ function render(){
               return resolved?resolved:'<span style="color:#dc2626;font-size:.65rem;">未設定</span>';
             })();
             plBalRows+='<tr style="border-bottom:1px solid #e9ecef;background:'+rowBg+';">'
-              +'<td style="padding:10px 8px;font-size:14px;white-space:nowrap;">'
+              +'<td style="padding:12px 8px;font-size:15px;white-space:nowrap;">'
               +(expired
-                ?'<span style="background:#e5e7eb;color:#9ca3af;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:3px;">期限切れ</span>'
-                :'<span style="background:#d1fae5;color:#065f46;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:3px;">期限内</span>'
+                ?'<span style="background:#e5e7eb;color:#9ca3af;font-size:12px;font-weight:700;padding:3px 7px;border-radius:3px;">期限切れ</span>'
+                :'<span style="background:#d1fae5;color:#065f46;font-size:12px;font-weight:700;padding:3px 7px;border-radius:3px;">期限内</span>'
               )
               +'</td>'
-              +'<td style="padding:10px 8px;font-size:15px;color:'+textColor+';white-space:nowrap;">第'+b._grantNo+'回</td>'
-              +'<td style="padding:10px 8px;font-family:monospace;font-size:14px;color:'+textColor+';white-space:nowrap;">'+(b.grantDate||"")+'</td>'
-              +'<td style="padding:10px 8px;font-family:monospace;font-size:14px;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+(b.expiresAt||"")+'</td>'
-              +'<td style="padding:10px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:15px;color:'+(expired?"#9ca3af":"#166534")+';">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
-              +'<td style="padding:8px 4px;white-space:nowrap;">'
+              +'<td style="padding:12px 8px;font-size:16px;color:'+textColor+';white-space:nowrap;">第'+b._grantNo+'回</td>'
+              +'<td style="padding:12px 8px;font-family:monospace;font-size:16px;color:'+textColor+';white-space:nowrap;">'+(b.grantDate||"")+'</td>'
+              +'<td style="padding:12px 8px;font-family:monospace;font-size:16px;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+(b.expiresAt||"")+'</td>'
+              +'<td style="padding:12px 8px;text-align:right;font-family:monospace;font-weight:700;font-size:17px;color:'+(expired?"#9ca3af":"#166534")+';">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
+              +'<td style="padding:10px 4px;white-space:nowrap;">'
               +(expired?""
-                :'<button class="btn-pl-bal-row-save" data-balid="'+b.id+'" style="background:#1e40af;color:#fff;border:none;font-size:.65rem;font-weight:700;padding:4px 6px;border-radius:2px;cursor:pointer;font-family:inherit;margin-right:2px;">保存</button>'
+                :'<button class="btn-pl-bal-row-save" data-balid="'+b.id+'" style="background:#1e40af;color:#fff;border:none;font-size:13px;font-weight:700;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:inherit;margin-right:2px;">保存</button>'
               )
-              +'<button class="btn-pl-bal-row-delete" data-balid="'+b.id+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;font-size:.65rem;font-weight:700;padding:4px 6px;border-radius:2px;cursor:pointer;font-family:inherit;">削除</button>'
+              +'<button class="btn-pl-bal-row-delete" data-balid="'+b.id+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;font-size:13px;font-weight:700;padding:6px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">削除</button>'
               +'</td></tr>';
           });
         });
@@ -3106,27 +3106,27 @@ function render(){
         :_plr.grants.map(function(g,idx){
           var _wwdSet=(g.grantDays!=null);
           var _wwdCell=_wwdSet
-            ?'<span style="font-size:.72rem;color:#334155;">'+_esc(weeklyWorkDaysLabel(g.weeklyWorkDays))+'</span>'
-            :'<span style="background:#fffbeb;color:#b45309;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
+            ?'<span style="font-size:14px;color:#334155;">'+_esc(weeklyWorkDaysLabel(g.weeklyWorkDays))+'</span>'
+            :'<span style="background:#fffbeb;color:#b45309;font-size:13px;font-weight:700;padding:3px 8px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
           var _daysCell=_wwdSet
-            ?'<span style="font-weight:700;color:#1e40af;font-size:.78rem;">'+_esc(String(g.grantDays))+'日</span>'
-            :'<span style="background:#fffbeb;color:#b45309;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
+            ?'<span style="font-weight:700;color:#1e40af;font-size:16px;">'+_esc(String(g.grantDays))+'日</span>'
+            :'<span style="background:#fffbeb;color:#b45309;font-size:13px;font-weight:700;padding:3px 8px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
           var _grantBtn=_wwdSet
-            ?'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:3px;">付与登録</button>'
-            :'<button disabled title="週所定労働日数が未設定です。スタッフ編集で設定してください。" style="background:#e5e7eb;color:#9ca3af;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:not-allowed;font-family:inherit;margin-right:3px;">付与登録</button>';
+            ?'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;padding:6px 11px;border-radius:3px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:3px;">付与登録</button>'
+            :'<button disabled title="週所定労働日数が未設定です。スタッフ編集で設定してください。" style="background:#e5e7eb;color:#9ca3af;border:none;padding:6px 11px;border-radius:3px;font-size:13px;font-weight:700;cursor:not-allowed;font-family:inherit;margin-right:3px;">付与登録</button>';
           return '<tr>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:14px;font-family:monospace;white-space:nowrap;">'+_esc(g.staffId)+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:16px;white-space:nowrap;">'+_esc(g.staffDisplayName)+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:14px;text-align:center;white-space:nowrap;">第'+_esc(String(g.grantNum))+'回</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:14px;font-family:monospace;white-space:nowrap;">'+_esc(g.hireDate)+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:14px;font-family:monospace;white-space:nowrap;">'+_esc(g.grantDate)+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;font-size:14px;font-family:monospace;white-space:nowrap;">'+_esc(g.expiresAt)+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_wwdCell+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_daysCell+'</td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;text-align:center;"><span style="background:#fff1f2;color:#dc2626;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;">未登録</span></td>'
-            +'<td style="padding:9px 8px;border-bottom:1px solid #e9ecef;white-space:nowrap;">'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:16px;font-family:monospace;white-space:nowrap;">'+_esc(g.staffId)+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:17px;white-space:nowrap;">'+_esc(g.staffDisplayName)+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:16px;text-align:center;white-space:nowrap;">第'+_esc(String(g.grantNum))+'回</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:16px;font-family:monospace;white-space:nowrap;">'+_esc(g.hireDate)+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:16px;font-family:monospace;white-space:nowrap;">'+_esc(g.grantDate)+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;font-size:16px;font-family:monospace;white-space:nowrap;">'+_esc(g.expiresAt)+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_wwdCell+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_daysCell+'</td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;text-align:center;"><span style="background:#fff1f2;color:#dc2626;font-size:13px;font-weight:700;padding:3px 8px;border-radius:8px;">未登録</span></td>'
+            +'<td style="padding:12px 8px;border-bottom:1px solid #e9ecef;white-space:nowrap;">'
             +_grantBtn
-            +'<button onclick="openPaidLeaveGrantModal('+idx+',true)" style="background:#475569;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;">消化済み</button>'
+            +'<button onclick="openPaidLeaveGrantModal('+idx+',true)" style="background:#475569;color:#fff;border:none;padding:6px 11px;border-radius:3px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit;">消化済み</button>'
             +'</td>'
             +'</tr>';
         }).join('');
@@ -3140,16 +3140,16 @@ function render(){
         +_dupWarnGr+_noIdWarnGr
         +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:560px;">'
         +'<thead><tr style="background:#eaecef;">'
-        +'<th style="padding:8px 8px;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;">社員番号</th>'
-        +'<th style="padding:8px 8px;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;">氏名</th>'
-        +'<th style="padding:8px 8px;text-align:center;font-size:13px;font-weight:700;white-space:nowrap;">付与回</th>'
-        +'<th style="padding:8px 8px;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;">入社日</th>'
-        +'<th style="padding:8px 8px;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;">付与予定日</th>'
-        +'<th style="padding:8px 8px;text-align:left;font-size:13px;font-weight:700;white-space:nowrap;">失効予定日</th>'
-        +'<th style="padding:8px 8px;text-align:center;font-size:13px;font-weight:700;white-space:nowrap;">週所定労働日数</th>'
-        +'<th style="padding:8px 8px;text-align:center;font-size:13px;font-weight:700;white-space:nowrap;">付与日数</th>'
-        +'<th style="padding:8px 8px;text-align:center;font-size:13px;font-weight:700;white-space:nowrap;">状態</th>'
-        +'<th style="padding:8px 8px;text-align:center;font-size:13px;font-weight:700;white-space:nowrap;">操作</th>'
+        +'<th style="padding:11px 8px;text-align:left;font-size:15px;font-weight:700;white-space:nowrap;">社員番号</th>'
+        +'<th style="padding:11px 8px;text-align:left;font-size:15px;font-weight:700;white-space:nowrap;">氏名</th>'
+        +'<th style="padding:11px 8px;text-align:center;font-size:15px;font-weight:700;white-space:nowrap;">付与回</th>'
+        +'<th style="padding:11px 8px;text-align:left;font-size:15px;font-weight:700;white-space:nowrap;">入社日</th>'
+        +'<th style="padding:11px 8px;text-align:left;font-size:15px;font-weight:700;white-space:nowrap;">付与予定日</th>'
+        +'<th style="padding:11px 8px;text-align:left;font-size:15px;font-weight:700;white-space:nowrap;">失効予定日</th>'
+        +'<th style="padding:11px 8px;text-align:center;font-size:15px;font-weight:700;white-space:nowrap;">週所定労働日数</th>'
+        +'<th style="padding:11px 8px;text-align:center;font-size:15px;font-weight:700;white-space:nowrap;">付与日数</th>'
+        +'<th style="padding:11px 8px;text-align:center;font-size:15px;font-weight:700;white-space:nowrap;">状態</th>'
+        +'<th style="padding:11px 8px;text-align:center;font-size:15px;font-weight:700;white-space:nowrap;">操作</th>'
         +'</tr></thead>'
         +'<tbody>'+_grantRows+'</tbody>'
         +'</table></div>'
@@ -3169,11 +3169,11 @@ function render(){
           :'<div style="overflow-x:auto;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:480px;">'
           +'<thead><tr style="background:#eaecef;border-bottom:2px solid #adb5bd;">'
-          +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;white-space:nowrap;">状態</th>'
-          +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;white-space:nowrap;">氏名</th>'
-          +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;white-space:nowrap;">取得日</th>'
-          +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;white-space:nowrap;">申請日時</th>'
-          +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;white-space:nowrap;">操作</th>'
+          +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;white-space:nowrap;">状態</th>'
+          +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;white-space:nowrap;">氏名</th>'
+          +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;white-space:nowrap;">取得日</th>'
+          +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;white-space:nowrap;">申請日時</th>'
+          +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;white-space:nowrap;">操作</th>'
           +'</tr></thead>'
           +'<tbody>'+plRows+'</tbody>'
           +'</table></div>'
@@ -3184,12 +3184,12 @@ function render(){
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:640px;margin-bottom:12px;">'
         +'<thead><tr style="background:#eaecef;border-bottom:2px solid #adb5bd;">'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">状態</th>'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与回</th>'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与日</th>'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#b45309;text-align:left;white-space:nowrap;">有効期限</th>'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#166534;text-align:right;white-space:nowrap;">残日数</th>'
-        +'<th style="padding:9px 6px;font-size:13px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">操作</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">状態</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与回</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">付与日</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#b45309;text-align:left;white-space:nowrap;">有効期限</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#166534;text-align:right;white-space:nowrap;">残日数</th>'
+        +'<th style="padding:11px 6px;font-size:15px;font-weight:700;color:#475569;text-align:left;white-space:nowrap;">操作</th>'
         +'</tr></thead>'
         +'<tbody>'+plBalRows+'</tbody>'
         +'</table>'
