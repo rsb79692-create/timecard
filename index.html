@@ -3276,65 +3276,69 @@ function render(){
       var mdGrandTotal=0;
       var mdImportCellCount=0;
       var mdRetiredCount=staffList.filter(function(s){return s.status==="退職";}).length;
-      var _mth='padding:6px 8px;font-weight:700;font-size:.74rem;color:#475569;white-space:nowrap;background:#eaecef;border-bottom:2px solid #adb5bd;text-align:';
-      var _mtd='padding:5px 8px;font-size:.82rem;font-family:monospace;text-align:';
-      var mdStickyHead='position:sticky;left:0;z-index:2;background:#eaecef;border-right:2px solid #cbd2da;';
-      var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #e5e7eb;';
-      var mdRows=mdStaff.map(function(s){
+      var _mcol='min-width:52px;'; // 月列の最小幅
+      var _mth='padding:12px 10px;font-weight:700;font-size:14px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
+      var _mtd='padding:11px 12px;font-size:15px;font-family:monospace;text-align:';
+      var _mtot='padding:11px 14px;font-size:16px;font-family:monospace;font-weight:800;text-align:right;color:#1e3a8a;background:#dbeafe;border-left:2px solid #93c5fd;';
+      var _mname='padding:11px 14px;font-size:15px;font-weight:700;white-space:nowrap;min-width:132px;';
+      var mdStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
+      var mdRows=mdStaff.map(function(s,ri){
         var rowTotal=0;
         var tds="";
+        var rowBg=s.status==="退職"?'#f1f5f9':(ri%2===1?'#f8fafc':'#ffffff');
         for(var mo=0;mo<12;mo++){
           var cell=mdCellVal(s,mo);
           rowTotal+=cell.val;mdMonthTotals[mo]+=cell.val;
           if(cell.src==="import")mdImportCellCount++;
-          var cs= cell.src==="none" ? 'color:#cbd5e1;'
-                : cell.src==="import" ? 'color:#92400e;background:#fffbeb;'
-                : 'color:#0f172a;';
-          tds+='<td style="'+_mtd+'right;'+cs+'"'+(cell.src==="import"?' title="過去取込データ（打刻なし）"':'')+'>'+(cell.src==="none"?'·':cell.val)+'</td>';
+          var cs= cell.src==="none" ? ''
+                : cell.src==="import" ? 'color:#92400e;background:#fffbeb;font-weight:700;'
+                : 'color:#0f172a;font-weight:600;';
+          tds+='<td style="'+_mtd+'right;'+_mcol+cs+'"'+(cell.src==="import"?' title="過去取込データ（打刻なし）"':'')+'>'+(cell.src==="none"?'':cell.val)+'</td>';
         }
         mdGrandTotal+=rowTotal;
-        var retiredTag=s.status==="退職"?' <span style="font-size:.62rem;color:#fff;background:#94a3b8;border-radius:8px;padding:1px 6px;vertical-align:middle;">退職</span>':'';
-        return'<tr style="border-bottom:1px solid #f1f3f5;">'
-          +'<td style="'+_mtd+'left;font-family:inherit;font-weight:700;font-size:.85rem;white-space:nowrap;'+mdStickyCell+(s.status==="退職"?'background:#f8fafc;color:#64748b;':'background:#fff;')+'">'+esc(s.name)+retiredTag+'</td>'
+        var retiredTag=s.status==="退職"?' <span style="font-size:.66rem;color:#fff;background:#94a3b8;border-radius:8px;padding:1px 7px;vertical-align:middle;">退職</span>':'';
+        return'<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
+          +'<td style="'+_mname+mdStickyCell+'background:'+rowBg+';'+(s.status==="退職"?'color:#64748b;':'color:#0f172a;')+'">'+esc(s.name)+retiredTag+'</td>'
           +tds
-          +'<td style="'+_mtd+'right;font-weight:700;color:#1e40af;background:#eff6ff;">'+(rowTotal>0?rowTotal:'·')+'</td>'
+          +'<td style="'+_mtot+'">'+(rowTotal>0?rowTotal:'')+'</td>'
           +'</tr>';
       }).join("");
       var mdFootCells="";
       for(var fmo=0;fmo<12;fmo++){
-        mdFootCells+='<td style="'+_mtd+'right;font-weight:700;color:#334155;background:#f1f5f9;border-top:2px solid #cbd2da;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'·')+'</td>';
+        mdFootCells+='<td style="'+_mtd+'right;'+_mcol+'font-weight:700;font-size:15px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'')+'</td>';
       }
       var mdMonthHead="";
       for(var hmo=0;hmo<12;hmo++){
-        mdMonthHead+='<th style="'+_mth+'right;">'+(hmo+1)+'月</th>';
+        mdMonthHead+='<th style="'+_mth+'right;'+_mcol+'">'+(hmo+1)+'月</th>';
       }
       var mdYearOpts=mdYears.map(function(y){return'<option value="'+y+'"'+(y===mdYear?" selected":"")+'>'+y+'年</option>';}).join("");
       var mdTableHtml=mdStaff.length
-        ?'<div style="overflow-x:auto;border:1px solid #e5e7eb;border-radius:6px;">'
-          +'<table style="width:100%;border-collapse:collapse;min-width:760px;">'
+        ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:880px;">'
           +'<thead><tr>'
           +'<th style="'+_mth+'left;'+mdStickyHead+'">氏名</th>'
           +mdMonthHead
-          +'<th style="'+_mth+'right;background:#dbeafe;color:#1e40af;">合計</th>'
+          +'<th style="'+_mth+'right;font-size:15px;background:#bfdbfe;color:#1e3a8a;border-left:2px solid #93c5fd;">合計</th>'
           +'</tr></thead>'
           +'<tbody>'+mdRows+'</tbody>'
           +'<tfoot><tr>'
-          +'<td style="'+_mtd+'left;font-family:inherit;font-weight:700;font-size:.82rem;'+mdStickyCell+'background:#f1f5f9;border-top:2px solid #cbd2da;">月計</td>'
+          +'<td style="'+_mname+mdStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">月計</td>'
           +mdFootCells
-          +'<td style="'+_mtd+'right;font-weight:700;color:#1e40af;background:#dbeafe;border-top:2px solid #cbd2da;">'+(mdGrandTotal>0?mdGrandTotal:'·')+'</td>'
+          +'<td style="'+_mtot+'border-top:2px solid #94a3b8;font-size:17px;">'+(mdGrandTotal>0?mdGrandTotal:'')+'</td>'
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません</div>';
       tc='<div class="admin-card admin-wrap">'
         +'<div class="admin-title">📅 月別出勤日数（'+mdYear+'年）</div>'
         +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">'
-        +'<select id="sel-md-year" style="width:auto;min-width:110px;padding:8px 10px;">'+mdYearOpts+'</select>'
-        +'<label style="display:flex;align-items:center;gap:6px;font-size:.84rem;color:#475569;cursor:pointer;user-select:none;">'
-        +'<input type="checkbox" id="chk-md-retired"'+(monthlyShowRetired?" checked":"")+' style="width:16px;height:16px;cursor:pointer;">退職者も表示'+(mdRetiredCount>0?'（'+mdRetiredCount+'名）':'')+'</label>'
-        +'<button class="btn-export" id="btn-md-csv" style="width:auto;padding:8px 18px;margin-left:auto;">📥 CSV出力</button>'
+        +'<select id="sel-md-year" style="width:auto;min-width:120px;padding:9px 12px;font-size:15px;">'+mdYearOpts+'</select>'
+        +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
+        +'<input type="checkbox" id="chk-md-retired"'+(monthlyShowRetired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">退職者も表示'+(mdRetiredCount>0?'（'+mdRetiredCount+'名）':'')+'</label>'
+        +'<button class="btn-export" id="btn-md-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        +'<div style="font-size:.74rem;color:#8496a7;margin-bottom:8px;line-height:1.6;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。「·」は出勤なし。'
-        +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:0 6px;font-weight:700;">取込</span> 色のセルは打刻データが無い過去月で、Excel取込実績を表示しています'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。空白は出勤なし。'
+        +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:1px 7px;font-weight:700;">取込</span> 色のセルは打刻データが無い過去月で、Excel取込実績を表示しています'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。</div>'
         +mdTableHtml
         +'</div>';
     }
