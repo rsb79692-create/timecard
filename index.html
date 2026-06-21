@@ -109,6 +109,8 @@ function mdSaveCell(inputEl, eid, ym){
   monthlyDaysEditing=false;
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");render();return;}
+  // 社員番号は英数字・ハイフン・アンダースコアのみ許可（XSS防止＋Firebaseキー健全性）
+  if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");render();return;}
   var raw=String(inputEl&&inputEl.value!=null?inputEl.value:"").trim();
   var val=null; // null=未入力に戻す
   if(raw!==""){
@@ -3385,9 +3387,9 @@ function render(){
           var cell=mdCellVal(s,mo);
           rowTotal+=cell.val;mdMonthTotals[mo]+=cell.val;
           if(cell.src==="import")mdImportCellCount++;
-          // 編集可否: 未来月は不可・出勤打刻のある月は打刻優先のため不可（勤怠一覧で修正）・社員番号未設定は保存先が無いため不可
+          // 編集可否: 未来月は不可・出勤打刻のある月は打刻優先のため不可（勤怠一覧で修正）・社員番号未設定/不正文字は保存先が無い/XSS防止のため不可
           var mdFuture = mdYear>mdCurY || (mdYear===mdCurY && mo>mdNowMo);
-          var mdEditable = !mdFuture && cell.src!=="punch" && mdEid!=="";
+          var mdEditable = !mdFuture && cell.src!=="punch" && /^[A-Za-z0-9_-]+$/.test(mdEid);
           if(mdEditable){
             var mdYm=mdYear+"-"+pad(mo+1);
             var mdIv=cell.src==="none"?"":cell.val;
