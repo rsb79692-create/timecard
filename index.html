@@ -5952,6 +5952,18 @@ document.addEventListener("keydown",function(e){
   if(_proxyLeaveModalOpen){closeProxyLeaveModal();}
 });
 
+// 管理者ログイン(PIN)画面のみ: 物理キーボード入力に対応（画面ボタンと併用。pinTap/pinOkを再利用）。
+// screen==="pin" の時だけ有効＝スタッフPIN(screen==="staffPin")や他画面の入力欄には副作用なし。
+document.addEventListener("keydown",function(e){
+  if(screen!=="pin")return;
+  if(e.isComposing||e.ctrlKey||e.metaKey||e.altKey)return; // IME変換中・ショートカット操作は妨げない
+  var k=e.key;
+  if(k>="0"&&k<="9"){e.preventDefault();pinTap(parseInt(k,10));}        // 数字キー（テンキー含む）→入力
+  else if(k==="Backspace"){e.preventDefault();pinTap("C");}             // 1文字削除
+  else if(k==="Enter"){e.preventDefault();pinOk();}                     // ログイン実行
+  else if(k==="Escape"){e.preventDefault();pinInput="";pinError=false;render();} // 入力クリア
+});
+
 // まず即座にレンダリング（Firebaseを待たない）
 render();
 
