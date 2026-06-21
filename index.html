@@ -1610,15 +1610,15 @@ function render(){
     var statusLabel=firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
       :(firebaseReady?'':'');
-    app.innerHTML='<div class="center" style="margin-bottom:10px;padding-top:4px;">'
+    app.innerHTML=(!urlToken||isAllToken?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
+      +'<div class="center" style="margin-bottom:10px;padding-top:4px;">'
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
       +'<div class="label">'+(firebaseError?'通信エラー':firebaseReady?'スタッフを選択してください':'読込中...')+'</div>'
       +statusLabel
       +'<div class="yomi-tabs">'+tabsHTML+'</div>'
-      +'<div class="staff-grid">'+staffHTML+'</div>'
-      +(!urlToken||isAllToken?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'');
+      +'<div class="staff-grid">'+staffHTML+'</div>';
     return;
   }
 
