@@ -889,6 +889,8 @@ var monthlyDaysYear=new Date().getFullYear(); // 月別出勤日数タブ: 表�
 var monthlyShowRetired=false; // 月別出勤日数タブ: 退職者表示ON/OFF
 var monthlyDaysImport={}; // tc5_monthly_days_import キャッシュ（employeeId→{staffId,staffName,months:{"YYYY-MM":日数}}）。打刻が無い過去月の表示に使用
 var monthlyDaysEditing=false; // 月別出勤日数タブ: セル手入力フォーカス中フラグ（polling由来のrender()で入力が消えるのを防止）
+// 月別出勤日数タブ: テスト打刻の上書き対象月（アプリ開発時のテストデータ）。この月だけ手入力(import)値を打刻より優先し、打刻があっても編集可にする。recordsは不変。6月以降は対象外。
+var MD_OVERRIDE_MONTHS={"2026-04":1,"2026-05":1};
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -3359,12 +3361,18 @@ function render(){
         if(!mdMap[r.staff][mo])mdMap[r.staff][mo]={};
         mdMap[r.staff][mo][r.date]=true;
       });
-      // 1セルの値とデータ種別を返す（打刻優先、無ければ取込データ）
+      // 1セルの値とデータ種別を返す。
+      // 通常は打刻優先→取込フォールバック。ただし MD_OVERRIDE_MONTHS（2026-04/05のテスト打刻月）は
+      // 手入力(import)値があればそれを最優先で表示する（records自体は不変）。
       function mdCellVal(s,mo){
+        var ym=mdYear+"-"+pad(mo+1);
+        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
+        var impVal=(imp&&imp.months&&imp.months[ym]!=null&&imp.months[ym]!=="")?imp.months[ym]:null;
+        // テスト打刻の上書き対象月：手入力値があれば打刻より優先
+        if(MD_OVERRIDE_MONTHS[ym]&&impVal!=null)return{val:parseInt(impVal,10)||0,src:"override"};
         var cnt=(mdMap[s.name]&&mdMap[s.name][mo])?Object.keys(mdMap[s.name][mo]).length:0;
         if(cnt>0)return{val:cnt,src:"punch"};
-        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
-        if(imp&&imp.months){var v=imp.months[mdYear+"-"+pad(mo+1)];if(v!=null&&v!=="")return{val:parseInt(v,10)||0,src:"import"};}
+        if(impVal!=null)return{val:parseInt(impVal,10)||0,src:"import"};
         return{val:0,src:"none"};
       }
       var mdMonthTotals=[0,0,0,0,0,0,0,0,0,0,0,0];
@@ -3387,24 +3395,31 @@ function render(){
           var cell=mdCellVal(s,mo);
           rowTotal+=cell.val;mdMonthTotals[mo]+=cell.val;
           if(cell.src==="import")mdImportCellCount++;
-          // 編集可否: 未来月は不可・出勤打刻のある月は打刻優先のため不可（勤怠一覧で修正）・社員番号未設定/不正文字は保存先が無い/XSS防止のため不可
+          var mdYm=mdYear+"-"+pad(mo+1);
+          var mdIsOverride=!!MD_OVERRIDE_MONTHS[mdYm]; // テスト打刻の上書き対象月(2026-04/05)
+          // 編集可否: 未来月は不可・社員番号未設定/不正文字は不可。打刻月は通常不可だが、上書き対象月のみ打刻があっても編集可
           var mdFuture = mdYear>mdCurY || (mdYear===mdCurY && mo>mdNowMo);
-          var mdEditable = !mdFuture && cell.src!=="punch" && /^[A-Za-z0-9_-]+$/.test(mdEid);
+          var mdEditable = !mdFuture && (cell.src!=="punch" || mdIsOverride) && /^[A-Za-z0-9_-]+$/.test(mdEid);
           if(mdEditable){
-            var mdYm=mdYear+"-"+pad(mo+1);
-            var mdIv=cell.src==="none"?"":cell.val;
+            var mdIv=cell.src==="none"?"":cell.val; // 上書き対象で未入力なら現打刻値を初期表示し修正の足場にする
+            var mdInBg = cell.src==="override" ? 'background:#eff6ff;color:#1e40af;font-weight:700;'
+                       : cell.src==="import" ? 'background:#fffbeb;color:#92400e;font-weight:700;'
+                       : mdIsOverride ? 'background:#fff7ed;color:#9a3412;font-weight:600;' // 上書き対象だが現状は打刻値
+                       : 'background:#fff;color:#0f172a;';
+            var mdInTitle = mdIsOverride ? 'テスト打刻の上書き月：手入力値が打刻より優先表示されます（空欄で打刻表示に戻る）' : '過去月の出勤日数を手入力できます（空欄で未入力に戻す）';
             tds+='<td style="'+_mtd+'right;'+_mcol+'padding:6px 6px;">'
               +'<input type="number" min="0" max="31" inputmode="numeric" value="'+mdIv+'"'
               +' onfocus="monthlyDaysEditing=true;" onblur="monthlyDaysEditing=false;"'
               +' onchange="mdSaveCell(this,\''+mdEid+'\',\''+mdYm+'\')"'
-              +' title="過去月の出勤日数を手入力できます（空欄で未入力に戻す）"'
-              +' style="width:54px;padding:6px 4px;text-align:right;font-size:16px;font-family:monospace;border:1px solid #cbd5e1;border-radius:4px;'+(cell.src==="import"?'background:#fffbeb;color:#92400e;font-weight:700;':'background:#fff;color:#0f172a;')+'">'
+              +' title="'+mdInTitle+'"'
+              +' style="width:54px;padding:6px 4px;text-align:right;font-size:16px;font-family:monospace;border:1px solid #cbd5e1;border-radius:4px;'+mdInBg+'">'
               +'</td>';
           } else {
             var cs= cell.src==="none" ? ''
+                  : cell.src==="override" ? 'color:#1e40af;background:#eff6ff;font-weight:700;'
                   : cell.src==="import" ? 'color:#92400e;background:#fffbeb;font-weight:700;'
                   : 'color:#0f172a;font-weight:600;';
-            tds+='<td style="'+_mtd+'right;'+_mcol+cs+'"'+(cell.src==="punch"?' title="出勤打刻データ（勤怠一覧で修正）"':cell.src==="import"?' title="過去取込データ（打刻なし）"':'')+'>'+(cell.src==="none"?'':cell.val)+'</td>';
+            tds+='<td style="'+_mtd+'right;'+_mcol+cs+'"'+(cell.src==="override"?' title="テスト打刻を手入力値で上書き表示中"':cell.src==="punch"?' title="出勤打刻データ（勤怠一覧で修正）"':cell.src==="import"?' title="過去取込データ（打刻なし）"':'')+'>'+(cell.src==="none"?'':cell.val)+'</td>';
           }
         }
         mdGrandTotal+=rowTotal;
@@ -3450,7 +3465,8 @@ function render(){
         +'</div>'
         +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。空白は出勤なし。'
         +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:1px 7px;font-weight:700;">取込</span> 色のセルは打刻データが無い過去月で、Excel取込実績を表示しています'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。'
-        +'<br>📝 <b>過去月の入力欄</b>は手入力で追加・修正できます（空欄にすると未入力に戻ります。社員番号が必要）。保存は即時。出勤打刻のある月は打刻が優先され、修正は「勤怠一覧」で行います。</div>'
+        +'<br>📝 <b>過去月の入力欄</b>は手入力で追加・修正できます（空欄にすると未入力に戻ります。社員番号が必要）。保存は即時。出勤打刻のある月は打刻が優先され、修正は「勤怠一覧」で行います。'
+        +'<br><span style="display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:3px;padding:1px 7px;font-weight:700;">上書き</span> 2026年4月・5月はアプリ開発時のテスト打刻のため、例外的に手入力値で上書きできます（手入力値が打刻より優先表示。空欄に戻すと元の打刻表示に復帰。打刻データ自体は削除しません）。</div>'
         +mdTableHtml
         +'</div>';
     }
@@ -3913,12 +3929,16 @@ function render(){
       var csvRecs=records.filter(function(r){return r.type==="clockIn"&&!r.deleted&&r.date&&parseInt(r.date.substring(0,4),10)===y;});
       var csvMap={};
       csvRecs.forEach(function(r){var mo=parseInt(r.date.substring(5,7),10)-1;if(mo<0||mo>11)return;if(!csvMap[r.staff])csvMap[r.staff]={};if(!csvMap[r.staff][mo])csvMap[r.staff][mo]={};csvMap[r.staff][mo][r.date]=true;});
-      // 打刻優先・取込フォールバック（表示と同一ロジック）。取込セルは値に「*」を付与
+      // 打刻優先・取込フォールバック（表示と同一ロジック）。取込セルは値に「*」を付与。
+      // テスト打刻の上書き対象月(2026-04/05)は手入力値を打刻より優先（画面表示と一致）。
       function csvCell(s,mo){
+        var ym=y+"-"+pad(mo+1);
+        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
+        var impVal=(imp&&imp.months&&imp.months[ym]!=null&&imp.months[ym]!=="")?imp.months[ym]:null;
+        if(MD_OVERRIDE_MONTHS[ym]&&impVal!=null)return{val:parseInt(impVal,10)||0,imp:true};
         var cnt=(csvMap[s.name]&&csvMap[s.name][mo])?Object.keys(csvMap[s.name][mo]).length:0;
         if(cnt>0)return{val:cnt,imp:false};
-        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
-        if(imp&&imp.months){var v=imp.months[y+"-"+pad(mo+1)];if(v!=null&&v!=="")return{val:parseInt(v,10)||0,imp:true};}
+        if(impVal!=null)return{val:parseInt(impVal,10)||0,imp:true};
         return{val:0,imp:false};
       }
       var hdrMd="氏名,"+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return m+"月";}).join(",")+",合計,取込セル数,在籍状況";
