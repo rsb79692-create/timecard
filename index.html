@@ -819,6 +819,7 @@ var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
 var adminTab="records",yomiTab="すべて";
 var monthlyDaysYear=new Date().getFullYear(); // 月別出勤日数タブ: 表示年
 var monthlyShowRetired=false; // 月別出勤日数タブ: 退職者表示ON/OFF
+var monthlyDaysImport={}; // tc5_monthly_days_import キャッシュ（employeeId→{staffId,staffName,months:{"YYYY-MM":日数}}）。打刻が無い過去月の表示に使用
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -3239,8 +3240,12 @@ function render(){
 
     if(adminTab==="monthlyDays"){
       var mdYear=monthlyDaysYear;
-      // 利用可能な年（recordsの打刻年 ＋ 当年 ＋ 選択中の年）
+      // 利用可能な年（recordsの打刻年 ＋ 過去取込データの年 ＋ 当年 ＋ 選択中の年）
       var mdYears=[...new Set(records.filter(function(r){return !r.deleted&&r.date;}).map(function(r){return parseInt(r.date.substring(0,4),10);}))];
+      Object.keys(monthlyDaysImport).forEach(function(eid){
+        var ms=(monthlyDaysImport[eid]||{}).months||{};
+        Object.keys(ms).forEach(function(ym){var y=parseInt(ym.substring(0,4),10);if(y>0&&mdYears.indexOf(y)<0)mdYears.push(y);});
+      });
       var mdCurY=new Date().getFullYear();
       if(mdYears.indexOf(mdCurY)<0)mdYears.push(mdCurY);
       if(mdYears.indexOf(mdYear)<0)mdYears.push(mdYear);
@@ -3259,8 +3264,17 @@ function render(){
         if(!mdMap[r.staff][mo])mdMap[r.staff][mo]={};
         mdMap[r.staff][mo][r.date]=true;
       });
+      // 1セルの値とデータ種別を返す（打刻優先、無ければ取込データ）
+      function mdCellVal(s,mo){
+        var cnt=(mdMap[s.name]&&mdMap[s.name][mo])?Object.keys(mdMap[s.name][mo]).length:0;
+        if(cnt>0)return{val:cnt,src:"punch"};
+        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
+        if(imp&&imp.months){var v=imp.months[mdYear+"-"+pad(mo+1)];if(v!=null&&v!=="")return{val:parseInt(v,10)||0,src:"import"};}
+        return{val:0,src:"none"};
+      }
       var mdMonthTotals=[0,0,0,0,0,0,0,0,0,0,0,0];
       var mdGrandTotal=0;
+      var mdImportCellCount=0;
       var mdRetiredCount=staffList.filter(function(s){return s.status==="退職";}).length;
       var _mth='padding:6px 8px;font-weight:700;font-size:.74rem;color:#475569;white-space:nowrap;background:#eaecef;border-bottom:2px solid #adb5bd;text-align:';
       var _mtd='padding:5px 8px;font-size:.82rem;font-family:monospace;text-align:';
@@ -3270,9 +3284,13 @@ function render(){
         var rowTotal=0;
         var tds="";
         for(var mo=0;mo<12;mo++){
-          var cnt=(mdMap[s.name]&&mdMap[s.name][mo])?Object.keys(mdMap[s.name][mo]).length:0;
-          rowTotal+=cnt;mdMonthTotals[mo]+=cnt;
-          tds+='<td style="'+_mtd+'right;'+(cnt>0?'color:#0f172a;':'color:#cbd5e1;')+'">'+(cnt>0?cnt:'·')+'</td>';
+          var cell=mdCellVal(s,mo);
+          rowTotal+=cell.val;mdMonthTotals[mo]+=cell.val;
+          if(cell.src==="import")mdImportCellCount++;
+          var cs= cell.src==="none" ? 'color:#cbd5e1;'
+                : cell.src==="import" ? 'color:#92400e;background:#fffbeb;'
+                : 'color:#0f172a;';
+          tds+='<td style="'+_mtd+'right;'+cs+'"'+(cell.src==="import"?' title="過去取込データ（打刻なし）"':'')+'>'+(cell.src==="none"?'·':cell.val)+'</td>';
         }
         mdGrandTotal+=rowTotal;
         var retiredTag=s.status==="退職"?' <span style="font-size:.62rem;color:#fff;background:#94a3b8;border-radius:8px;padding:1px 6px;vertical-align:middle;">退職</span>':'';
@@ -3315,7 +3333,8 @@ function render(){
         +'<input type="checkbox" id="chk-md-retired"'+(monthlyShowRetired?" checked":"")+' style="width:16px;height:16px;cursor:pointer;">退職者も表示'+(mdRetiredCount>0?'（'+mdRetiredCount+'名）':'')+'</label>'
         +'<button class="btn-export" id="btn-md-csv" style="width:auto;padding:8px 18px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        +'<div style="font-size:.74rem;color:#8496a7;margin-bottom:8px;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。「·」は出勤なし。</div>'
+        +'<div style="font-size:.74rem;color:#8496a7;margin-bottom:8px;line-height:1.6;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。「·」は出勤なし。'
+        +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:0 6px;font-weight:700;">取込</span> 色のセルは打刻データが無い過去月で、Excel取込実績を表示しています'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。</div>'
         +mdTableHtml
         +'</div>';
     }
@@ -3778,13 +3797,22 @@ function render(){
       var csvRecs=records.filter(function(r){return r.type==="clockIn"&&!r.deleted&&r.date&&parseInt(r.date.substring(0,4),10)===y;});
       var csvMap={};
       csvRecs.forEach(function(r){var mo=parseInt(r.date.substring(5,7),10)-1;if(mo<0||mo>11)return;if(!csvMap[r.staff])csvMap[r.staff]={};if(!csvMap[r.staff][mo])csvMap[r.staff][mo]={};csvMap[r.staff][mo][r.date]=true;});
-      var hdrMd="氏名,"+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return m+"月";}).join(",")+",合計,在籍状況";
+      // 打刻優先・取込フォールバック（表示と同一ロジック）。取込セルは値に「*」を付与
+      function csvCell(s,mo){
+        var cnt=(csvMap[s.name]&&csvMap[s.name][mo])?Object.keys(csvMap[s.name][mo]).length:0;
+        if(cnt>0)return{val:cnt,imp:false};
+        var imp=monthlyDaysImport[(s.employeeId||"").trim()];
+        if(imp&&imp.months){var v=imp.months[y+"-"+pad(mo+1)];if(v!=null&&v!=="")return{val:parseInt(v,10)||0,imp:true};}
+        return{val:0,imp:false};
+      }
+      var hdrMd="氏名,"+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return m+"月";}).join(",")+",合計,取込セル数,在籍状況";
       var rowsMd=csvStaff.map(function(s){
-        var tot=0;var cells=[];
-        for(var mo=0;mo<12;mo++){var cnt=(csvMap[s.name]&&csvMap[s.name][mo])?Object.keys(csvMap[s.name][mo]).length:0;tot+=cnt;cells.push(cnt);}
-        return [s.name].concat(cells).concat([tot,s.status||"在籍"]).join(",");
+        var tot=0;var impN=0;var cells=[];
+        for(var mo=0;mo<12;mo++){var c=csvCell(s,mo);tot+=c.val;if(c.imp)impN++;cells.push(c.imp?(c.val+"*"):c.val);}
+        return [s.name].concat(cells).concat([tot,impN,s.status||"在籍"]).join(",");
       });
-      dlCSV(hdrMd+"\n"+rowsMd.join("\n"),"穂乃味_月別出勤日数_"+y+".csv");
+      var noteMd="# 「*」付きの数値は打刻データが無い過去月のExcel取込実績です";
+      dlCSV(noteMd+"\n"+hdrMd+"\n"+rowsMd.join("\n"),"穂乃味_月別出勤日数_"+y+".csv");
     };
 
     // 朝出勤確認 — 最新状態に更新
@@ -5437,6 +5465,7 @@ async function initFirebase() {
       fetchJson(FB_URL+"/config/demoAccess.json"),
       fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
       fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
+      fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
@@ -5444,6 +5473,7 @@ async function initFirebase() {
     var fbAdminTokenHash=results[8],fbAdminToken=results[9];
     var fbViewerTokenData=results[10],fbDemoAccess=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
+    var fbMonthlyImport=results[14];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -5470,6 +5500,8 @@ async function initFirebase() {
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
+    // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
+    if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
     // デモアクセス
     if(fbDemoAccess){demoAccessConfig=fbDemoAccess;}
     // 有給申請
