@@ -782,11 +782,72 @@ function weeklyWorkDaysLabel(w){
   if(n>=5)return"週5日以上";
   return"週"+n+"日";
 }
+// ===== 年間勤務日数区分による付与日数の自動算出 =====
+// 労務士資料の区分: 年間換算勤務日数 → 週相当日数（5/4/3/2/1）。47日以下はnull（判定不可/要確認）。
+function judgeWeeklyEquivByAnnualDays(annual){
+  if(annual==null||isNaN(annual))return null;
+  if(annual>=217)return 5;
+  if(annual>=169)return 4;
+  if(annual>=121)return 3;
+  if(annual>=73)return 2;
+  if(annual>=48)return 1;
+  return null; // 47日以下 → 判定不可/要確認
+}
+// 指定月(YYYY-MM)の出勤日数を返す。月別出勤日数画面と同一優先順位（override→打刻→取込→なし）。read-onlyの集計のみ。
+function getAttendanceDaysForMonth(staffName,eid,ym,punchMap){
+  var imp=monthlyDaysImport[(eid||"").trim()];
+  var impVal=(imp&&imp.months&&imp.months[ym]!=null&&imp.months[ym]!=="")?(parseInt(imp.months[ym],10)||0):null;
+  if(MD_OVERRIDE_MONTHS[ym]&&impVal!=null)return{days:impVal,src:"override"};
+  var pm=punchMap&&punchMap[staffName]&&punchMap[staffName][ym];
+  var cnt=pm?Object.keys(pm).length:0;
+  if(cnt>0)return{days:cnt,src:"punch"};
+  if(impVal!=null)return{days:impVal,src:"import"};
+  return{days:0,src:"none"};
+}
+// "YYYY-MM" に nか月加算した "YYYY-MM" を返す
+function addYm(ym,n){
+  var p=ym.split("-");var t=(parseInt(p[0],10)*12+(parseInt(p[1],10)-1))+n;
+  return Math.floor(t/12)+"-"+pad(t%12+1);
+}
+// 付与1件分の自動算出（初回=入社月から6か月×2、2回目以降=付与月の前12か月）。recordsから作ったpunchMapを使う。
+function calcAutoGrantFromAttendance(staffName,eid,grantNum,hireDateStr,grantDateStr,punchMap){
+  var months=[];
+  if(grantNum===1){
+    var hd=parsePaidLeaveHireDate(hireDateStr);if(!hd)return null;
+    var hym=hd.getFullYear()+"-"+pad(hd.getMonth()+1);
+    for(var i=0;i<6;i++)months.push(addYm(hym,i)); // 入社月から6か月
+  }else{
+    if(!grantDateStr)return null;
+    var gp=grantDateStr.split("-");var gym=gp[0]+"-"+pad(parseInt(gp[1],10));
+    for(var j=1;j<=12;j++)months.push(addYm(gym,-j)); // 付与月の前12か月
+  }
+  var sum=0,dataShort=false;
+  months.forEach(function(m){var c=getAttendanceDaysForMonth(staffName,eid,m,punchMap);if(c.src==="none")dataShort=true;sum+=c.days;});
+  var annual=(grantNum===1)?sum*2:sum;
+  var weeklyEquiv=dataShort?null:judgeWeeklyEquivByAnnualDays(annual);
+  var autoGrantDays=(weeklyEquiv!=null)?calculatePaidLeaveGrantDays(grantNum,weeklyEquiv):null;
+  return{
+    from:months[0],to:months[months.length-1],
+    workDays:sum,annualDays:annual,
+    weeklyEquiv:weeklyEquiv,autoGrantDays:autoGrantDays,
+    dataShort:dataShort,
+    note:dataShort?"判定不可（データ不足）":(weeklyEquiv==null?"要確認（47日以下）":null)
+  };
+}
 function getPaidLeaveUnregistered(){
   var idCounts={};
   staffList.forEach(function(s){if(s.employeeId&&String(s.employeeId).trim()){var k=String(s.employeeId).trim();idCounts[k]=(idCounts[k]||0)+1;}});
   var dupIds=Object.keys(idCounts).filter(function(k){return idCounts[k]>1;});
   var noIdList=staffList.filter(function(s){return s.status!=="退職"&&(!s.employeeId||!String(s.employeeId).trim());});
+  // 出勤日数の自動算出用に records(clockIn) を staff名→年月→日付Set のマップへ1回だけ集計（read-only）
+  var punchMap={};
+  records.forEach(function(r){
+    if(r.type!=="clockIn"||r.deleted||!r.date||!r.staff)return;
+    var ym=r.date.substring(0,7);
+    if(!punchMap[r.staff])punchMap[r.staff]={};
+    if(!punchMap[r.staff][ym])punchMap[r.staff][ym]={};
+    punchMap[r.staff][ym][r.date]=true;
+  });
   var grants=[];
   staffList.forEach(function(s){
     if(s.status==="退職")return;
@@ -803,8 +864,12 @@ function getPaidLeaveUnregistered(){
       if(!already){
         var dn=(s.lastName&&s.firstName)?s.lastName+'　'+s.firstName:s.name;
         var wwd=s.weeklyWorkDays;
-        var gdays=calculatePaidLeaveGrantDays(item.grantNum,wwd);
-        grants.push({staffId:sid,staffName:s.name,staffDisplayName:dn,hireDate:s.hireDate,grantNum:item.grantNum,grantDate:item.grantDate,expiresAt:item.expiresAt,weeklyWorkDays:wwd,grantDays:gdays});
+        var gdays=calculatePaidLeaveGrantDays(item.grantNum,wwd); // 手動weeklyWorkDays由来（従来）
+        // 出勤日数からの自動算出（weeklyWorkDaysは上書きしない）
+        var auto=calcAutoGrantFromAttendance(s.name,sid,item.grantNum,s.hireDate,item.grantDate,punchMap);
+        // 自動算出値と手動由来が両方あり食い違う場合のフラグ
+        var mismatch=(auto&&auto.autoGrantDays!=null&&gdays!=null&&auto.autoGrantDays!==gdays);
+        grants.push({staffId:sid,staffName:s.name,staffDisplayName:dn,hireDate:s.hireDate,grantNum:item.grantNum,grantDate:item.grantDate,expiresAt:item.expiresAt,weeklyWorkDays:wwd,grantDays:gdays,auto:auto,mismatch:mismatch});
       }
     });
   });
@@ -3149,18 +3214,35 @@ function render(){
           +'</div>'
         :'';
       var _grantRows=_plr.grants.length===0
-        ?'<tr><td colspan="10" style="padding:14px;text-align:center;color:#8496a7;font-size:.8rem;">未登録の付与予定はありません</td></tr>'
+        ?'<tr><td colspan="13" style="padding:14px;text-align:center;color:#8496a7;font-size:.8rem;">未登録の付与予定はありません</td></tr>'
         :_plr.grants.map(function(g,idx){
-          var _wwdSet=(g.grantDays!=null);
-          var _wwdCell=_wwdSet
-            ?'<span style="font-size:18px;color:#334155;">'+_esc(weeklyWorkDaysLabel(g.weeklyWorkDays))+'</span>'
-            :'<span style="background:#fffbeb;color:#b45309;'+_plBadge+'border:1px solid #fde68a;">要確認</span>';
-          var _daysCell=_wwdSet
-            ?'<span style="font-weight:700;color:#1e40af;font-size:18px;">'+_esc(String(g.grantDays))+'日</span>'
-            :'<span style="background:#fffbeb;color:#b45309;'+_plBadge+'border:1px solid #fde68a;">要確認</span>';
-          var _grantBtn=_wwdSet
+          var a=g.auto;
+          var _autoOk=!!(a&&a.autoGrantDays!=null); // 自動算出で付与日数が確定
+          var _hasBasis=_autoOk||(g.grantDays!=null); // 自動 or 手動週所定のいずれかで根拠あり
+          // 判定期間（月途中入社の近似は判定期間の明示のみ。長文注記は出さない）
+          var _periodCell=a?('<span style="font-family:monospace;font-size:13px;color:#475569;">'+_esc(a.from)+'〜'+_esc(a.to)+'</span>'):'<span style="color:#9ca3af;">—</span>';
+          // 勤務日数→年間換算
+          var _workCell=a
+            ?'<span style="font-size:14px;color:#334155;">'+a.workDays+'日<span style="color:#94a3b8;"> → 年</span>'+a.annualDays+'日</span>'
+            :'<span style="color:#9ca3af;">—</span>';
+          // 週相当（自動判定）
+          var _weeklyAutoCell=(a&&a.weeklyEquiv!=null)
+            ?'<span style="font-size:15px;color:#334155;font-weight:600;">週'+a.weeklyEquiv+'日相当</span>'
+            :'<span style="background:#fffbeb;color:#b45309;'+_plBadge+'border:1px solid #fde68a;">'+_esc(a?a.note:'要確認')+'</span>';
+          // 週所定労働日数（手動・参考）
+          var _wwdCell=(g.weeklyWorkDays!=null&&g.weeklyWorkDays!=='')
+            ?'<span style="font-size:14px;color:#64748b;">'+_esc(weeklyWorkDaysLabel(g.weeklyWorkDays))+'</span>'
+            :'<span style="color:#9ca3af;font-size:.72rem;">未設定</span>';
+          // 付与日数（自動算出を主表示）。自動と手動週所定が食い違う場合は要確認。判定不可は要確認バッジ。
+          var _daysCell=_autoOk
+            ?'<span style="font-weight:700;color:#1e40af;font-size:18px;">'+a.autoGrantDays+'日</span>'
+              +'<span style="display:block;font-size:.6rem;color:#1e40af;font-weight:700;">自動算出</span>'
+              +(g.mismatch?'<span style="background:#fff1f2;color:#dc2626;'+_plBadge+'border:1px solid #fecdd3;margin-top:2px;">要確認：手動週所定では'+_esc(String(g.grantDays))+'日</span>':'')
+            :'<span style="background:#fffbeb;color:#b45309;'+_plBadge+'border:1px solid #fde68a;">'+_esc(a?a.note:'要確認')+'</span>'
+              +(g.grantDays!=null?'<span style="display:block;font-size:.6rem;color:#64748b;margin-top:2px;">手動週所定: '+_esc(String(g.grantDays))+'日</span>':'');
+          var _grantBtn=_hasBasis
             ?'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;'+_plBtn+'margin-right:4px;">付与登録</button>'
-            :'<button disabled title="週所定労働日数が未設定です。スタッフ編集で設定してください。" style="background:#e5e7eb;color:#9ca3af;border:none;'+_plBtn+'cursor:not-allowed;margin-right:4px;">付与登録</button>';
+            :'<button disabled title="出勤日数からの自動算出が判定不可で、週所定労働日数も未設定です。出勤日数の入力かスタッフ編集で対応してください。" style="background:#e5e7eb;color:#9ca3af;border:none;'+_plBtn+'cursor:not-allowed;margin-right:4px;">付与登録</button>';
           return '<tr>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;font-family:monospace;white-space:nowrap;">'+_esc(g.staffId)+'</td>'
             +'<td style="'+_plName+'border-bottom:1px solid #e9ecef;">'+_esc(g.staffDisplayName)+'</td>'
@@ -3168,6 +3250,9 @@ function render(){
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;font-family:monospace;white-space:nowrap;">'+_esc(g.hireDate)+'</td>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;font-family:monospace;white-space:nowrap;">'+_esc(g.grantDate)+'</td>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;font-family:monospace;white-space:nowrap;">'+_esc(g.expiresAt)+'</td>'
+            +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_periodCell+'</td>'
+            +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_workCell+'</td>'
+            +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_weeklyAutoCell+'</td>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_wwdCell+'</td>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_daysCell+'</td>'
             +'<td style="'+_plTd+'border-bottom:1px solid #e9ecef;text-align:center;"><span style="background:#fff1f2;color:#dc2626;'+_plBadge+'">未登録</span></td>'
@@ -3184,8 +3269,9 @@ function render(){
         +'<div class="admin-title" style="margin-bottom:0;">付与予定（未登録）'
         +(_plr.grants.length>0?'<span style="background:#dc2626;color:#fff;font-size:.58rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;">'+_plr.grants.length+'件</span>':'')+'</div>'
         +'</div>'
+        +'<div style="font-size:.74rem;color:#64748b;margin-bottom:8px;line-height:1.6;">付与日数は<b style="color:#1e40af;">出勤日数からの自動算出</b>です（初回＝入社月から6か月×2、2回目以降＝付与月の前12か月の年間勤務日数で週相当を判定）。<b>判定不可・要確認</b>は自動算出できないため管理者の確認が必要です。登録ボタンを押すまで保存されません。</div>'
         +_dupWarnGr+_noIdWarnGr
-        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:560px;">'
+        +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:920px;">'
         +'<thead><tr style="background:#e8edf3;border-bottom:2px solid #94a3b8;">'
         +'<th style="'+_plTh+'text-align:left;">社員番号</th>'
         +'<th style="'+_plTh+'text-align:left;">氏名</th>'
@@ -3193,8 +3279,11 @@ function render(){
         +'<th style="'+_plTh+'text-align:left;">入社日</th>'
         +'<th style="'+_plTh+'text-align:left;">付与予定日</th>'
         +'<th style="'+_plTh+'text-align:left;">失効予定日</th>'
-        +'<th style="'+_plTh+'text-align:center;">週所定労働日数</th>'
-        +'<th style="'+_plTh+'text-align:center;">付与日数</th>'
+        +'<th style="'+_plTh+'text-align:center;">判定期間</th>'
+        +'<th style="'+_plTh+'text-align:center;">勤務日数(→年換算)</th>'
+        +'<th style="'+_plTh+'text-align:center;">週相当(自動)</th>'
+        +'<th style="'+_plTh+'text-align:center;">週所定(手動)</th>'
+        +'<th style="'+_plTh+'text-align:center;">付与日数(自動算出)</th>'
         +'<th style="'+_plTh+'text-align:center;">状態</th>'
         +'<th style="'+_plTh+'text-align:center;">操作</th>'
         +'</tr></thead>'
@@ -5746,11 +5835,32 @@ function openPaidLeaveGrantModal(idx,consumed){
     var b=document.createElement('b');b.textContent=g.staffDisplayName;
     infoEl.appendChild(b);
     infoEl.appendChild(document.createTextNode('（社員番号：'+g.staffId+'）　第'+g.grantNum+'回'));
+    // 出勤日数からの自動算出の根拠を表示（管理者が確認できるように）
+    if(g.auto){
+      var a=g.auto;
+      var basis=document.createElement('div');
+      basis.style.cssText='margin-top:5px;font-size:.72rem;color:#475569;';
+      var detail=(a.autoGrantDays!=null)
+        ?('判定期間 '+a.from+'〜'+a.to+' / 勤務 '+a.workDays+'日 → 年換算 '+a.annualDays+'日 → 週'+a.weeklyEquiv+'日相当 → 自動算出 '+a.autoGrantDays+'日')
+        :('判定期間 '+a.from+'〜'+a.to+' / 勤務 '+a.workDays+'日 → 年換算 '+a.annualDays+'日 → '+a.note+'（手入力してください）');
+      basis.textContent='自動算出：'+detail;
+      infoEl.appendChild(basis);
+      if(g.mismatch){
+        var mm=document.createElement('div');
+        mm.style.cssText='margin-top:3px;font-size:.72rem;color:#dc2626;font-weight:700;';
+        mm.textContent='⚠ 要確認：手動の週所定労働日数では '+g.grantDays+'日 です（自動算出と相違）';
+        infoEl.appendChild(mm);
+      }
+    }
   }
   var gdEl=document.getElementById("pl-grant-date");if(gdEl)gdEl.value=g.grantDate;
   var eaEl=document.getElementById("pl-grant-expires");if(eaEl)eaEl.value=g.expiresAt;
-  // 週所定労働日数×勤続回数から自動算出した付与日数を初期表示（未設定時は空欄）
-  var _autoDays=(g.grantDays!=null)?String(g.grantDays):"";
+  // 付与日数の初期値：出勤日数からの自動算出を最優先。判定不可/要確認(47日以下)は空欄にして手入力を促す。
+  // 自動算出が無い場合のみ手動週所定由来へフォールバック。weeklyWorkDaysは上書きしない（読み取りのみ）。
+  var _autoDays;
+  if(g.auto&&g.auto.autoGrantDays!=null){_autoDays=String(g.auto.autoGrantDays);}
+  else if(g.auto&&(g.auto.dataShort||g.auto.weeklyEquiv==null)){_autoDays="";} // 判定不可/要確認 → 空欄
+  else{_autoDays=(g.grantDays!=null)?String(g.grantDays):"";}
   var gDays=document.getElementById("pl-grant-days");if(gDays)gDays.value=_autoDays;
   var rDays=document.getElementById("pl-grant-remain");if(rDays){rDays.value=consumed?"":_autoDays;rDays.disabled=!!consumed;}
   var noteEl=document.getElementById("pl-grant-consumed-note");if(noteEl)noteEl.style.display=consumed?"block":"none";
