@@ -817,6 +817,8 @@ var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
 var adminTab="records",yomiTab="すべて";
+var monthlyDaysYear=new Date().getFullYear(); // 月別出勤日数タブ: 表示年
+var monthlyShowRetired=false; // 月別出勤日数タブ: 退職者表示ON/OFF
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -3235,6 +3237,89 @@ function render(){
         +'</div>';
     }
 
+    if(adminTab==="monthlyDays"){
+      var mdYear=monthlyDaysYear;
+      // 利用可能な年（recordsの打刻年 ＋ 当年 ＋ 選択中の年）
+      var mdYears=[...new Set(records.filter(function(r){return !r.deleted&&r.date;}).map(function(r){return parseInt(r.date.substring(0,4),10);}))];
+      var mdCurY=new Date().getFullYear();
+      if(mdYears.indexOf(mdCurY)<0)mdYears.push(mdCurY);
+      if(mdYears.indexOf(mdYear)<0)mdYears.push(mdYear);
+      mdYears=mdYears.filter(function(y){return y>0;}).sort(function(a,b){return b-a;});
+      // 対象スタッフ（退職者は既定で除外、トグルで表示）
+      var mdStaff=staffList.filter(function(s){return monthlyShowRetired?true:(s.status!=="退職");})
+        .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+      // 当年の出勤(clockIn)レコード
+      var mdRecs=records.filter(function(r){return r.type==="clockIn"&&!r.deleted&&r.date&&parseInt(r.date.substring(0,4),10)===mdYear;});
+      // staff名 → 月(0-11) → 出勤日Set
+      var mdMap={};
+      mdRecs.forEach(function(r){
+        var mo=parseInt(r.date.substring(5,7),10)-1;
+        if(mo<0||mo>11)return;
+        if(!mdMap[r.staff])mdMap[r.staff]={};
+        if(!mdMap[r.staff][mo])mdMap[r.staff][mo]={};
+        mdMap[r.staff][mo][r.date]=true;
+      });
+      var mdMonthTotals=[0,0,0,0,0,0,0,0,0,0,0,0];
+      var mdGrandTotal=0;
+      var mdRetiredCount=staffList.filter(function(s){return s.status==="退職";}).length;
+      var _mth='padding:6px 8px;font-weight:700;font-size:.74rem;color:#475569;white-space:nowrap;background:#eaecef;border-bottom:2px solid #adb5bd;text-align:';
+      var _mtd='padding:5px 8px;font-size:.82rem;font-family:monospace;text-align:';
+      var mdStickyHead='position:sticky;left:0;z-index:2;background:#eaecef;border-right:2px solid #cbd2da;';
+      var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #e5e7eb;';
+      var mdRows=mdStaff.map(function(s){
+        var rowTotal=0;
+        var tds="";
+        for(var mo=0;mo<12;mo++){
+          var cnt=(mdMap[s.name]&&mdMap[s.name][mo])?Object.keys(mdMap[s.name][mo]).length:0;
+          rowTotal+=cnt;mdMonthTotals[mo]+=cnt;
+          tds+='<td style="'+_mtd+'right;'+(cnt>0?'color:#0f172a;':'color:#cbd5e1;')+'">'+(cnt>0?cnt:'·')+'</td>';
+        }
+        mdGrandTotal+=rowTotal;
+        var retiredTag=s.status==="退職"?' <span style="font-size:.62rem;color:#fff;background:#94a3b8;border-radius:8px;padding:1px 6px;vertical-align:middle;">退職</span>':'';
+        return'<tr style="border-bottom:1px solid #f1f3f5;">'
+          +'<td style="'+_mtd+'left;font-family:inherit;font-weight:700;font-size:.85rem;white-space:nowrap;'+mdStickyCell+(s.status==="退職"?'background:#f8fafc;color:#64748b;':'background:#fff;')+'">'+esc(s.name)+retiredTag+'</td>'
+          +tds
+          +'<td style="'+_mtd+'right;font-weight:700;color:#1e40af;background:#eff6ff;">'+(rowTotal>0?rowTotal:'·')+'</td>'
+          +'</tr>';
+      }).join("");
+      var mdFootCells="";
+      for(var fmo=0;fmo<12;fmo++){
+        mdFootCells+='<td style="'+_mtd+'right;font-weight:700;color:#334155;background:#f1f5f9;border-top:2px solid #cbd2da;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'·')+'</td>';
+      }
+      var mdMonthHead="";
+      for(var hmo=0;hmo<12;hmo++){
+        mdMonthHead+='<th style="'+_mth+'right;">'+(hmo+1)+'月</th>';
+      }
+      var mdYearOpts=mdYears.map(function(y){return'<option value="'+y+'"'+(y===mdYear?" selected":"")+'>'+y+'年</option>';}).join("");
+      var mdTableHtml=mdStaff.length
+        ?'<div style="overflow-x:auto;border:1px solid #e5e7eb;border-radius:6px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:760px;">'
+          +'<thead><tr>'
+          +'<th style="'+_mth+'left;'+mdStickyHead+'">氏名</th>'
+          +mdMonthHead
+          +'<th style="'+_mth+'right;background:#dbeafe;color:#1e40af;">合計</th>'
+          +'</tr></thead>'
+          +'<tbody>'+mdRows+'</tbody>'
+          +'<tfoot><tr>'
+          +'<td style="'+_mtd+'left;font-family:inherit;font-weight:700;font-size:.82rem;'+mdStickyCell+'background:#f1f5f9;border-top:2px solid #cbd2da;">月計</td>'
+          +mdFootCells
+          +'<td style="'+_mtd+'right;font-weight:700;color:#1e40af;background:#dbeafe;border-top:2px solid #cbd2da;">'+(mdGrandTotal>0?mdGrandTotal:'·')+'</td>'
+          +'</tr></tfoot>'
+          +'</table></div>'
+        :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません</div>';
+      tc='<div class="admin-card admin-wrap">'
+        +'<div class="admin-title">📅 月別出勤日数（'+mdYear+'年）</div>'
+        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">'
+        +'<select id="sel-md-year" style="width:auto;min-width:110px;padding:8px 10px;">'+mdYearOpts+'</select>'
+        +'<label style="display:flex;align-items:center;gap:6px;font-size:.84rem;color:#475569;cursor:pointer;user-select:none;">'
+        +'<input type="checkbox" id="chk-md-retired"'+(monthlyShowRetired?" checked":"")+' style="width:16px;height:16px;cursor:pointer;">退職者も表示'+(mdRetiredCount>0?'（'+mdRetiredCount+'名）':'')+'</label>'
+        +'<button class="btn-export" id="btn-md-csv" style="width:auto;padding:8px 18px;margin-left:auto;">📥 CSV出力</button>'
+        +'</div>'
+        +'<div style="font-size:.74rem;color:#8496a7;margin-bottom:8px;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。「·」は出勤なし。</div>'
+        +mdTableHtml
+        +'</div>';
+    }
+
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
@@ -3272,6 +3357,7 @@ function render(){
       +'</button>'
       +'<button class="tab-btn '+(adminTab==="paidleave"?"tab-on":"tab-off")+'" onclick="setTab(\'paidleave\')">有給管理</button>'
       +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
+      +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -3677,6 +3763,28 @@ function render(){
       var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
       var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
       dlCSV(hdrD+"\n"+sdD.map(function(d){return[d.date,d.staff,d.home,d.work,d.inTime,d.outTime,d.ms>0?toHM(d.ms):"",d.wageType].join(",");}).join("\n"),"穂乃味_応援明細_"+selMonth+".csv");
+    };
+
+    // 月別出勤日数
+    var mdYearSel=document.getElementById("sel-md-year");
+    if(mdYearSel)mdYearSel.onchange=function(){monthlyDaysYear=parseInt(mdYearSel.value,10);render();};
+    var mdRetChk=document.getElementById("chk-md-retired");
+    if(mdRetChk)mdRetChk.onchange=function(){monthlyShowRetired=mdRetChk.checked;render();};
+    var mdCsvBtn=document.getElementById("btn-md-csv");
+    if(mdCsvBtn)mdCsvBtn.onclick=function(){
+      var y=monthlyDaysYear;
+      var csvStaff=staffList.filter(function(s){return monthlyShowRetired?true:(s.status!=="退職");})
+        .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+      var csvRecs=records.filter(function(r){return r.type==="clockIn"&&!r.deleted&&r.date&&parseInt(r.date.substring(0,4),10)===y;});
+      var csvMap={};
+      csvRecs.forEach(function(r){var mo=parseInt(r.date.substring(5,7),10)-1;if(mo<0||mo>11)return;if(!csvMap[r.staff])csvMap[r.staff]={};if(!csvMap[r.staff][mo])csvMap[r.staff][mo]={};csvMap[r.staff][mo][r.date]=true;});
+      var hdrMd="氏名,"+[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return m+"月";}).join(",")+",合計,在籍状況";
+      var rowsMd=csvStaff.map(function(s){
+        var tot=0;var cells=[];
+        for(var mo=0;mo<12;mo++){var cnt=(csvMap[s.name]&&csvMap[s.name][mo])?Object.keys(csvMap[s.name][mo]).length:0;tot+=cnt;cells.push(cnt);}
+        return [s.name].concat(cells).concat([tot,s.status||"在籍"]).join(",");
+      });
+      dlCSV(hdrMd+"\n"+rowsMd.join("\n"),"穂乃味_月別出勤日数_"+y+".csv");
     };
 
     // 朝出勤確認 — 最新状態に更新
