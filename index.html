@@ -716,6 +716,35 @@ function calcPaidLeaveSchedule(hireDateStr){
   }
   return result;
 }
+// 週所定労働日数（5日以上=5,4,3,2,1 / 未設定=null）と勤続回数(grantIndex,1始まり)から
+// 法定の比例付与日数を算出する。未設定や不正値は null（＝要確認）を返し、勝手に週5扱いしない。
+function calculatePaidLeaveGrantDays(grantIndex,weeklyWorkDays){
+  var w=parseInt(weeklyWorkDays,10);
+  if(!w||w<1)return null; // 未設定 → 要確認（自動算出しない）
+  if(w>5)w=5;             // 5日以上はすべて週5扱い
+  var gi=parseInt(grantIndex,10);
+  if(!gi||gi<1)return null;
+  if(gi>7)gi=7;           // 6年6か月以降は第7回以降と同一
+  // grantIndex(1=6か月,2=1年6か月,…,7=6年6か月以降) × 週所定労働日数(5,4,3,2,1)
+  var table={
+    1:{5:10,4:7,3:5,2:3,1:1},
+    2:{5:11,4:8,3:6,2:4,1:2},
+    3:{5:12,4:9,3:6,2:4,1:2},
+    4:{5:14,4:10,3:8,2:5,1:2},
+    5:{5:16,4:12,3:9,2:6,1:3},
+    6:{5:18,4:13,3:10,2:6,1:3},
+    7:{5:20,4:15,3:11,2:7,1:3}
+  };
+  var row=table[gi];
+  return(row&&row[w]!=null)?row[w]:null;
+}
+// 週所定労働日数の表示ラベル（未設定は空文字）
+function weeklyWorkDaysLabel(w){
+  var n=parseInt(w,10);
+  if(!n||n<1)return"";
+  if(n>=5)return"週5日以上";
+  return"週"+n+"日";
+}
 function getPaidLeaveUnregistered(){
   var idCounts={};
   staffList.forEach(function(s){if(s.employeeId&&String(s.employeeId).trim()){var k=String(s.employeeId).trim();idCounts[k]=(idCounts[k]||0)+1;}});
@@ -736,7 +765,9 @@ function getPaidLeaveUnregistered(){
       });
       if(!already){
         var dn=(s.lastName&&s.firstName)?s.lastName+'　'+s.firstName:s.name;
-        grants.push({staffId:sid,staffName:s.name,staffDisplayName:dn,hireDate:s.hireDate,grantNum:item.grantNum,grantDate:item.grantDate,expiresAt:item.expiresAt});
+        var wwd=s.weeklyWorkDays;
+        var gdays=calculatePaidLeaveGrantDays(item.grantNum,wwd);
+        grants.push({staffId:sid,staffName:s.name,staffDisplayName:dn,hireDate:s.hireDate,grantNum:item.grantNum,grantDate:item.grantDate,expiresAt:item.expiresAt,weeklyWorkDays:wwd,grantDays:gdays});
       }
     });
   });
@@ -2470,6 +2501,9 @@ function render(){
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">雇用形態</label>'
         +'<select id="modal-emptype" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">週所定労働日数<span style="color:#b45309;font-weight:700;">（有給比例付与）</span></label>'
+        +'<select id="modal-weekdays" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
+        +'<option value="">未設定（要確認）</option>'+[["5","5日以上"],["4","4日"],["3","3日"],["2","2日"],["1","1日"]].map(function(o){return'<option value="'+o[0]+'">'+o[1]+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">権限</label>'
         +'<select id="modal-role" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["一般","管理者"].map(function(r){return'<option value="'+r+'">'+r+'</option>';}).join("")+'</select></div>'
@@ -3068,8 +3102,18 @@ function render(){
           +'</div>'
         :'';
       var _grantRows=_plr.grants.length===0
-        ?'<tr><td colspan="8" style="padding:14px;text-align:center;color:#8496a7;font-size:.8rem;">未登録の付与予定はありません</td></tr>'
+        ?'<tr><td colspan="10" style="padding:14px;text-align:center;color:#8496a7;font-size:.8rem;">未登録の付与予定はありません</td></tr>'
         :_plr.grants.map(function(g,idx){
+          var _wwdSet=(g.grantDays!=null);
+          var _wwdCell=_wwdSet
+            ?'<span style="font-size:.72rem;color:#334155;">'+_esc(weeklyWorkDaysLabel(g.weeklyWorkDays))+'</span>'
+            :'<span style="background:#fffbeb;color:#b45309;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
+          var _daysCell=_wwdSet
+            ?'<span style="font-weight:700;color:#1e40af;font-size:.78rem;">'+_esc(String(g.grantDays))+'日</span>'
+            :'<span style="background:#fffbeb;color:#b45309;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;border:1px solid #fde68a;">要確認</span>';
+          var _grantBtn=_wwdSet
+            ?'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:3px;">付与登録</button>'
+            :'<button disabled title="週所定労働日数が未設定です。スタッフ編集で設定してください。" style="background:#e5e7eb;color:#9ca3af;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:not-allowed;font-family:inherit;margin-right:3px;">付与登録</button>';
           return '<tr>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.staffId)+'</td>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;white-space:nowrap;">'+_esc(g.staffDisplayName)+'</td>'
@@ -3077,9 +3121,11 @@ function render(){
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.hireDate)+'</td>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.grantDate)+'</td>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;font-size:.75rem;font-family:monospace;white-space:nowrap;">'+_esc(g.expiresAt)+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_wwdCell+'</td>'
+            +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;text-align:center;white-space:nowrap;">'+_daysCell+'</td>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;text-align:center;"><span style="background:#fff1f2;color:#dc2626;font-size:.66rem;font-weight:700;padding:2px 6px;border-radius:8px;">未登録</span></td>'
             +'<td style="padding:5px 8px;border-bottom:1px solid #e9ecef;white-space:nowrap;">'
-            +'<button onclick="openPaidLeaveGrantModal('+idx+',false)" style="background:#1e40af;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:3px;">付与登録</button>'
+            +_grantBtn
             +'<button onclick="openPaidLeaveGrantModal('+idx+',true)" style="background:#475569;color:#fff;border:none;padding:3px 8px;border-radius:3px;font-size:.65rem;font-weight:700;cursor:pointer;font-family:inherit;">消化済み</button>'
             +'</td>'
             +'</tr>';
@@ -3100,6 +3146,8 @@ function render(){
         +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">入社日</th>'
         +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">付与予定日</th>'
         +'<th style="padding:5px 8px;text-align:left;font-size:.66rem;font-weight:700;white-space:nowrap;">失効予定日</th>'
+        +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">週所定労働日数</th>'
+        +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">付与日数</th>'
         +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">状態</th>'
         +'<th style="padding:5px 8px;text-align:center;font-size:.66rem;font-weight:700;white-space:nowrap;">操作</th>'
         +'</tr></thead>'
@@ -3932,6 +3980,7 @@ function render(){
       var loc=document.getElementById("modal-location")?.value||"";
       var dept=document.getElementById("modal-dept")?.value||"";
       var et=document.getElementById("modal-emptype")?.value||"";
+      var wwd=document.getElementById("modal-weekdays")?.value||"";
       var role=document.getElementById("modal-role")?.value||"";
       var stat=document.getElementById("modal-status")?.value||"在籍";
       // 退職日の取得
@@ -3989,6 +4038,7 @@ function render(){
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
         s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
+        if(wwd)s.weeklyWorkDays=parseInt(wwd,10); else delete s.weeklyWorkDays;
         var cswEl2=document.getElementById("modal-can-support");
         s.canSupportWork=!!(cswEl2&&cswEl2.checked);
         if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
@@ -3996,6 +4046,7 @@ function render(){
         if(staffList.find(function(s){return s.name===newN;})){showAlert("同名のスタッフが既に存在します");return;}
         var cswEl3=document.getElementById("modal-can-support");
         var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat,canSupportWork:!!(cswEl3&&cswEl3.checked)};
+        if(wwd)newStaff.weeklyWorkDays=parseInt(wwd,10);
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
       }
@@ -4268,6 +4319,8 @@ function openHrmEdit(nm){
   document.getElementById("modal-location").value=s?(s.location||""):"";
   document.getElementById("modal-dept").value=s?(s.dept||""):"";
   document.getElementById("modal-emptype").value=s?(s.employmentType||"パート"):"パート";
+  var wwdEl=document.getElementById("modal-weekdays");
+  if(wwdEl)wwdEl.value=s&&s.weeklyWorkDays!=null?String(s.weeklyWorkDays):"";
   document.getElementById("modal-role").value=s?(s.role||"一般"):"一般";
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
   var cswEl=document.getElementById("modal-can-support");
@@ -5612,8 +5665,10 @@ function openPaidLeaveGrantModal(idx,consumed){
   }
   var gdEl=document.getElementById("pl-grant-date");if(gdEl)gdEl.value=g.grantDate;
   var eaEl=document.getElementById("pl-grant-expires");if(eaEl)eaEl.value=g.expiresAt;
-  var gDays=document.getElementById("pl-grant-days");if(gDays)gDays.value="";
-  var rDays=document.getElementById("pl-grant-remain");if(rDays){rDays.value="";rDays.disabled=!!consumed;}
+  // 週所定労働日数×勤続回数から自動算出した付与日数を初期表示（未設定時は空欄）
+  var _autoDays=(g.grantDays!=null)?String(g.grantDays):"";
+  var gDays=document.getElementById("pl-grant-days");if(gDays)gDays.value=_autoDays;
+  var rDays=document.getElementById("pl-grant-remain");if(rDays){rDays.value=consumed?"":_autoDays;rDays.disabled=!!consumed;}
   var noteEl=document.getElementById("pl-grant-consumed-note");if(noteEl)noteEl.style.display=consumed?"block":"none";
   wrap.style.display="flex";
   var btn=document.getElementById("btn-pl-grant-save");
