@@ -1685,13 +1685,16 @@ function render(){
     var histHTML=tr.length?tr.map(function(r){
       return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;font-weight:600;">'+r.time+'</span></div>';
     }).join(""):'<div class="empty" style="padding:12px 0;">まだ打刻がありません</div>';
-    // ── スタッフ本人向けアプリ内通知（フェーズ1：有給付与のお知らせ＋履歴） ──
+    // ── スタッフ本人向けアプリ内通知（フェーズ1：有給付与・承認のお知らせ＋履歴） ──
     var _snSid=resolveStaffId(staffName);
     var _snList=(_snSid&&staffNotifications[_snSid])
       ?Object.keys(staffNotifications[_snSid]).map(function(k){return staffNotifications[_snSid][k];})
         .filter(Boolean).sort(function(a,b){return (a.createdAt||"")<(b.createdAt||"")?1:-1;}) // 新しい順
       :[];
-    var _snUnread=_snList.filter(function(n){return n&&n.read===false;}).length;
+    var _snUnreadList=_snList.filter(function(n){return n&&n.read===false;});
+    var _snUnread=_snUnreadList.length;
+    // バナー文言：最新の未読通知のタイトル（未読が無ければ最新通知のタイトル）
+    var _snBannerTitle=(_snUnread>0?(_snUnreadList[0].title||""):(_snList.length?(_snList[0].title||""):""))||"お知らせ";
     var _snHtml="";
     if(_snList.length){
       if(staffNotifOpen){
@@ -1710,7 +1713,7 @@ function render(){
       }else{
         _snHtml='<div onclick="staffNotifReadAndOpen()" style="margin:0 0 12px;padding:11px 14px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;'
           +(_snUnread>0?'background:#dbeafe;border:1px solid #93c5fd;':'background:#f1f5f9;border:1px solid #cbd5e1;')+'">'
-          +'<span style="font-size:.9rem;font-weight:700;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">🔔 有給休暇が付与されました'+(_snUnread>0?'（未読'+_snUnread+'件）':'')+'</span>'
+          +'<span style="font-size:.9rem;font-weight:700;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">🔔 '+esc(_snBannerTitle)+(_snUnread>1?'（未読'+_snUnread+'件）':'')+'</span>'
           +'<span style="font-size:.72rem;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">履歴を見る ▼</span></div>';
       }
     }
@@ -3840,6 +3843,7 @@ function render(){
           req.consumedSnapshot=result.consumed; // 消化情報を記録（取消用）
           return patchPaidLeaveRequest(plId,{status:"approved",approvedBy:"管理者",approvedAt:nowIso,consumedSnapshot:result.consumed});
         }).then(function(){
+          createPaidLeaveApprovalNotification(req,resolvedStaffId); // 承認保存成功後のみ・失敗は握りつぶし
           paidLeaveBalanceSaving=false;
           _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
         }).catch(function(e){
@@ -5524,6 +5528,35 @@ function createPaidLeaveGrantNotification(rec){
     }).then(function(res){if(!res.ok)console.error("[notif] save failed",res.status);})
       .catch(function(e){console.error("[notif] network error",e);});
   }catch(e){console.error("[notif] createPaidLeaveGrantNotification error",e);} // 通知失敗は付与に影響させない
+}
+// 有給申請の「承認保存成功後」にのみ呼ぶ。staffId未設定はスキップ。失敗は握りつぶし、承認処理・画面に影響させない。
+// tc5_staff_notifications を付与通知と共用（同じ履歴一覧に並ぶ）。
+function createPaidLeaveApprovalNotification(req,staffId){
+  try{
+    var sid=(staffId||"").trim();
+    if(!sid)return; // 社員番号未設定 → 通知スキップ
+    var dates=(getLeaveDates(req)||[]).slice().sort();
+    if(!dates.length)return;
+    var first=String(dates[0]).replace(/-/g,"/"); // YYYY/MM/DD
+    var remain=getValidRemainDays(sid); // 消化後の有効期限内合算残
+    var body=(dates.length<=1)
+      ? "有給申請が承認されました。取得日："+first+"。現在の残日数は"+remain+"日です。"
+      : "有給申請が承認されました。取得日："+first+" ほか"+(dates.length-1)+"日。現在の残日数は"+remain+"日です。";
+    var nid="pln_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+    var notif={
+      id:nid,staffId:sid,staffName:req.staffName||"",type:"paid_leave_approved",
+      title:"有給申請が承認されました",
+      body:body,
+      leaveDates:dates,remainDays:remain,
+      createdAt:new Date().toISOString(),read:false
+    };
+    if(!staffNotifications[sid])staffNotifications[sid]={};
+    staffNotifications[sid][nid]=notif; // 即時in-memory反映
+    authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+nid+".json",{
+      method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(notif)
+    }).then(function(res){if(!res.ok)console.error("[notif] approval save failed",res.status);})
+      .catch(function(e){console.error("[notif] approval network error",e);});
+  }catch(e){console.error("[notif] createPaidLeaveApprovalNotification error",e);} // 通知失敗は承認に影響させない
 }
 // 打刻画面: 通知履歴を開く＝開いた時点で本人の通知を既読化（要件: 履歴を開いたら既読）
 function staffNotifReadAndOpen(){
