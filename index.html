@@ -959,6 +959,8 @@ var MD_OVERRIDE_MONTHS={"2026-04":1,"2026-05":1};
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
+var staffNotifications={}; // tc5_staff_notifications キャッシュ（社員番号→{notifId→通知}）。スタッフ本人向けアプリ内通知
+var staffNotifOpen=false; // 打刻画面: 通知履歴の展開トグル（開いた時に既読化）
 var _paidLeaveGrantsCache=[]; // 未登録付与一覧キャッシュ（paidleaveタブ描画中のみ有効）
 var _plGrantModalOpen=false; // 有給付与登録モーダル表示中フラグ（render()でのclose防止用）
 var _paidLeaveRenderGuard=false; // 有給管理タブ表示中の自動再描画抑制フラグ（polling由来のrender()をスキップ）
@@ -1683,12 +1685,42 @@ function render(){
     var histHTML=tr.length?tr.map(function(r){
       return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;font-weight:600;">'+r.time+'</span></div>';
     }).join(""):'<div class="empty" style="padding:12px 0;">まだ打刻がありません</div>';
+    // ── スタッフ本人向けアプリ内通知（フェーズ1：有給付与のお知らせ＋履歴） ──
+    var _snSid=resolveStaffId(staffName);
+    var _snList=(_snSid&&staffNotifications[_snSid])
+      ?Object.keys(staffNotifications[_snSid]).map(function(k){return staffNotifications[_snSid][k];})
+        .filter(Boolean).sort(function(a,b){return (a.createdAt||"")<(b.createdAt||"")?1:-1;}) // 新しい順
+      :[];
+    var _snUnread=_snList.filter(function(n){return n&&n.read===false;}).length;
+    var _snHtml="";
+    if(_snList.length){
+      if(staffNotifOpen){
+        var _snRows=_snList.slice(0,10).map(function(n){ // 最大10件
+          return '<div style="padding:8px 12px;border-top:1px solid #e5e7eb;'+(n.read?'':'background:#eff6ff;')+'">'
+            +'<div style="font-size:.84rem;font-weight:700;color:#1e3a8a;">'+esc(n.title||"")+'</div>'
+            +'<div style="font-size:.82rem;color:#334155;margin-top:2px;line-height:1.5;">'+esc(n.body||"")+'</div>'
+            +'<div style="font-size:.68rem;color:#94a3b8;margin-top:3px;font-family:monospace;">'+esc((n.createdAt||"").slice(0,10))+'</div>'
+            +'</div>';
+        }).join("");
+        _snHtml='<div style="margin:0 0 12px;border:1px solid #93c5fd;border-radius:8px;overflow:hidden;">'
+          +'<div onclick="staffNotifOpen=false;render();" style="display:flex;justify-content:space-between;align-items:center;padding:9px 12px;background:#dbeafe;cursor:pointer;">'
+          +'<span style="font-size:.86rem;font-weight:700;color:#1e40af;">🔔 お知らせ</span>'
+          +'<span style="font-size:.72rem;color:#1e40af;">閉じる ▲</span></div>'
+          +_snRows+'</div>';
+      }else{
+        _snHtml='<div onclick="staffNotifReadAndOpen()" style="margin:0 0 12px;padding:11px 14px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;'
+          +(_snUnread>0?'background:#dbeafe;border:1px solid #93c5fd;':'background:#f1f5f9;border:1px solid #cbd5e1;')+'">'
+          +'<span style="font-size:.9rem;font-weight:700;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">🔔 有給休暇が付与されました'+(_snUnread>0?'（未読'+_snUnread+'件）':'')+'</span>'
+          +'<span style="font-size:.72rem;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">履歴を見る ▼</span></div>';
+      }
+    }
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
       +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+staffName+'</div>'
       +'<div class="clock" id="clk" style="margin-top:6px;">'+fmtTimeSec(now)+'</div>'
       +'<div class="date-disp">'+fmtDate(now)+'</div>'
       +'</div>'
+      +_snHtml
       +(punchMsg
         ?'<div style="text-align:center;padding:36px 20px;">'
           +'<div style="font-size:3.5rem;margin-bottom:12px;">✅</div>'
@@ -4524,7 +4556,7 @@ function closeHrmModal(){
   var m=document.getElementById("hrm-modal");if(m)m.style.display="none";
 }
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
-function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];screen="home";render();}
+function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();}
 function goPin(){pinInput="";pinError=false;screen="pin";render();}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
@@ -4564,6 +4596,7 @@ function selStaff(s){
   if(firebaseError){alert("通信エラーです。画面を再読み込みしてください");return;}
   if(!firebaseReady){alert("読込中です。数秒お待ちください");return;}
   staffName=s;
+  staffNotifOpen=false; // 別スタッフ選択時は通知履歴の展開状態をリセット
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
     screen="staffPin"; // PIN認証画面へ
@@ -5459,14 +5492,56 @@ function todayDateStr(){
 // \u6709\u7D66\u6B8B\u65E5\u6570\u3092 Firebase \u306B\u65B0\u898F\u4FDD\u5B58\uFF08PUT\u3001id \u30AD\u30FC\u3067\u4FDD\u5B58\uFF09
 function savePaidLeaveBalance(bal){
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(bal.id)+".json";
+  // 解決値は保存成否(boolean)。既存呼び出しは戻り値未使用のため後方互換。例外時もrejectせずfalseを返す。
   return authFetch(url,{
     method:"PUT",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify(bal)
   }).then(function(res){
-    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance save error",res.status,t);});}
-    else{console.log("[PaidLeave] balance saved",bal.id);}
-  }).catch(function(e){console.error("[PaidLeave] balance network error",e);});
+    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance save error",res.status,t);});return false;}
+    console.log("[PaidLeave] balance saved",bal.id);return true;
+  }).catch(function(e){console.error("[PaidLeave] balance network error",e);return false;});
+}
+// ===== スタッフ本人向けアプリ内通知（フェーズ1：tc5_staff_notifications） =====
+// 有給付与の「保存成功後」にのみ呼ぶ。staffId未設定はスキップ。失敗は握りつぶし、付与処理・画面に影響させない。
+function createPaidLeaveGrantNotification(rec){
+  try{
+    var sid=(rec&&rec.staffId||"").trim();
+    if(!sid)return; // 社員番号未設定 → 通知スキップ
+    var remain=getValidRemainDays(sid); // recはpaidLeaveBalancesにpush済 → 有効期限内の合算残（今回付与含む）
+    var nid="pln_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+    var notif={
+      id:nid,staffId:sid,staffName:rec.staffName||"",type:"paid_leave_grant",
+      title:"有給休暇が付与されました",
+      body:(rec.grantedDays)+"日分の有給休暇が付与されました。現在の残日数は"+remain+"日です。",
+      grantDays:rec.grantedDays,remainDays:remain,
+      createdAt:new Date().toISOString(),read:false
+    };
+    if(!staffNotifications[sid])staffNotifications[sid]={};
+    staffNotifications[sid][nid]=notif; // 即時in-memory反映
+    authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+nid+".json",{
+      method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(notif)
+    }).then(function(res){if(!res.ok)console.error("[notif] save failed",res.status);})
+      .catch(function(e){console.error("[notif] network error",e);});
+  }catch(e){console.error("[notif] createPaidLeaveGrantNotification error",e);} // 通知失敗は付与に影響させない
+}
+// 打刻画面: 通知履歴を開く＝開いた時点で本人の通知を既読化（要件: 履歴を開いたら既読）
+function staffNotifReadAndOpen(){
+  try{var sid=resolveStaffId(staffName);if(sid)markStaffNotifRead(sid);}catch(e){console.error("[notif] open error",e);}
+  staffNotifOpen=true;render();
+}
+// 当該スタッフの未読通知をすべて既読化（in-memory即時＋Firebase反映）。失敗は握りつぶし。
+function markStaffNotifRead(sid){
+  sid=(sid||"").trim();if(!sid)return;
+  var map=staffNotifications[sid];if(!map)return;
+  Object.keys(map).forEach(function(nid){
+    if(map[nid]&&map[nid].read===false){
+      map[nid].read=true;
+      authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+nid+"/read.json",{
+        method:"PUT",headers:{"Content-Type":"application/json"},body:"true"
+      }).catch(function(e){console.error("[notif] mark read error",e);});
+    }
+  });
 }
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u306B PATCH\uFF08\u90E8\u5206\u66F4\u65B0\uFF09
@@ -5696,6 +5771,7 @@ async function initFirebase() {
       fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
       fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
       fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
+      fetchJson(FB_URL+"/tc5_staff_notifications.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
@@ -5704,6 +5780,7 @@ async function initFirebase() {
     var fbViewerTokenData=results[10],fbDemoAccess=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
     var fbMonthlyImport=results[14];
+    var fbStaffNotifications=results[15];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -5732,6 +5809,8 @@ async function initFirebase() {
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
     // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
     if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
+    // スタッフ本人向け通知（社員番号→{notifId→通知}）
+    if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
     // デモアクセス
     if(fbDemoAccess){demoAccessConfig=fbDemoAccess;}
     // 有給申請
@@ -5915,8 +5994,9 @@ function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt
     createdAt:new Date().toISOString()
   };
   paidLeaveBalances.push(rec);
-  savePaidLeaveBalance(rec).catch(function(){
-    showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
+  savePaidLeaveBalance(rec).then(function(ok){
+    if(!ok){showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");return;}
+    createPaidLeaveGrantNotification(rec); // 付与保存成功後のみ。staffId未設定skip・失敗は握りつぶし
   });
   closePaidLeaveGrantModal();
   render();
