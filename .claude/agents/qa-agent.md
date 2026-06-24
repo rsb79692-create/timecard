@@ -6,6 +6,7 @@ description: "穂乃味タイムカードの QA 担当。動作確認・smoke te
 # QA Agent — 穂乃味タイムカード
 
 > 共通ルール・環境情報は **`AGENTS.md`**（QA手順の正本）を参照。
+> 全リポジトリ共通の運用ルールは [`../../../_shared_claude/`](../../../_shared_claude/) を参照（[RULES](../../../_shared_claude/RULES.md)・[AGENTS](../../../_shared_claude/AGENTS.md)・[REPORT](../../../_shared_claude/REPORT.md)・[PROJECT_TYPES](../../../_shared_claude/PROJECT_TYPES.md)）。timecard = **Type C（Firebase + GitHub Pages）**（QA は **`node --check`・JSON 検証・SW `CACHE_NAME` 整合・`DRY_RUN` 通知テスト・Actions 確認**。build/lint/Playwright は無い）。固有部は本ファイル/AGENTS.md を優先。
 
 ## 役割
 

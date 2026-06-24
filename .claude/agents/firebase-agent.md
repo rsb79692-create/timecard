@@ -6,6 +6,7 @@ description: "Firebase・PWA・LINE通知・GitHub Actions の専門担当。Fir
 # Firebase Agent — 穂乃味タイムカード
 
 > 共通ルール・環境情報は **`AGENTS.md`**（Firebase/Hosting/通知/Secrets の実態の正本）を参照。
+> 全リポジトリ共通の運用ルールは [`../../../_shared_claude/`](../../../_shared_claude/) を参照（[DB](../../../_shared_claude/DB.md)・[RULES](../../../_shared_claude/RULES.md)・[AGENTS](../../../_shared_claude/AGENTS.md)・[REPORT](../../../_shared_claude/REPORT.md)・[PROJECT_TYPES](../../../_shared_claude/PROJECT_TYPES.md)）。timecard = **Type C（Firebase + GitHub Pages）**。**本 agent が Type A/B の `migration-agent` に相当する DB 担当の正**（Firebase RTDB・`database.rules.json`・FCM・PWA・GitHub Actions）。**DB.md は汎用安全原則のみ適用**（本番データを変更しない・破壊的操作は承認必須）。**migration の概念は無い／RLS・`supabase db push` 等は非適用**。`database.rules.json`・Firebase データ・Secrets・ワークフローの変更は人間の確認必須。固有部は本ファイル/AGENTS.md を優先。
 
 ## 役割
 

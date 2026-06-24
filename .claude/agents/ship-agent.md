@@ -6,6 +6,7 @@ description: "穂乃味タイムカードの出荷担当。git commit → push �
 # Ship Agent — 穂乃味タイムカード
 
 > 共通ルール・環境情報は **`AGENTS.md`**（commit/push/deploy確認ルールの正本）を参照。
+> 全リポジトリ共通の運用ルールは [`../../../_shared_claude/`](../../../_shared_claude/) を参照（[DEPLOY](../../../_shared_claude/DEPLOY.md)=出荷手順/commit ID必須・[RULES](../../../_shared_claude/RULES.md)・[AGENTS](../../../_shared_claude/AGENTS.md)・[REPORT](../../../_shared_claude/REPORT.md)・[PROJECT_TYPES](../../../_shared_claude/PROJECT_TYPES.md)）。timecard = **Type C（Firebase + GitHub Pages）**（**`agent:ship` なし**＝`git push origin main` → **GitHub Pages 自動配信**。**DEPLOY.md の「Vercel READY」は GitHub Pages／Actions の確認に読み替え**・health は `rsb79692-create.github.io/timecard/`・`vercel --prod` しない）。固有部は本ファイル/AGENTS.md を優先。
 
 ## 役割
 

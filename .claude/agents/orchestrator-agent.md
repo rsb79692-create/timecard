@@ -6,6 +6,7 @@ description: "穂乃味タイムカードの統括担当。debug → qa → ship
 # Orchestrator Agent — 穂乃味タイムカード
 
 > 共通ルール・環境情報は **`AGENTS.md`**（禁止事項・QA手順・commit/push/deploy確認ルールの正本）を参照。
+> 全リポジトリ共通の運用ルールは [`../../../_shared_claude/`](../../../_shared_claude/) を参照（[AGENTS](../../../_shared_claude/AGENTS.md)=agent役割/チェーン・[RULES](../../../_shared_claude/RULES.md)=orchestrator起点/禁止事項・[DEPLOY](../../../_shared_claude/DEPLOY.md)・[DB](../../../_shared_claude/DB.md)・[REPORT](../../../_shared_claude/REPORT.md)・[PROJECT_TYPES](../../../_shared_claude/PROJECT_TYPES.md)）。timecard = **Type C（Firebase + GitHub Pages）**。**DB 担当は migration-agent ではなく firebase-agent**／**DB.md は汎用安全原則のみ**／**DEPLOY.md の Vercel READY は GitHub Pages・Actions に読み替え**。固有部は本ファイル/AGENTS.md を優先。
 
 ## 役割
 
