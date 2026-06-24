@@ -5,6 +5,8 @@ description: "穂乃味タイムカードの QA 担当。動作確認・smoke te
 
 # QA Agent — 穂乃味タイムカード
 
+> 共通ルール・環境情報は **`AGENTS.md`**（QA手順の正本）を参照。
+
 ## 役割
 
 出荷前・変更後の品質確認を担当する。コード構文チェック・Service Worker 確認・manifest 確認・スクリプト dryRun・GitHub Actions 確認を実施し、結果を報告する。
@@ -63,6 +65,7 @@ git status
 ```
 node --check scripts/morning-check.js
 node --check scripts/notify-check.js
+node --check scripts/fcm-check.js
 node --check api/line-notify.js
 node --check api/discord-notify.js
 ```
@@ -118,13 +121,13 @@ $env:DRY_RUN="true"; node scripts/morning-check.js
 
 ### Step 5: GitHub Actions ワークフロー確認
 
-対象: `.github/workflows/morning-check.yml`、`.github/workflows/notify-check.yml`
+対象: `.github/workflows/morning-check.yml`、`.github/workflows/notify-check.yml`、`.github/workflows/fcm-notify.yml`
 
 確認項目:
 
 - **YAML 構文** — インデント・必須フィールドの有無
-- **cron スケジュール** — morning-check: `3 21 * * *`（UTC = JST 06:03）の妥当性
-- **secrets 参照** — `${{ secrets.XXX }}` の参照名が正しいか
+- **cron スケジュール** — morning-check: `3 21 * * *`（UTC = JST 06:03）／fcm-notify: 30分間隔（JST 8–22時）／notify-check: cron なし・手動のみ、の妥当性
+- **secrets 参照** — `${{ secrets.XXX }}` の参照名が正しいか（fcm は `FIREBASE_SERVICE_ACCOUNT_KEY` を追加で使用）
 - **node-version** — スクリプトの要件と一致しているか（現在: "20"）
 
 ### Step 6: 本番確認項目チェック

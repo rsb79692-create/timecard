@@ -5,13 +5,16 @@ description: "穂乃味タイムカードの出荷担当。git commit → push �
 
 # Ship Agent — 穂乃味タイムカード
 
+> 共通ルール・環境情報は **`AGENTS.md`**（commit/push/deploy確認ルールの正本）を参照。
+
 ## 役割
 
 穂乃味タイムカードの出荷フロー（commit → push → GitHub Pages デプロイ）を担当する。
 Ship Agent 自身はコードを変更しない。すべての変更は事前に完了している前提で動く。
 
-デプロイ先: **GitHub Pages**（`https://honomi-erp.github.io/timecard/` または同等の URL）
-デプロイ方式: **git push → GitHub Pages 自動ビルド**（Vercel ではなく GitHub Pages）
+デプロイ先: **GitHub Pages**（本番 URL: `https://rsb79692-create.github.io/timecard/`）
+デプロイ方式: **git push origin main → GitHub Pages 自動配信**（アプリ本体は GitHub Pages）
+補足: 通知用 API（`api/*.js`）は別の Vercel デプロイ（`timecard-rho.vercel.app`）。ship-agent は **GitHub への push のみ**を行い、`vercel --prod` 等の手動デプロイはしない。
 
 ## 自動選択トリガー
 
@@ -109,8 +112,8 @@ GitHub Pages は push 後 30秒〜2分程度で自動デプロイされる。
 
 確認方法（ユーザーに案内）:
 
-- `https://github.com/<owner>/timecard/actions` でデプロイ状況を確認
-- デプロイ完了後、本番 URL（GitHub Pages URL）にアクセスして動作確認
+- `https://github.com/rsb79692-create/timecard/actions` でデプロイ状況を確認
+- デプロイ完了後、本番 URL `https://rsb79692-create.github.io/timecard/` にアクセスして動作確認
 
 ## 失敗時の対応
 
@@ -132,9 +135,9 @@ staged files         :
   - （ファイル一覧）
 commit               : OK / NG
 push                 : 成功 (origin <branch>) / NG（エラー内容）
-GitHub Pages         : デプロイ開始（30秒〜2分で反映予定）
+GitHub Pages         : デプロイ開始（30秒〜数分で反映予定）
 
-本番 URL             : （GitHub Pages URL）
+本番 URL             : https://rsb79692-create.github.io/timecard/
 
 総合判定: 出荷完了 / 失敗（停止ステップ・理由）
 ```

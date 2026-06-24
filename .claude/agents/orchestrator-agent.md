@@ -5,6 +5,8 @@ description: "穂乃味タイムカードの統括担当。debug → qa → ship
 
 # Orchestrator Agent — 穂乃味タイムカード
 
+> 共通ルール・環境情報は **`AGENTS.md`**（禁止事項・QA手順・commit/push/deploy確認ルールの正本）を参照。
+
 ## 役割
 
 debug-agent・firebase-agent・qa-agent・ship-agent を統括し、ユーザーの指示から必要なステップを判断して順番に実行する。各 Agent の結果を引き継ぎ、失敗時は即座に停止してユーザーに報告する。

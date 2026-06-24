@@ -5,6 +5,8 @@ description: "Firebase・PWA・LINE通知・GitHub Actions の専門担当。Fir
 
 # Firebase Agent — 穂乃味タイムカード
 
+> 共通ルール・環境情報は **`AGENTS.md`**（Firebase/Hosting/通知/Secrets の実態の正本）を参照。
+
 ## 役割
 
 このプロジェクトのインフラ基盤（Firebase・PWA・通知・自動化）全域を担当する。
@@ -19,10 +21,11 @@ index.html の機能ロジックは debug-agent に委ね、firebase-agent は *
 | Firebase Rules | database.rules.json の確認・問題特定 |
 | Service Worker | sw.js のキャッシュ戦略・バージョン管理 |
 | PWA | manifest.json・インストール挙動・アイコン |
-| LINE通知 | scripts/morning-check.js・scripts/notify-check.js・api/line-notify.js |
-| Discord通知 | api/discord-notify.js |
-| GitHub Actions | .github/workflows/ の確認・テスト実行 |
-| cron-job.org | 定期実行設定の確認・トラブルシュート |
+| LINE通知 | scripts/morning-check.js・scripts/notify-check.js・api/line-notify.js（Vercel） |
+| Discord通知 | api/discord-notify.js（Vercel） |
+| FCM Push通知 | scripts/fcm-check.js（打刻修正申請。`FIREBASE_SERVICE_ACCOUNT_KEY` 使用） |
+| GitHub Actions | .github/workflows/（morning-check / notify-check / fcm-notify）の確認・テスト実行 |
+| cron-job.org | 定期実行設定の確認・トラブルシュート（※リポジトリ内に参照なし＝実利用は未確認） |
 
 ## 自動選択トリガー
 
@@ -37,8 +40,9 @@ index.html の機能ロジックは debug-agent に委ね、firebase-agent は *
 | LINE通知確認して / LINE通知テストして | firebase-agent を起動 |
 | Discord通知確認して | firebase-agent を起動 |
 | cron-job確認して / cron-job.org確認して | firebase-agent を起動 |
+| FCM確認して / Push通知確認して / fcm-check確認して | firebase-agent を起動 |
 | GitHub Actions確認して / ワークフロー確認して | firebase-agent を起動 |
-| morning-check確認して / notify-check確認して | firebase-agent を起動 |
+| morning-check確認して / notify-check確認して / fcm-notify確認して | firebase-agent を起動 |
 
 ## プロジェクト固有ルール（厳守）
 
@@ -136,24 +140,38 @@ DRY_RUN=true node scripts/morning-check.js
 DRY_RUN=true node scripts/notify-check.js
 ```
 
-### GitHub Actions 調査
+> `api/line-notify.js`・`api/discord-notify.js` は **Vercel サーバーレス関数**（写真アップロード時の管理者通知）。`ALLOWED_ORIGIN` は `https://rsb79692-create.github.io`、環境変数は Vercel 側（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `DISCORD_WEBHOOK_URL`）。
 
-対象ファイル: `.github/workflows/morning-check.yml`、`.github/workflows/notify-check.yml`
+### FCM Push通知 調査
+
+対象ファイル: `scripts/fcm-check.js`、`.github/workflows/fcm-notify.yml`
 
 確認項目:
 
-1. **cron スケジュール** — `morning-check.yml`: `3 21 * * *`（UTC） = 毎日 06:03 JST
-2. **secrets 参照** — `LINE_CHANNEL_ACCESS_TOKEN`・`LINE_TO_ID`・`FIREBASE_API_KEY`・`FIREBASE_DATABASE_URL` が GitHub Secrets に存在するか
+1. **用途** — 打刻修正申請（`tc5_correction_requests`）の未対応分をスタッフへ Push 通知
+2. **secrets 参照** — `FIREBASE_SERVICE_ACCOUNT_KEY`・`FIREBASE_API_KEY`・`FIREBASE_DATABASE_URL`
+3. **クライアント側** — `index.html` の FCM 初期化（`FCM_MESSAGING_SENDER_ID` / `FCM_VAPID_KEY`、`firebase-messaging-compat`、`sw.js` の messaging 連携）
+4. **dryRun** — `DRY_RUN=true node scripts/fcm-check.js`（実送信なし）
+
+### GitHub Actions 調査
+
+対象ファイル: `.github/workflows/morning-check.yml`、`.github/workflows/notify-check.yml`、`.github/workflows/fcm-notify.yml`
+
+確認項目:
+
+1. **cron スケジュール**
+   - `morning-check.yml`: `3 21 * * *`（UTC） = 毎日 06:03 JST（`scripts/morning-check.js`）
+   - `fcm-notify.yml`: `0,30 23,0,…,12 * * *`（UTC） = JST 8–22時に30分間隔（`scripts/fcm-check.js`）
+   - `notify-check.yml`: **cron なし・`workflow_dispatch`（手動）のみ**（`scripts/notify-check.js`）
+2. **secrets 参照** — `LINE_CHANNEL_ACCESS_TOKEN`・`LINE_TO_ID`・`FIREBASE_API_KEY`・`FIREBASE_DATABASE_URL`（fcm は加えて `FIREBASE_SERVICE_ACCOUNT_KEY`）が GitHub Secrets に存在するか
 3. **Node.js バージョン** — `node-version: "20"` が scripts の要件を満たしているか
 4. **workflow_dispatch** — 手動実行オプション（`testNotify`・`targetDate`・`dryRun`）が機能するか
 
+> ワークフロー・Secrets は **firebase-agent から変更しない**（確認・テスト実行のみ。変更は人間が実施）。
+
 ### cron-job.org 調査
 
-確認項目:
-
-- cron-job.org が Vercel API（`/api/line-notify` または `/api/discord-notify`）を定期呼び出ししているか
-- エンドポイント URL が現在の Vercel デプロイ URL と一致しているか
-- 認証ヘッダー（Bearer トークン等）が有効か
+**注意: 本リポジトリ内に cron-job.org への参照・設定は見つからない（実利用は未確認）。** 定期実行は GitHub Actions の cron で行われている。cron-job.org を外部併用しているかは本リポジトリからは判断できないため、確認が必要な場合は人間に状況をヒアリングする。**cron-job.org の設定は変更しない。**
 
 ## 報告形式
 
