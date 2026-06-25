@@ -3601,6 +3601,135 @@ function render(){
         +'</div>';
     }
 
+    if(adminTab==="leavePlan"){
+      // ===== 有給取得計画（管理者専用・read-only・スタッフ側非表示・通知なし・申請データ作成なし） =====
+      // 既存の有給データ（tc5_paid_leave_balances=期限別残数 / tc5_paid_leave_requests=消化）から
+      // 期限切れ前に消化を促すための「目安」を表示するのみ。tc5_* への書き込みは一切行わない。
+      var lpToday=todayDateStr();
+      var _lpNow=new Date();
+      var lpCurIdx=_lpNow.getFullYear()*12+_lpNow.getMonth(); // 当月の通し月インデックス
+      function lpIdxToYm(idx){var y=Math.floor(idx/12),m=idx%12;return{idx:idx,y:y,m:m,key:y+"-"+pad(m+1),label:y+"年"+(m+1)+"月"};}
+      function lpExpToIdx(exp){if(!exp||exp.length<7)return -1;var ey=parseInt(exp.substring(0,4),10),em=parseInt(exp.substring(5,7),10);if(isNaN(ey)||isNaN(em))return -1;return ey*12+(em-1);}
+      function lpRound(x){return Math.round(x*2)/2;} // 0.5日単位に丸める（目安表示）
+      function lpFmtDays(v){return v%1===0?String(v):v.toFixed(1);}
+      // 対象: 正社員 かつ 在籍（退職以外）。雇用形態未設定（""）は対象外（ユーザー確定仕様）
+      var lpStaff=staffList.filter(function(s){return (s.employmentType||"")==="正社員"&&s.status!=="退職";})
+        .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+      // 雇用形態未設定（在籍）の人数（除外中である旨の注意表示用）
+      var lpUnsetCount=staffList.filter(function(s){return s.status!=="退職"&&(s.employmentType||"")==="";}).length;
+      // 残数を正規化（expiresAt/staffId補完。Firebaseへは書き戻さない）
+      var lpNorm=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);});
+      // 承認済み取得日数（月別・参考表示用）: staffId(employeeId) -> "YYYY-MM" -> 日数
+      // ※残数・推奨は employeeId 基準のため、実績も getReqStaffId で employeeId に解決して同基準で集計（同姓同名の誤集計を防止）
+      var lpTaken={};
+      paidLeaveRequests.forEach(function(r){
+        if(r.status!=="approved")return;
+        var rsid=getReqStaffId(r);if(!rsid)return; // 解決不可（重複/空氏名）は参考実績から除外
+        getLeaveDates(r).forEach(function(d){
+          var mk=monthKey(d);if(!mk)return;
+          if(!lpTaken[rsid])lpTaken[rsid]={};
+          lpTaken[rsid][mk]=(lpTaken[rsid][mk]||0)+1;
+        });
+      });
+      // 各社員の有効残（期限内・残>0）を期限昇順で取得し、残合計・直近失効を算出
+      var lpMaxExpIdx=lpCurIdx;
+      var lpData=lpStaff.map(function(s){
+        var sid=(s.employeeId||"").trim();
+        var bals=sid?lpNorm.filter(function(b){return b.staffId===sid&&b.expiresAt>=lpToday&&b.remainDays>0;}):[];
+        bals.sort(function(a,b){return (a.expiresAt||"").localeCompare(b.expiresAt||"");});
+        var remain=bals.reduce(function(sum,b){return Math.round((sum+b.remainDays)*10)/10;},0);
+        bals.forEach(function(b){var ei=lpExpToIdx(b.expiresAt);if(ei>lpMaxExpIdx)lpMaxExpIdx=ei;});
+        return{s:s,sid:sid,bals:bals,remain:remain,noId:!sid,
+          nextExp:bals.length?bals[0].expiresAt:"",nextExpDays:bals.length?bals[0].remainDays:0};
+      });
+      // 表示月の範囲: 当月 ～ 対象社員の最遅失効月（最大12ヶ月）。超過分は省略注記。
+      var lpFullSpan=lpMaxExpIdx-lpCurIdx+1;
+      var lpSpan=Math.max(1,Math.min(lpFullSpan,12));
+      var lpTruncated=lpFullSpan>12;
+      var lpMonths=[];for(var lpk=0;lpk<lpSpan;lpk++){lpMonths.push(lpIdxToYm(lpCurIdx+lpk));}
+      // 月別推奨日数: 各付与の残日数を「当月～その付与の失効月」に均等配分し合算（FIFO/期限別の残数ベース）
+      // ※残数(remainDays)は消化済みを既に差し引いた値のため、推奨日数は実績消化を考慮済み（純増分）
+      lpData.forEach(function(d){
+        var plan={};
+        d.bals.forEach(function(b){
+          var ei=lpExpToIdx(b.expiresAt);
+          var n=ei-lpCurIdx+1;if(n<1)n=1;
+          var per=b.remainDays/n;
+          for(var mi=lpCurIdx;mi<=ei;mi++){plan[mi]=(plan[mi]||0)+per;}
+        });
+        d.plan=plan;
+      });
+      // スタイル（月別出勤日数タブと同系統）
+      var _lpTh='padding:13px 12px;font-weight:700;font-size:15px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _lpTd='padding:13px 12px;font-size:16px;';
+      var _lpName='padding:13px 16px;font-size:16px;font-weight:600;white-space:nowrap;min-width:170px;';
+      var lpSticky='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
+      var lpStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var lpMonthTotals={};
+      lpMonths.forEach(function(mo){var t=0;lpData.forEach(function(d){t+=(d.plan[mo.idx]||0);});lpMonthTotals[mo.idx]=t;});
+      var lpRows=lpData.length?lpData.map(function(d,ri){
+        var s=d.s;
+        var rowBg=ri%2===1?'#f8fafc':'#ffffff';
+        var noIdTag=d.noId?' <span style="font-size:.66rem;color:#fff;background:#f59e0b;border-radius:8px;padding:1px 7px;vertical-align:middle;">社員番号未設定</span>':'';
+        var expCell;
+        if(d.nextExp){
+          var urgent=(lpExpToIdx(d.nextExp)-lpCurIdx)<=2; // 3ヶ月以内の失効は強調
+          expCell='<span style="'+(urgent?'color:#b91c1c;font-weight:800;':'color:#0f172a;')+'">'+d.nextExp+'</span>'
+            +'<span style="font-size:.72rem;color:#64748b;"> ('+lpFmtDays(lpRound(d.nextExpDays))+'日)</span>';
+        }else{
+          expCell='<span style="color:#94a3b8;">—</span>';
+        }
+        var tds='';
+        lpMonths.forEach(function(mo){
+          var rec=lpRound(d.plan[mo.idx]||0);
+          var took=(d.sid&&lpTaken[d.sid]&&lpTaken[d.sid][mo.key])?lpTaken[d.sid][mo.key]:0;
+          var disp='';
+          if(rec>0)disp='<span style="font-weight:700;color:#0f172a;">'+lpFmtDays(rec)+'</span>';
+          if(took>0)disp+='<div style="font-size:.66rem;color:#16a34a;">済'+took+'</div>';
+          tds+='<td style="'+_lpTd+'text-align:right;min-width:70px;">'+(disp||'')+'</td>';
+        });
+        return '<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
+          +'<td style="'+_lpName+lpSticky+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+noIdTag+'</td>'
+          +'<td style="'+_lpTd+'text-align:right;font-weight:800;color:#1e3a8a;white-space:nowrap;">'+lpFmtDays(lpRound(d.remain))+'日</td>'
+          +'<td style="'+_lpTd+'white-space:nowrap;">'+expCell+'</td>'
+          +tds
+          +'</tr>';
+      }).join(""):'';
+      var lpMonthHead=lpMonths.map(function(mo){return '<th style="'+_lpTh+'text-align:right;min-width:70px;">'+mo.label+'</th>';}).join("");
+      var lpFootCells=lpMonths.map(function(mo){var t=lpRound(lpMonthTotals[mo.idx]||0);return '<td style="'+_lpTd+'text-align:right;font-weight:700;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(t>0?lpFmtDays(t):'')+'</td>';}).join("");
+      var lpMinW=470+lpSpan*74;
+      var lpTableHtml=lpData.length
+        ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:'+lpMinW+'px;">'
+          +'<thead><tr>'
+          +'<th style="'+_lpTh+'text-align:left;'+lpStickyHead+'">氏名</th>'
+          +'<th style="'+_lpTh+'text-align:right;white-space:nowrap;">現在の残日数</th>'
+          +'<th style="'+_lpTh+'text-align:left;white-space:nowrap;">直近の失効予定</th>'
+          +lpMonthHead
+          +'</tr></thead>'
+          +'<tbody>'+lpRows+'</tbody>'
+          +'<tfoot><tr>'
+          +'<td style="'+_lpName+lpSticky+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">月別推奨計</td>'
+          +'<td style="'+_lpTd+'background:#eef1f5;border-top:2px solid #94a3b8;"></td>'
+          +'<td style="'+_lpTd+'background:#eef1f5;border-top:2px solid #94a3b8;"></td>'
+          +lpFootCells
+          +'</tr></tfoot>'
+          +'</table></div>'
+        :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象の社員（正社員・在籍）がいません</div>';
+      tc='<div class="admin-card admin-wrap">'
+        +'<div class="admin-title">🌴 有給取得計画（社員）</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:12px;line-height:1.7;">'
+        +'対象は<b>正社員（在籍）</b>のみ。失効予定の有給を期限月までに使い切れるよう、現在の残日数を当月から失効月まで均等配分した<b>取得推奨日数の目安</b>です（0.5日単位）。'
+        +'<br>残日数・推奨日数は<b>消化済みを差し引いた残数</b>から算出しています。各月セル下の <span style="color:#16a34a;font-weight:700;">済N</span> はその月に承認済みの取得実績（参考）。'
+        +'<br>3ヶ月以内に失効する有給は<span style="color:#b91c1c;font-weight:800;">赤字</span>で表示します。'
+        +'<br>⚠ これは管理者向けの目安表示のみで、有給申請データの新規作成・スタッフへの通知は行いません。'
+        +(lpUnsetCount>0?'<br><span style="display:inline-block;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:3px;padding:1px 7px;font-weight:700;">注意</span> 雇用形態が未設定の在籍スタッフ '+lpUnsetCount+'名を対象外（非表示）にしています。スタッフ管理で雇用形態を設定すると対象になります。':'')
+        +(lpTruncated?'<br><span style="color:#92400e;">※失効が13ヶ月以上先の付与があるため、表示は当月から12ヶ月分に省略しています（残日数列には全期間分を反映）。</span>':'')
+        +'</div>'
+        +lpTableHtml
+        +'</div>';
+    }
+
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
@@ -3639,6 +3768,7 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="paidleave"?"tab-on":"tab-off")+'" onclick="setTab(\'paidleave\')">有給管理</button>'
       +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
       +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
+      +'<button class="tab-btn '+(adminTab==="leavePlan"?"tab-on":"tab-off")+'" onclick="setTab(\'leavePlan\')">有給取得計画</button>'
       +'</div>'
       +'</div>'+tc;
 
