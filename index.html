@@ -139,6 +139,84 @@ function mdSaveCell(inputEl, eid, ym){
   }).catch(function(e){console.error("[mdSaveCell] network error:",eid,e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
 }
 
+// ===== 賄い（まかない）取得記録ヘルパー =====
+// 編集可否判定（将来の月次締め機能に備えて関数化）。現状は未来月のみ入力不可、過去月・当月は編集可。
+// 締め機能を追加する場合は本関数1か所だけ改修すれば全画面（打刻画面・管理画面）に反映される。
+function mealEditable(ym /* "YYYY-MM" */){
+  if(!ym||ym.length<7)return false;
+  var curYm=getTodayJSTStr().substring(0,7); // JST基準（端末TZに依存しない）
+  if(ym>curYm)return false; // 未来月は入力不可
+  // TODO(将来): 締め済み月は false を返す（例: if(mealClosedMonths&&mealClosedMonths[ym])return false;）
+  return true; // 過去月・当月は編集可
+}
+// 社員番号から氏名を解決（賄いエントリのラベル用・出勤日判定用）
+function mealStaffNameById(eid){
+  eid=String(eid||"").trim();
+  for(var i=0;i<staffList.length;i++){if((staffList[i].employeeId||"").trim()===eid)return staffList[i].name||"";}
+  return "";
+}
+// employeeId 単位で tc5_meals/{eid} を全量PUT（他スタッフ・他keyに影響させない）
+function mealSaveEntry(eid){
+  eid=String(eid||"").trim();
+  if(!eid||!/^[A-Za-z0-9_-]+$/.test(eid))return;
+  if(!mealsData[eid])return;
+  authFetch(FB_URL+"/tc5_meals/"+encodeURIComponent(eid)+".json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(mealsData[eid])
+  }).then(function(res){
+    if(!res.ok){res.text().then(function(t){console.error("[mealSaveEntry] HTTP",res.status,eid,t);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});}
+  }).catch(function(e){console.error("[mealSaveEntry] network error:",eid,e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
+}
+// スタッフのある月の出勤日(打刻clockIn・論理削除以外)の日付Set。recordsはstaff=氏名で識別。
+function mealAttendanceDates(staffName,ym){
+  var set={};
+  records.forEach(function(r){
+    if(r.type!=="clockIn"||r.deleted||!r.date||r.staff!==staffName)return;
+    if(r.date.substring(0,7)!==ym)return;
+    set[r.date]=true;
+  });
+  return set;
+}
+// 1日分の賄い取得をトグル（打刻画面・本人操作）。eid単位でcache更新→即PUT。
+function mealToggleDate(eid,ym,ds){
+  if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
+  eid=String(eid||"").trim();
+  if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
+  if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
+  if(!mealEditable(ym)){showAlert("未来の月は入力できません");return;}
+  var nm=mealStaffNameById(eid);
+  if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
+  if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
+  var cur=mealsData[eid].dates[ds];
+  if(cur&&cur.taken){delete mealsData[eid].dates[ds];} // 取得あり→なし（キー削除）
+  else{mealsData[eid].dates[ds]={taken:true,updatedAt:new Date().toISOString()};} // なし→取得あり
+  if(nm)mealsData[eid].staffName=nm;
+  render(); // 即時反映
+  mealSaveEntry(eid);
+}
+// 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
+function mealSelectAttendance(eid,ym){
+  if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
+  eid=String(eid||"").trim();
+  if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
+  if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
+  if(!mealEditable(ym)){showAlert("未来の月は入力できません");return;}
+  var nm=mealStaffNameById(eid);
+  var att=mealAttendanceDates(nm,ym);
+  var dates=Object.keys(att);
+  if(dates.length===0){showAlert("この月の出勤打刻が見つかりません");return;}
+  if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
+  if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
+  var nowIso=new Date().toISOString();var added=0;
+  dates.forEach(function(ds){
+    if(!(mealsData[eid].dates[ds]&&mealsData[eid].dates[ds].taken)){mealsData[eid].dates[ds]={taken:true,updatedAt:nowIso};added++;}
+  });
+  if(nm)mealsData[eid].staffName=nm;
+  render();
+  if(added>0)mealSaveEntry(eid);
+  showAlert("出勤日 "+dates.length+"日のうち "+added+"日を賄いONにしました（既にONの日はそのまま）");
+}
+
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
 function saveRecord(rec) {
   var url = FB_URL + "/tc5_records/" + rec.id + ".json";
@@ -314,6 +392,17 @@ function listenFirebase() {
             }
           }).catch(function(){});
       }
+    }
+    // 賄い一覧タブ表示中は tc5_meals を同期（スタッフ本人の打刻画面で入力された分を反映。read-only表示のため再描画は安全）
+    if(screen==="admin"&&adminTab==="meals"){
+      authFetch(FB_URL+"/tc5_meals.json")
+        .then(function(r){return r.json();})
+        .then(function(val){
+          if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
+            mealsData=val;
+            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          }
+        }).catch(function(){});
     }
   }, 10000);
 }
@@ -956,6 +1045,11 @@ var monthlyDaysImport={}; // tc5_monthly_days_import キャッシュ（employeeI
 var monthlyDaysEditing=false; // 月別出勤日数タブ: セル手入力フォーカス中フラグ（polling由来のrender()で入力が消えるのを防止）
 // 月別出勤日数タブ: テスト打刻の上書き対象月（アプリ開発時のテストデータ）。この月だけ手入力(import)値を打刻より優先し、打刻があっても編集可にする。recordsは不変。6月以降は対象外。
 var MD_OVERRIDE_MONTHS={"2026-04":1,"2026-05":1};
+// 賄い（まかない）取得記録: tc5_meals/{employeeId}={staffId,staffName,dates:{"YYYY-MM-DD":{taken:true,updatedAt}}}
+var mealsData={}; // tc5_meals キャッシュ（employeeId→エントリ）。打刻/有給/月別出勤データには一切書き込まない
+var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-MM、render()またぎ保持）
+var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
+var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -1723,6 +1817,66 @@ function render(){
           +'<span style="font-size:.72rem;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">履歴を見る ▼</span></div>';
       }
     }
+    // ── 賄い（まかない）入力欄（「賄い 要」のスタッフのみ表示・本人操作） ──
+    var _mealHtml="";
+    if(_pso&&_pso.mealRequired){
+      var _mEid=resolveStaffId(staffName);
+      if(!_mEid){
+        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;padding:12px 14px;border:1px solid #adb5bd;">'
+          +'<div style="font-weight:700;font-size:.9rem;color:#0f172a;margin-bottom:4px;">🍚 賄い入力</div>'
+          +'<div style="font-size:.8rem;color:#b91c1c;line-height:1.6;">'+esc(resolveStaffIdError(staffName))+'</div></div>';
+      }else{
+        if(!mealFormMonth){var _mtr=getJSTMonthRange();mealFormMonth=_mtr.first.slice(0,7);}
+        var _mfy=parseInt(mealFormMonth.split("-")[0],10);
+        var _mfm=parseInt(mealFormMonth.split("-")[1],10);
+        var _mLastDay=new Date(_mfy,_mfm,0).getDate();
+        var _mFirstDow=new Date(_mfy,_mfm-1,1).getDay(); // 0=日
+        var _mTaken=(mealsData[_mEid]&&mealsData[_mEid].dates)?mealsData[_mEid].dates:{};
+        var _mTodayStr=getTodayJSTStr();
+        var _mEditable=mealEditable(mealFormMonth);
+        var DAYS_M=["日","月","火","水","木","金","土"];
+        var _mCount=0;
+        for(var _mc=1;_mc<=_mLastDay;_mc++){var _mcds=_mfy+"-"+pad(_mfm)+"-"+pad(_mc);if(_mTaken[_mcds]&&_mTaken[_mcds].taken)_mCount++;}
+        var _mHeaderRow='<tr>'+DAYS_M.map(function(d,i){return '<th style="text-align:center;padding:4px 2px;font-size:.72rem;font-weight:700;color:'+(i===0?"#dc2626":i===6?"#1e40af":"#475569")+';">'+d+'</th>';}).join("")+'</tr>';
+        var _mRows='';var _mcol=0;var _mrow='<tr>';
+        for(var _mb=0;_mb<_mFirstDow;_mb++){_mrow+='<td></td>';_mcol++;}
+        for(var _md=1;_md<=_mLastDay;_md++){
+          var _mds=_mfy+"-"+pad(_mfm)+"-"+pad(_md);
+          var _mSel=!!(_mTaken[_mds]&&_mTaken[_mds].taken);
+          var _mIsToday=(_mds===_mTodayStr);
+          var _mbg=_mSel?"#15803d":"#fff"; // 取得ありは緑
+          var _mcolor=_mSel?"#fff":"#0f172a";
+          var _mborder=_mIsToday?"2px solid #f59e0b":"1px solid #e5e7eb";
+          var _mcur=_mEditable?"pointer":"not-allowed";
+          var _monclick=_mEditable?("mealToggleDate('"+_mEid+"','"+mealFormMonth+"','"+_mds+"')"):"";
+          _mrow+='<td style="text-align:center;padding:3px 2px;">'
+            +'<div onclick="'+_monclick+'" style="width:38px;height:38px;line-height:38px;margin:0 auto;border-radius:50%;background:'+_mbg+';color:'+_mcolor+';border:'+_mborder+';font-size:.92rem;font-weight:'+(_mSel?"700":"400")+';cursor:'+_mcur+';user-select:none;box-sizing:border-box;opacity:'+(_mEditable?"1":".5")+';">'+_md+'</div>'
+            +'</td>';
+          _mcol++;
+          if(_mcol%7===0){_mRows+=_mrow+'</tr>';_mrow='<tr>';}
+        }
+        if(_mcol%7!==0){_mRows+=_mrow+'</tr>';}
+        var _mCalHtml='<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'+_mHeaderRow+_mRows+'</table>';
+        var _mPrevYm=addYm(mealFormMonth,-1);
+        var _mNextYm=addYm(mealFormMonth,1);
+        var _mCanNext=mealEditable(_mNextYm); // 未来月へは進めない
+        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;">'
+          +'<div style="font-weight:700;font-size:.95rem;margin-bottom:6px;color:#0f172a;">🍚 賄い入力</div>'
+          +'<div style="font-size:.84rem;color:#475569;margin-bottom:8px;line-height:1.6;">賄いを取った日をタップしてください（<span style="color:#15803d;font-weight:700;">緑＝取得あり</span>）。'
+          +'<span style="display:inline-block;margin-left:6px;background:#dcfce7;color:#15803d;font-weight:700;padding:2px 9px;border-radius:10px;font-size:.82rem;">'+_mfm+'月: '+_mCount+'日</span></div>'
+          +'<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-bottom:8px;">'
+          +'<button onclick="mealFormMonth=\''+_mPrevYm+'\';render();" style="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:4px 14px;cursor:pointer;font-size:1rem;color:#475569;font-family:inherit;line-height:1.4;">＜</button>'
+          +'<span style="font-size:.95rem;font-weight:700;color:#15803d;min-width:96px;text-align:center;">'+_mfy+'年'+_mfm+'月</span>'
+          +'<button '+(_mCanNext?'':'disabled')+' onclick="'+(_mCanNext?'mealFormMonth=\''+_mNextYm+'\';render();':'')+'" style="background:#fff;border:1px solid '+(_mCanNext?'#adb5bd':'#e5e7eb')+';border-radius:2px;padding:4px 14px;cursor:'+(_mCanNext?'pointer':'not-allowed')+';font-size:1rem;color:'+(_mCanNext?'#475569':'#cbd5e1')+';font-family:inherit;line-height:1.4;">＞</button>'
+          +'</div>'
+          +_mCalHtml
+          +(_mEditable
+            ?'<button onclick="mealSelectAttendance(\''+_mEid+'\',\''+mealFormMonth+'\')" style="margin-top:12px;width:100%;background:#15803d;color:#fff;border:none;border-radius:2px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;">出勤日を全選択</button>'
+            :'<div style="margin-top:12px;font-size:.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:9px 10px;text-align:center;font-weight:700;">未来の月は入力できません</div>')
+          +'<div style="font-size:.74rem;color:#94a3b8;margin-top:7px;line-height:1.6;">「出勤日を全選択」はこの月に出勤打刻のある日を賄いONにします（既にONの日はそのまま／休みの日は変更しません）。過去の月は ＜ ボタンで切り替えて後から修正できます。</div>'
+          +'</div>';
+      }
+    }
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
       +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+staffName+'</div>'
@@ -1897,6 +2051,7 @@ function render(){
         :'<button onclick="showCorrectionRequestModal(staffName);" style="margin-top:8px;width:100%;background:#f1f5f9;color:#475569;border:1px solid #94a3b8;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">時刻修正申請</button>'
           +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
+      +_mealHtml
       +'</div>';
     if(showPaidLeaveForm){
       var plSubmitBtn=document.getElementById("btn-pl-submit");
@@ -2660,6 +2815,10 @@ function render(){
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-can-support" style="width:16px;height:16px;cursor:pointer;">'
         +'応援勤務あり（打刻時に出勤先選択を表示）</label></div>'
+        +'<div style="grid-column:1/-1;">'
+        +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
+        +'<input type="checkbox" id="modal-meal-required" style="width:16px;height:16px;cursor:pointer;">'
+        +'賄い 要（打刻画面に賄い入力欄を表示）</label></div>'
         +'</div>'
         +'<div id="modal-pin-area" style="padding:0 24px 16px;font-size:13px;color:#475569;display:flex;align-items:center;gap:8px;min-height:36px;"></div>'
         +'<div style="display:flex;gap:10px;padding:16px 24px;border-top:1px solid #f3f4f6;">'
@@ -3730,6 +3889,96 @@ function render(){
         +'</div>';
     }
 
+    if(adminTab==="meals"){
+      // ===== 賄い（まかない）一覧（管理者・労務士向け閲覧。月別・スタッフ別・日別の取得状況＋月合計） =====
+      // 賄いデータ(tc5_meals)を読むだけ。打刻・有給・月別出勤データには一切書き込まない。
+      if(!mealAdminMonth)mealAdminMonth=selMonth;
+      // 月候補：打刻のある月 ＋ 賄いデータのある月 ＋ 当月 ＋ 選択中
+      var _meSet={};
+      records.forEach(function(r){if(r.type==="clockIn"&&!r.deleted&&r.date&&r.date.length>=7)_meSet[r.date.substring(0,7)]=true;});
+      Object.keys(mealsData).forEach(function(eid){var dd=(mealsData[eid]||{}).dates||{};Object.keys(dd).forEach(function(d){if(d&&d.length>=7)_meSet[d.substring(0,7)]=true;});});
+      var _meCur=getTodayJSTStr().substring(0,7); // JST基準（端末TZに依存しない）
+      _meSet[_meCur]=true;_meSet[mealAdminMonth]=true;
+      var meMonths=Object.keys(_meSet).filter(Boolean).sort().reverse();
+      var meMonthOpts=meMonths.map(function(m){var p=m.split("-");return '<option value="'+m+'"'+(m===mealAdminMonth?" selected":"")+'>'+p[0]+'年'+parseInt(p[1],10)+'月</option>';}).join("");
+      var meY=parseInt(mealAdminMonth.split("-")[0],10);
+      var meM=parseInt(mealAdminMonth.split("-")[1],10);
+      var meLastDay=new Date(meY,meM,0).getDate();
+      // 対象スタッフ：在籍のみ（退職除外）。賄い要を上に、その中でyomi順。トグルで不要も表示。
+      var meStaff=staffList.filter(function(s){return s.status!=="退職"&&(mealShowNotRequired?true:!!s.mealRequired);})
+        .sort(function(a,b){var ar=a.mealRequired?0:1,br=b.mealRequired?0:1;if(ar!==br)return ar-br;return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+      var meReqCount=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;}).length;
+      var meNotReqCount=staffList.filter(function(s){return s.status!=="退職"&&!s.mealRequired;}).length;
+      function meTaken(s,day){
+        var eid=(s.employeeId||"").trim();if(!eid)return false;
+        var ds=meY+"-"+pad(meM)+"-"+pad(day);
+        var e=mealsData[eid];
+        return !!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);
+      }
+      var _meTh='padding:10px 6px;font-weight:700;font-size:13px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _meTd='padding:9px 4px;font-size:14px;text-align:center;';
+      var _meName='padding:10px 14px;font-size:16px;font-weight:500;white-space:nowrap;min-width:150px;'; // 氏名は太字にしない（font-weight:500）
+      var _meTot='padding:10px 12px;font-size:17px;font-family:monospace;font-weight:700;text-align:right;color:#15803d;background:#dcfce7;border-left:2px solid #86efac;';
+      var meStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var meStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
+      var _medcol='min-width:30px;';
+      var meDayTotals=[];for(var _mx=0;_mx<=meLastDay;_mx++)meDayTotals.push(0);
+      var meGrand=0;
+      var meRows=meStaff.map(function(s,ri){
+        var rowTotal=0;var tds='';
+        var rowBg=ri%2===1?'#f8fafc':'#ffffff';
+        for(var day=1;day<=meLastDay;day++){
+          var tk=meTaken(s,day);
+          if(tk){rowTotal++;meDayTotals[day]++;}
+          var _dow=new Date(meY,meM-1,day).getDay();
+          var cellBg=tk?'#dcfce7':(_dow===0?'#fef2f2':_dow===6?'#eff6ff':'transparent');
+          tds+='<td style="'+_meTd+_medcol+'background:'+cellBg+';">'+(tk?'<span style="color:#15803d;font-weight:700;">●</span>':'<span style="color:#cbd5e1;">·</span>')+'</td>';
+        }
+        meGrand+=rowTotal;
+        var reqTag=s.mealRequired
+          ?'<span style="font-size:.62rem;color:#fff;background:#15803d;border-radius:8px;padding:1px 7px;vertical-align:middle;">要</span>'
+          :'<span style="font-size:.62rem;color:#64748b;background:#e2e8f0;border-radius:8px;padding:1px 7px;vertical-align:middle;">不要</span>';
+        var noIdTag=(s.employeeId||"").trim()?'':' <span style="font-size:.62rem;color:#fff;background:#f59e0b;border-radius:8px;padding:1px 7px;vertical-align:middle;">社員番号未設定</span>';
+        return '<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
+          +'<td style="'+_meName+meStickyCell+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+' '+reqTag+noIdTag+'</td>'
+          +tds
+          +'<td style="'+_meTot+'">'+(rowTotal>0?rowTotal:'')+'</td>'
+          +'</tr>';
+      }).join("");
+      var meDayHead='';
+      for(var hd=1;hd<=meLastDay;hd++){var _hdow=new Date(meY,meM-1,hd).getDay();meDayHead+='<th style="'+_meTh+_medcol+'text-align:center;color:'+(_hdow===0?"#dc2626":_hdow===6?"#1e40af":"#334155")+';">'+hd+'</th>';}
+      var meFoot='';
+      for(var fd=1;fd<=meLastDay;fd++){meFoot+='<td style="'+_meTd+_medcol+'font-weight:700;font-size:13px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(meDayTotals[fd]>0?meDayTotals[fd]:'')+'</td>';}
+      var meMinW=240+meLastDay*30;
+      var meTableHtml=meStaff.length
+        ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:'+meMinW+'px;">'
+          +'<thead><tr>'
+          +'<th style="'+_meTh+'text-align:left;'+meStickyHead+'">氏名</th>'
+          +meDayHead
+          +'<th style="'+_meTh+'text-align:right;background:#bbf7d0;color:#15803d;border-left:2px solid #86efac;">合計</th>'
+          +'</tr></thead>'
+          +'<tbody>'+meRows+'</tbody>'
+          +'<tfoot><tr>'
+          +'<td style="'+_meName+meStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">日別計</td>'
+          +meFoot
+          +'<td style="'+_meTot+'border-top:2px solid #94a3b8;">'+(meGrand>0?meGrand:'')+'</td>'
+          +'</tr></tfoot>'
+          +'</table></div>'
+        :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません'+(meReqCount===0?'（「賄い 要」のスタッフが未設定です。スタッフ管理で設定してください）':'')+'</div>';
+      tc='<div class="admin-card admin-wrap">'
+        +'<div class="admin-title">🍚 賄い一覧（'+meY+'年'+meM+'月）</div>'
+        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">'
+        +'<select id="sel-meal-month" style="width:auto;min-width:130px;padding:9px 12px;font-size:15px;">'+meMonthOpts+'</select>'
+        +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
+        +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
+        +'<button class="btn-export" id="btn-meal-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
+        +'</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルの <span style="color:#15803d;font-weight:700;">●</span> はその日に賄いを取得したことを表します。「合計」はその月の賄い取得回数。<span style="color:#15803d;font-weight:700;">要</span>＝賄い対象スタッフを上に表示しています。賄いの入力・修正はスタッフ本人の打刻画面で行います（過去月も修正可）。</div>'
+        +meTableHtml
+        +'</div>';
+    }
+
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
@@ -3769,6 +4018,7 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
       +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
       +'<button class="tab-btn '+(adminTab==="leavePlan"?"tab-on":"tab-off")+'" onclick="setTab(\'leavePlan\')">有給取得計画</button>'
+      +'<button class="tab-btn '+(adminTab==="meals"?"tab-on":"tab-off")+'" onclick="setTab(\'meals\')">賄い一覧</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -4212,6 +4462,30 @@ function render(){
       dlCSV(noteMd+"\n"+hdrMd+"\n"+rowsMd.join("\n"),"穂乃味_月別出勤日数_"+y+".csv");
     };
 
+    // 賄い一覧
+    var meMonthSel=document.getElementById("sel-meal-month");
+    if(meMonthSel)meMonthSel.onchange=function(){mealAdminMonth=meMonthSel.value;render();};
+    var meNotReqChk=document.getElementById("chk-meal-notreq");
+    if(meNotReqChk)meNotReqChk.onchange=function(){mealShowNotRequired=meNotReqChk.checked;render();};
+    var meCsvBtn=document.getElementById("btn-meal-csv");
+    if(meCsvBtn)meCsvBtn.onclick=function(){
+      if(!mealAdminMonth)mealAdminMonth=selMonth;
+      var cy=parseInt(mealAdminMonth.split("-")[0],10);
+      var cm=parseInt(mealAdminMonth.split("-")[1],10);
+      var cLast=new Date(cy,cm,0).getDate();
+      var cStaff=staffList.filter(function(s){return s.status!=="退職"&&(mealShowNotRequired?true:!!s.mealRequired);})
+        .sort(function(a,b){var ar=a.mealRequired?0:1,br=b.mealRequired?0:1;if(ar!==br)return ar-br;return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+      var days=[];for(var d=1;d<=cLast;d++)days.push(d+"日");
+      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計";
+      var rowsMeal=cStaff.map(function(s){
+        var eid=(s.employeeId||"").trim();
+        var e=mealsData[eid];var tot=0;var cells=[];
+        for(var d=1;d<=cLast;d++){var ds=cy+"-"+pad(cm)+"-"+pad(d);var tk=!!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);if(tk)tot++;cells.push(tk?"1":"");}
+        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot]).join(",");
+      });
+      dlCSV(hdrMeal+"\n"+rowsMeal.join("\n"),"穂乃味_賄い一覧_"+mealAdminMonth+".csv");
+    };
+
     // 朝出勤確認 — 最新状態に更新
     var mRefBtn=document.getElementById("btn-morning-refresh");
     if(mRefBtn)mRefBtn.onclick=function(){
@@ -4386,11 +4660,14 @@ function render(){
         if(wwd)s.weeklyWorkDays=parseInt(wwd,10); else delete s.weeklyWorkDays;
         var cswEl2=document.getElementById("modal-can-support");
         s.canSupportWork=!!(cswEl2&&cswEl2.checked);
+        var mrEl2=document.getElementById("modal-meal-required");
+        s.mealRequired=!!(mrEl2&&mrEl2.checked);
         if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
       } else {
         if(staffList.find(function(s){return s.name===newN;})){showAlert("同名のスタッフが既に存在します");return;}
         var cswEl3=document.getElementById("modal-can-support");
-        var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat,canSupportWork:!!(cswEl3&&cswEl3.checked)};
+        var mrEl3=document.getElementById("modal-meal-required");
+        var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat,canSupportWork:!!(cswEl3&&cswEl3.checked),mealRequired:!!(mrEl3&&mrEl3.checked)};
         if(wwd)newStaff.weeklyWorkDays=parseInt(wwd,10);
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
@@ -4670,6 +4947,8 @@ function openHrmEdit(nm){
   document.getElementById("modal-status").value=s?(s.status||"在籍"):"在籍";
   var cswEl=document.getElementById("modal-can-support");
   if(cswEl)cswEl.checked=!!(s&&s.canSupportWork);
+  var mrEl=document.getElementById("modal-meal-required");
+  if(mrEl)mrEl.checked=!!(s&&s.mealRequired); // 既存スタッフ（mealRequired未設定）は初期値=不要
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
     var _msp=nm?getStoredPin(nm):{hash:null,plain:null};
@@ -5946,6 +6225,7 @@ async function initFirebase() {
       fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
       fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
       fetchJson(FB_URL+"/tc5_staff_notifications.json"),
+      fetchJson(FB_URL+"/tc5_meals.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
@@ -5955,6 +6235,7 @@ async function initFirebase() {
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
     var fbMonthlyImport=results[14];
     var fbStaffNotifications=results[15];
+    var fbMeals=results[16];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -5983,6 +6264,8 @@ async function initFirebase() {
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
     // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
     if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
+    // 賄い（まかない）取得記録（employeeIdキーのマップ）
+    if(fbMeals&&typeof fbMeals==="object"){mealsData=fbMeals;}
     // スタッフ本人向け通知（社員番号→{notifId→通知}）
     if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
     // デモアクセス
