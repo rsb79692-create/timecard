@@ -1634,8 +1634,8 @@ function render(){
           var sc=vPlStColor[x.status]||"#475569";
           var sbg=vPlStBg[x.status]||"#f3f4f6";
           return '<tr style="background:#fff;">'
-            +'<td style="'+vPlTd+'text-align:left;font-weight:900;color:#0f172a;white-space:nowrap;">'+x.name+'</td>'
-            +'<td style="'+vPlTd+'font-family:monospace;color:#1e40af;">'+x.date+'</td>'
+            +'<td style="'+vPlTd+'text-align:left;font-weight:900;color:#0f172a;white-space:nowrap;">'+esc(x.name)+'</td>'
+            +'<td style="'+vPlTd+'font-family:monospace;color:#1e40af;">'+esc(x.date)+'</td>'
             +'<td style="'+vPlTd+'"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;">'+sl+'</span></td>'
             +'</tr>';
         }).join("")
