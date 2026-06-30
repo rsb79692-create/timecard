@@ -1909,11 +1909,8 @@ function render(){
         var _confM=parseInt(_confYm.split("-")[1],10);
         var _st=mealConfStatusOf(_mEid,_confYm);
         if(_st==="done"){
-          // 「はい」回答済み＝コンパクト表示（淡色1行・あとから変更可）
-          return '<div style="margin-top:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:2px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">'
-            +'<span style="font-size:.82rem;color:#166534;">'+_confM+'月分の賄い入力 確認済 ✅</span>'
-            +'<button onclick="mealConfSave(\''+_mEid+'\',\''+_confYm+'\',\'pending\')" style="background:#fff;border:1px solid #86efac;color:#166534;border-radius:2px;padding:4px 12px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">変更</button>'
-            +'</div>';
+          // 「はい」回答済み＝確認済バナー・変更ボタンともに非表示（未確認/要確認のときだけ案内を出す）
+          return "";
         }
         var _isPending=(_st==="pending");
         if(_isPending){
