@@ -222,6 +222,40 @@ function toggleMealForm(){
   try{localStorage.setItem("tc5_meal_form_open",mealFormOpen?"1":"0");}catch(e){}
   render();
 }
+// 賄い月初確認の回答を保存（done=済み / pending=まだ）。
+// tc5_meal_confirmations/{eid}/{ym} 単位の個別PUT（他月・他スタッフのノードに触れず、同一スタッフ・同一対象月は必ず上書き＝重複なし・回答変更可）。
+function mealConfSave(eid,ym,status){
+  if(viewerMode){console.warn("[viewerMode] meal-conf write blocked");return;}
+  eid=String(eid||"").trim();
+  if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
+  if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
+  if(!ym||ym.length<7){return;}
+  if(status!=="done"&&status!=="pending"){return;}
+  var nm=mealStaffNameById(eid);
+  if(!mealConfData[eid]||typeof mealConfData[eid]!=="object")mealConfData[eid]={};
+  mealConfData[eid][ym]={staffId:eid,staffName:nm,targetMonth:ym,status:status,updatedAt:new Date().toISOString()};
+  render(); // 即時反映
+  authFetch(FB_URL+"/tc5_meal_confirmations/"+encodeURIComponent(eid)+"/"+encodeURIComponent(ym)+".json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(mealConfData[eid][ym])
+  }).then(function(res){
+    if(!res.ok){res.text().then(function(t){console.error("[mealConfSave] HTTP",res.status,eid,ym,t);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});}
+  }).catch(function(e){console.error("[mealConfSave] network error:",eid,ym,e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
+}
+// 賄い月初確認の状態取得（"done"|"pending"|"none"）
+function mealConfStatusOf(eid,ym){
+  eid=String(eid||"").trim();
+  var c=mealConfData[eid]&&mealConfData[eid][ym];
+  return (c&&c.status==="done")?"done":(c&&c.status==="pending")?"pending":"none";
+}
+// 「まだ」→先月の賄い入力へ移動（先月を表示しフォームを開く。回答はpendingで保存）
+function mealConfGoPrev(eid,ym){
+  mealConfSave(eid,ym,"pending");
+  mealFormMonth=ym;        // 先月へ切替
+  mealFormOpen=true;       // 賄いカードを展開
+  try{localStorage.setItem("tc5_meal_form_open","1");}catch(e){}
+  render();
+}
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
 function saveRecord(rec) {
@@ -406,6 +440,15 @@ function listenFirebase() {
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
             mealsData=val;
+            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          }
+        }).catch(function(){});
+      // 月初確認状況もスタッフ本人の回答を反映（read-only表示のため再描画は安全）
+      authFetch(FB_URL+"/tc5_meal_confirmations.json")
+        .then(function(r){return r.json();})
+        .then(function(val){
+          if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealConfData)){
+            mealConfData=val;
             if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
@@ -1061,6 +1104,8 @@ var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-M
 var mealFormOpen=(function(){try{return localStorage.getItem("tc5_meal_form_open")==="1";}catch(e){return false;}})();
 var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
 var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
+// 賄い月初確認: tc5_meal_confirmations/{employeeId}/{YYYY-MM}={staffId,staffName,targetMonth,status,updatedAt}
+var mealConfData={}; // tc5_meal_confirmations キャッシュ（employeeId→{"YYYY-MM":エントリ}）。打刻/有給/月別/賄いデータには書き込まない
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -1830,10 +1875,45 @@ function render(){
     }
     // ── 賄い（まかない）入力欄（「賄い 要」のスタッフのみ表示・本人操作。初期は折りたたみ） ──
     var _mealHtml="";
+    var _mealConfHtml=""; // 月初確認バナー（賄いカードの直前に表示）
     if(_pso&&_pso.mealRequired){
       var _mEid=resolveStaffId(staffName);
+      // セキュリティ: _mEid は onclick 文字列へ素で埋め込むため、社員番号は英数字・ハイフン・アンダースコアのみ許可。
+      // 不正文字を含む場合は未解決扱い（賄いカード/月初確認バナーは出さず、エラー表示に回す）。書込ヘルパー側の検証と二重化。
+      if(_mEid&&!/^[A-Za-z0-9_-]+$/.test(_mEid))_mEid=null;
       var _mOpen=mealFormOpen;
       var _mArrow=_mOpen?'▼':'▶';
+      // ── 月初確認バナー：先月の賄い入力が済んだか（eid解決済みのみ。対象＝先月・未来月は構造上出ない） ──
+      _mealConfHtml=(function(){
+        if(!_mEid)return "";
+        var _curYm=getTodayJSTStr().substring(0,7);
+        var _confYm=addYm(_curYm,-1); // 先月（JST基準・常に過去月）
+        var _confM=parseInt(_confYm.split("-")[1],10);
+        var _st=mealConfStatusOf(_mEid,_confYm);
+        if(_st==="done"){
+          // 「はい」回答済み＝コンパクト表示（淡色1行・あとから変更可）
+          return '<div style="margin-top:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:2px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center;gap:8px;">'
+            +'<span style="font-size:.82rem;color:#166534;">'+_confM+'月分の賄い入力 確認済 ✅</span>'
+            +'<button onclick="mealConfSave(\''+_mEid+'\',\''+_confYm+'\',\'pending\')" style="background:#fff;border:1px solid #86efac;color:#166534;border-radius:2px;padding:4px 12px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">変更</button>'
+            +'</div>';
+        }
+        var _isPending=(_st==="pending");
+        if(_isPending){
+          // 「まだ」＝未完了として強調＋先月入力への導線
+          return '<div style="margin-top:8px;background:#fff5f5;border:1px solid #fca5a5;border-radius:2px;padding:12px 14px;">'
+            +'<div style="font-size:.9rem;font-weight:700;color:#991b1b;margin-bottom:10px;line-height:1.5;">⚠ '+_confM+'月分の賄い入力が未完了です</div>'
+            +'<button onclick="mealConfGoPrev(\''+_mEid+'\',\''+_confYm+'\')" style="width:100%;background:#15803d;color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:8px;">'+_confM+'月の賄い入力へ（先月へ切替）</button>'
+            +'<button onclick="mealConfSave(\''+_mEid+'\',\''+_confYm+'\',\'done\')" style="width:100%;background:#fff;color:#166534;border:1px solid #86efac;border-radius:2px;padding:9px;font-size:.86rem;font-weight:700;cursor:pointer;font-family:inherit;">入力は済んだ（はい）に変更</button>'
+            +'</div>';
+        }
+        // 未回答＝月初確認を表示
+        return '<div style="margin-top:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:2px;padding:12px 14px;">'
+          +'<div style="font-size:.9rem;font-weight:700;color:#92400e;margin-bottom:10px;line-height:1.5;">🍚 '+_confM+'月の賄い入力は済んでいますか？</div>'
+          +'<div style="display:flex;gap:8px;">'
+          +'<button onclick="mealConfSave(\''+_mEid+'\',\''+_confYm+'\',\'done\')" style="flex:1;background:#15803d;color:#fff;border:none;border-radius:2px;padding:11px;font-size:.92rem;font-weight:700;cursor:pointer;font-family:inherit;">はい</button>'
+          +'<button onclick="mealConfSave(\''+_mEid+'\',\''+_confYm+'\',\'pending\')" style="flex:1;background:#fff;color:#92400e;border:1px solid #fcd34d;border-radius:2px;padding:11px;font-size:.92rem;font-weight:700;cursor:pointer;font-family:inherit;">まだ</button>'
+          +'</div></div>';
+      })();
       if(!_mEid){
         var _mHeadErr='<div onclick="toggleMealForm()" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px 14px;">'
           +'<span style="font-weight:700;font-size:.95rem;color:#0f172a;">🍚 賄い入力</span>'
@@ -2078,6 +2158,7 @@ function render(){
         :'<button onclick="showCorrectionRequestModal(staffName);" style="margin-top:8px;width:100%;background:#f1f5f9;color:#475569;border:1px solid #94a3b8;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">時刻修正申請</button>'
           +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
+      +_mealConfHtml
       +_mealHtml
       +'</div>';
     if(showPaidLeaveForm){
@@ -3942,6 +4023,13 @@ function render(){
         var e=mealsData[eid];
         return !!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);
       }
+      // 月初確認の状態（対象月＝表示中の月 mealAdminMonth）。賄い要スタッフのみ意味を持つ。
+      function meConfStatus(s){var eid=(s.employeeId||"").trim();if(!eid)return "none";return mealConfStatusOf(eid,mealAdminMonth);}
+      // 確認状況サマリは「賄い要・在籍」のみ集計（不要スタッフはバナー非表示のため除外）
+      var meReqStaffForConf=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;});
+      var meCD=0,meCP=0,meCN=0;
+      meReqStaffForConf.forEach(function(s){var _cst=meConfStatus(s);if(_cst==="done")meCD++;else if(_cst==="pending")meCP++;else meCN++;});
+      var _meConfTd='padding:10px 10px;font-size:13px;text-align:center;white-space:nowrap;border-left:1px solid #e5e7eb;';
       var _meTh='padding:10px 6px;font-weight:700;font-size:13px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
       var _meTd='padding:9px 4px;font-size:14px;text-align:center;';
       var _meName='padding:10px 14px;font-size:16px;font-weight:500;white-space:nowrap;min-width:150px;'; // 氏名は太字にしない（font-weight:500）
@@ -3970,13 +4058,14 @@ function render(){
           +'<td style="'+_meName+meStickyCell+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+' '+reqTag+noIdTag+'</td>'
           +tds
           +'<td style="'+_meTot+'">'+(rowTotal>0?rowTotal:'')+'</td>'
+          +'<td style="'+_meConfTd+'">'+(!s.mealRequired?'<span style="color:#cbd5e1;">—</span>':(function(){var _cst=meConfStatus(s);return _cst==="done"?'<span style="color:#15803d;font-weight:700;">✅ 確認済</span>':_cst==="pending"?'<span style="color:#b91c1c;font-weight:700;">⏳ まだ</span>':'<span style="color:#94a3b8;">— 未回答</span>';})())+'</td>'
           +'</tr>';
       }).join("");
       var meDayHead='';
       for(var hd=1;hd<=meLastDay;hd++){var _hdow=new Date(meY,meM-1,hd).getDay();meDayHead+='<th style="'+_meTh+_medcol+'text-align:center;color:'+(_hdow===0?"#dc2626":_hdow===6?"#1e40af":"#334155")+';">'+hd+'</th>';}
       var meFoot='';
       for(var fd=1;fd<=meLastDay;fd++){meFoot+='<td style="'+_meTd+_medcol+'font-weight:700;font-size:13px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(meDayTotals[fd]>0?meDayTotals[fd]:'')+'</td>';}
-      var meMinW=240+meLastDay*30;
+      var meMinW=240+meLastDay*30+90; // +90 = 確認列
       var meTableHtml=meStaff.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:'+meMinW+'px;">'
@@ -3984,12 +4073,14 @@ function render(){
           +'<th style="'+_meTh+'text-align:left;'+meStickyHead+'">氏名</th>'
           +meDayHead
           +'<th style="'+_meTh+'text-align:right;background:#bbf7d0;color:#15803d;border-left:2px solid #86efac;">合計</th>'
+          +'<th style="'+_meTh+'text-align:center;border-left:1px solid #cbd5e1;">確認</th>'
           +'</tr></thead>'
           +'<tbody>'+meRows+'</tbody>'
           +'<tfoot><tr>'
           +'<td style="'+_meName+meStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">日別計</td>'
           +meFoot
           +'<td style="'+_meTot+'border-top:2px solid #94a3b8;">'+(meGrand>0?meGrand:'')+'</td>'
+          +'<td style="'+_meConfTd+'border-top:2px solid #94a3b8;background:#eef1f5;"></td>'
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません'+(meReqCount===0?'（「賄い 要」のスタッフが未設定です。スタッフ管理で設定してください）':'')+'</div>';
@@ -4001,7 +4092,14 @@ function render(){
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
         +'<button class="btn-export" id="btn-meal-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルの <span style="color:#15803d;font-weight:700;">●</span> はその日に賄いを取得したことを表します。「合計」はその月の賄い取得回数。<span style="color:#15803d;font-weight:700;">要</span>＝賄い対象スタッフを上に表示しています。賄いの入力・修正はスタッフ本人の打刻画面で行います（過去月も修正可）。</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルの <span style="color:#15803d;font-weight:700;">●</span> はその日に賄いを取得したことを表します。「合計」はその月の賄い取得回数。<span style="color:#15803d;font-weight:700;">要</span>＝賄い対象スタッフを上に表示しています。賄いの入力・修正はスタッフ本人の打刻画面で行います（過去月も修正可）。'
+        +'<br>右端の「確認」列は、表示中の<b>'+meY+'年'+meM+'月分</b>についてスタッフが月初に回答した入力完了状況です（✅確認済／⏳まだ／—未回答）。</div>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">'
+        +'<span style="font-size:.8rem;color:#475569;font-weight:700;">'+meM+'月分 月初確認：</span>'
+        +'<span style="font-size:.78rem;background:#dcfce7;color:#15803d;font-weight:700;border-radius:10px;padding:2px 10px;">✅ 確認済 '+meCD+'</span>'
+        +'<span style="font-size:.78rem;background:#fee2e2;color:#b91c1c;font-weight:700;border-radius:10px;padding:2px 10px;">⏳ まだ '+meCP+'</span>'
+        +'<span style="font-size:.78rem;background:#f1f5f9;color:#64748b;font-weight:700;border-radius:10px;padding:2px 10px;">— 未回答 '+meCN+'</span>'
+        +'</div>'
         +meTableHtml
         +'</div>';
     }
@@ -4503,12 +4601,14 @@ function render(){
       var cStaff=staffList.filter(function(s){return s.status!=="退職"&&(mealShowNotRequired?true:!!s.mealRequired);})
         .sort(function(a,b){var ar=a.mealRequired?0:1,br=b.mealRequired?0:1;if(ar!==br)return ar-br;return (a.yomi||"").localeCompare(b.yomi||"","ja");});
       var days=[];for(var d=1;d<=cLast;d++)days.push(d+"日");
-      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計";
+      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計,月初確認";
       var rowsMeal=cStaff.map(function(s){
         var eid=(s.employeeId||"").trim();
         var e=mealsData[eid];var tot=0;var cells=[];
         for(var d=1;d<=cLast;d++){var ds=cy+"-"+pad(cm)+"-"+pad(d);var tk=!!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);if(tk)tot++;cells.push(tk?"1":"");}
-        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot]).join(",");
+        // 月初確認状況（賄い要のみ。不要は「対象外」）
+        var _conf=!s.mealRequired?"対象外":(function(){var _cs=mealConfStatusOf(eid,mealAdminMonth);return _cs==="done"?"確認済":_cs==="pending"?"まだ":"未回答";})();
+        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot,_conf]).join(",");
       });
       dlCSV(hdrMeal+"\n"+rowsMeal.join("\n"),"穂乃味_賄い一覧_"+mealAdminMonth+".csv");
     };
@@ -6253,6 +6353,7 @@ async function initFirebase() {
       fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
       fetchJson(FB_URL+"/tc5_staff_notifications.json"),
       fetchJson(FB_URL+"/tc5_meals.json"),
+      fetchJson(FB_URL+"/tc5_meal_confirmations.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
@@ -6263,6 +6364,7 @@ async function initFirebase() {
     var fbMonthlyImport=results[14];
     var fbStaffNotifications=results[15];
     var fbMeals=results[16];
+    var fbMealConf=results[17];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -6293,6 +6395,8 @@ async function initFirebase() {
     if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
     // 賄い（まかない）取得記録（employeeIdキーのマップ）
     if(fbMeals&&typeof fbMeals==="object"){mealsData=fbMeals;}
+    // 賄い月初確認（employeeId→{"YYYY-MM":エントリ}）
+    if(fbMealConf&&typeof fbMealConf==="object"){mealConfData=fbMealConf;}
     // スタッフ本人向け通知（社員番号→{notifId→通知}）
     if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
     // デモアクセス
