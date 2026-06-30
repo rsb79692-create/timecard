@@ -216,6 +216,12 @@ function mealSelectAttendance(eid,ym){
   if(added>0)mealSaveEntry(eid);
   showAlert("出勤日 "+dates.length+"日のうち "+added+"日を賄いONにしました（既にONの日はそのまま）");
 }
+// 打刻画面の賄いフォーム開閉トグル（開閉状態は端末に保存し、次回も同じ状態を維持）
+function toggleMealForm(){
+  mealFormOpen=!mealFormOpen;
+  try{localStorage.setItem("tc5_meal_form_open",mealFormOpen?"1":"0");}catch(e){}
+  render();
+}
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
 function saveRecord(rec) {
@@ -431,6 +437,9 @@ button:active{filter:brightness(.86);}
 .btn-punch:disabled{opacity:.18;cursor:not-allowed;}
 .btn-in{background:#1e40af;} .btn-out{background:#b91c1c;}
 .btn-bs{background:#374151;} .btn-be{background:#4b5563;}
+/* 賄いフォーム 開閉アニメーション（展開時のみ・軽量） */
+@keyframes mealExpand{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
+.meal-collapse-body{animation:mealExpand .18s ease-out;}
 /* 共通 */
 .btn-admin{background:#dde1e7;color:#475569;font-size:.83rem;padding:11px;width:100%;border-radius:2px;border:1px solid #adb5bd;margin-top:8px;}
 .btn-back{background:#dde1e7;color:#475569;font-size:.83rem;font-weight:700;padding:7px 14px;text-align:left;margin-bottom:10px;display:inline-block;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;}
@@ -1048,6 +1057,8 @@ var MD_OVERRIDE_MONTHS={"2026-04":1,"2026-05":1};
 // 賄い（まかない）取得記録: tc5_meals/{employeeId}={staffId,staffName,dates:{"YYYY-MM-DD":{taken:true,updatedAt}}}
 var mealsData={}; // tc5_meals キャッシュ（employeeId→エントリ）。打刻/有給/月別出勤データには一切書き込まない
 var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-MM、render()またぎ保持）
+// 打刻画面 賄いフォームの開閉状態（端末に保存して次回も維持。初期=閉じる）
+var mealFormOpen=(function(){try{return localStorage.getItem("tc5_meal_form_open")==="1";}catch(e){return false;}})();
 var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
 var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
@@ -1817,63 +1828,79 @@ function render(){
           +'<span style="font-size:.72rem;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">履歴を見る ▼</span></div>';
       }
     }
-    // ── 賄い（まかない）入力欄（「賄い 要」のスタッフのみ表示・本人操作） ──
+    // ── 賄い（まかない）入力欄（「賄い 要」のスタッフのみ表示・本人操作。初期は折りたたみ） ──
     var _mealHtml="";
     if(_pso&&_pso.mealRequired){
       var _mEid=resolveStaffId(staffName);
+      var _mOpen=mealFormOpen;
+      var _mArrow=_mOpen?'▼':'▶';
       if(!_mEid){
-        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;padding:12px 14px;border:1px solid #adb5bd;">'
-          +'<div style="font-weight:700;font-size:.9rem;color:#0f172a;margin-bottom:4px;">🍚 賄い入力</div>'
-          +'<div style="font-size:.8rem;color:#b91c1c;line-height:1.6;">'+esc(resolveStaffIdError(staffName))+'</div></div>';
+        var _mHeadErr='<div onclick="toggleMealForm()" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px 14px;">'
+          +'<span style="font-weight:700;font-size:.95rem;color:#0f172a;">🍚 賄い入力</span>'
+          +'<span style="font-size:.82rem;color:#94a3b8;font-weight:700;">'+_mArrow+'</span></div>';
+        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #adb5bd;overflow:hidden;">'
+          +_mHeadErr
+          +(_mOpen?'<div class="meal-collapse-body" style="padding:0 14px 14px;"><div style="font-size:.8rem;color:#b91c1c;line-height:1.6;">'+esc(resolveStaffIdError(staffName))+'</div></div>':'')
+          +'</div>';
       }else{
         if(!mealFormMonth){var _mtr=getJSTMonthRange();mealFormMonth=_mtr.first.slice(0,7);}
         var _mfy=parseInt(mealFormMonth.split("-")[0],10);
         var _mfm=parseInt(mealFormMonth.split("-")[1],10);
         var _mLastDay=new Date(_mfy,_mfm,0).getDate();
-        var _mFirstDow=new Date(_mfy,_mfm-1,1).getDay(); // 0=日
         var _mTaken=(mealsData[_mEid]&&mealsData[_mEid].dates)?mealsData[_mEid].dates:{};
-        var _mTodayStr=getTodayJSTStr();
-        var _mEditable=mealEditable(mealFormMonth);
-        var DAYS_M=["日","月","火","水","木","金","土"];
         var _mCount=0;
         for(var _mc=1;_mc<=_mLastDay;_mc++){var _mcds=_mfy+"-"+pad(_mfm)+"-"+pad(_mc);if(_mTaken[_mcds]&&_mTaken[_mcds].taken)_mCount++;}
-        var _mHeaderRow='<tr>'+DAYS_M.map(function(d,i){return '<th style="text-align:center;padding:4px 2px;font-size:.72rem;font-weight:700;color:'+(i===0?"#dc2626":i===6?"#1e40af":"#475569")+';">'+d+'</th>';}).join("")+'</tr>';
-        var _mRows='';var _mcol=0;var _mrow='<tr>';
-        for(var _mb=0;_mb<_mFirstDow;_mb++){_mrow+='<td></td>';_mcol++;}
-        for(var _md=1;_md<=_mLastDay;_md++){
-          var _mds=_mfy+"-"+pad(_mfm)+"-"+pad(_md);
-          var _mSel=!!(_mTaken[_mds]&&_mTaken[_mds].taken);
-          var _mIsToday=(_mds===_mTodayStr);
-          var _mbg=_mSel?"#15803d":"#fff"; // 取得ありは緑
-          var _mcolor=_mSel?"#fff":"#0f172a";
-          var _mborder=_mIsToday?"2px solid #f59e0b":"1px solid #e5e7eb";
-          var _mcur=_mEditable?"pointer":"not-allowed";
-          var _monclick=_mEditable?("mealToggleDate('"+_mEid+"','"+mealFormMonth+"','"+_mds+"')"):"";
-          _mrow+='<td style="text-align:center;padding:3px 2px;">'
-            +'<div onclick="'+_monclick+'" style="width:38px;height:38px;line-height:38px;margin:0 auto;border-radius:50%;background:'+_mbg+';color:'+_mcolor+';border:'+_mborder+';font-size:.92rem;font-weight:'+(_mSel?"700":"400")+';cursor:'+_mcur+';user-select:none;box-sizing:border-box;opacity:'+(_mEditable?"1":".5")+';">'+_md+'</div>'
-            +'</td>';
-          _mcol++;
-          if(_mcol%7===0){_mRows+=_mrow+'</tr>';_mrow='<tr>';}
+        // タイトル行（常時表示・タップで開閉）。閉じていても当月の取得回数バッジを表示。
+        var _mHead='<div onclick="toggleMealForm()" style="display:flex;justify-content:space-between;align-items:center;cursor:pointer;padding:12px 14px;'+(_mOpen?'border-bottom:1px solid #eef1f5;':'')+'">'
+          +'<span style="font-weight:700;font-size:.95rem;color:#0f172a;">🍚 賄い入力'
+          +(_mCount>0?'<span style="display:inline-block;margin-left:8px;background:#dcfce7;color:#15803d;font-weight:700;padding:1px 9px;border-radius:10px;font-size:.78rem;">'+_mfm+'月 '+_mCount+'日</span>':'')
+          +'</span>'
+          +'<span style="font-size:.82rem;color:#15803d;font-weight:700;">'+_mArrow+'</span></div>';
+        var _mBody='';
+        if(_mOpen){
+          // 開いたときだけカレンダー・全選択ボタン・説明文を生成
+          var _mFirstDow=new Date(_mfy,_mfm-1,1).getDay(); // 0=日
+          var _mTodayStr=getTodayJSTStr();
+          var _mEditable=mealEditable(mealFormMonth);
+          var DAYS_M=["日","月","火","水","木","金","土"];
+          var _mHeaderRow='<tr>'+DAYS_M.map(function(d,i){return '<th style="text-align:center;padding:4px 2px;font-size:.72rem;font-weight:700;color:'+(i===0?"#dc2626":i===6?"#1e40af":"#475569")+';">'+d+'</th>';}).join("")+'</tr>';
+          var _mRows='';var _mcol=0;var _mrow='<tr>';
+          for(var _mb=0;_mb<_mFirstDow;_mb++){_mrow+='<td></td>';_mcol++;}
+          for(var _md=1;_md<=_mLastDay;_md++){
+            var _mds=_mfy+"-"+pad(_mfm)+"-"+pad(_md);
+            var _mSel=!!(_mTaken[_mds]&&_mTaken[_mds].taken);
+            var _mIsToday=(_mds===_mTodayStr);
+            var _mbg=_mSel?"#15803d":"#fff"; // 取得ありは緑
+            var _mcolor=_mSel?"#fff":"#0f172a";
+            var _mborder=_mIsToday?"2px solid #f59e0b":"1px solid #e5e7eb";
+            var _mcur=_mEditable?"pointer":"not-allowed";
+            var _monclick=_mEditable?("mealToggleDate('"+_mEid+"','"+mealFormMonth+"','"+_mds+"')"):"";
+            _mrow+='<td style="text-align:center;padding:3px 2px;">'
+              +'<div onclick="'+_monclick+'" style="width:38px;height:38px;line-height:38px;margin:0 auto;border-radius:50%;background:'+_mbg+';color:'+_mcolor+';border:'+_mborder+';font-size:.92rem;font-weight:'+(_mSel?"700":"400")+';cursor:'+_mcur+';user-select:none;box-sizing:border-box;opacity:'+(_mEditable?"1":".5")+';">'+_md+'</div>'
+              +'</td>';
+            _mcol++;
+            if(_mcol%7===0){_mRows+=_mrow+'</tr>';_mrow='<tr>';}
+          }
+          if(_mcol%7!==0){_mRows+=_mrow+'</tr>';}
+          var _mCalHtml='<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'+_mHeaderRow+_mRows+'</table>';
+          var _mPrevYm=addYm(mealFormMonth,-1);
+          var _mNextYm=addYm(mealFormMonth,1);
+          var _mCanNext=mealEditable(_mNextYm); // 未来月へは進めない
+          _mBody='<div style="font-size:.84rem;color:#475569;margin-bottom:8px;line-height:1.6;">賄いを取った日をタップしてください（<span style="color:#15803d;font-weight:700;">緑＝取得あり</span>）。</div>'
+            +'<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-bottom:8px;">'
+            +'<button onclick="mealFormMonth=\''+_mPrevYm+'\';render();" style="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:4px 14px;cursor:pointer;font-size:1rem;color:#475569;font-family:inherit;line-height:1.4;">＜</button>'
+            +'<span style="font-size:.95rem;font-weight:700;color:#15803d;min-width:96px;text-align:center;">'+_mfy+'年'+_mfm+'月</span>'
+            +'<button '+(_mCanNext?'':'disabled')+' onclick="'+(_mCanNext?'mealFormMonth=\''+_mNextYm+'\';render();':'')+'" style="background:#fff;border:1px solid '+(_mCanNext?'#adb5bd':'#e5e7eb')+';border-radius:2px;padding:4px 14px;cursor:'+(_mCanNext?'pointer':'not-allowed')+';font-size:1rem;color:'+(_mCanNext?'#475569':'#cbd5e1')+';font-family:inherit;line-height:1.4;">＞</button>'
+            +'</div>'
+            +_mCalHtml
+            +(_mEditable
+              ?'<button onclick="mealSelectAttendance(\''+_mEid+'\',\''+mealFormMonth+'\')" style="margin-top:12px;width:100%;background:#15803d;color:#fff;border:none;border-radius:2px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;">出勤日を全選択</button>'
+              :'<div style="margin-top:12px;font-size:.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:9px 10px;text-align:center;font-weight:700;">未来の月は入力できません</div>')
+            +'<div style="font-size:.74rem;color:#94a3b8;margin-top:7px;line-height:1.6;">「出勤日を全選択」はこの月に出勤打刻のある日を賄いONにします（既にONの日はそのまま／休みの日は変更しません）。過去の月は ＜ ボタンで切り替えて後から修正できます。</div>';
         }
-        if(_mcol%7!==0){_mRows+=_mrow+'</tr>';}
-        var _mCalHtml='<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'+_mHeaderRow+_mRows+'</table>';
-        var _mPrevYm=addYm(mealFormMonth,-1);
-        var _mNextYm=addYm(mealFormMonth,1);
-        var _mCanNext=mealEditable(_mNextYm); // 未来月へは進めない
-        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;">'
-          +'<div style="font-weight:700;font-size:.95rem;margin-bottom:6px;color:#0f172a;">🍚 賄い入力</div>'
-          +'<div style="font-size:.84rem;color:#475569;margin-bottom:8px;line-height:1.6;">賄いを取った日をタップしてください（<span style="color:#15803d;font-weight:700;">緑＝取得あり</span>）。'
-          +'<span style="display:inline-block;margin-left:6px;background:#dcfce7;color:#15803d;font-weight:700;padding:2px 9px;border-radius:10px;font-size:.82rem;">'+_mfm+'月: '+_mCount+'日</span></div>'
-          +'<div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-bottom:8px;">'
-          +'<button onclick="mealFormMonth=\''+_mPrevYm+'\';render();" style="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:4px 14px;cursor:pointer;font-size:1rem;color:#475569;font-family:inherit;line-height:1.4;">＜</button>'
-          +'<span style="font-size:.95rem;font-weight:700;color:#15803d;min-width:96px;text-align:center;">'+_mfy+'年'+_mfm+'月</span>'
-          +'<button '+(_mCanNext?'':'disabled')+' onclick="'+(_mCanNext?'mealFormMonth=\''+_mNextYm+'\';render();':'')+'" style="background:#fff;border:1px solid '+(_mCanNext?'#adb5bd':'#e5e7eb')+';border-radius:2px;padding:4px 14px;cursor:'+(_mCanNext?'pointer':'not-allowed')+';font-size:1rem;color:'+(_mCanNext?'#475569':'#cbd5e1')+';font-family:inherit;line-height:1.4;">＞</button>'
-          +'</div>'
-          +_mCalHtml
-          +(_mEditable
-            ?'<button onclick="mealSelectAttendance(\''+_mEid+'\',\''+mealFormMonth+'\')" style="margin-top:12px;width:100%;background:#15803d;color:#fff;border:none;border-radius:2px;padding:13px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;">出勤日を全選択</button>'
-            :'<div style="margin-top:12px;font-size:.82rem;color:#92400e;background:#fffbeb;border:1px solid #fde68a;border-radius:4px;padding:9px 10px;text-align:center;font-weight:700;">未来の月は入力できません</div>')
-          +'<div style="font-size:.74rem;color:#94a3b8;margin-top:7px;line-height:1.6;">「出勤日を全選択」はこの月に出勤打刻のある日を賄いONにします（既にONの日はそのまま／休みの日は変更しません）。過去の月は ＜ ボタンで切り替えて後から修正できます。</div>'
+        _mealHtml='<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #adb5bd;overflow:hidden;">'
+          +_mHead
+          +(_mOpen?'<div class="meal-collapse-body" style="padding:12px 14px 14px;">'+_mBody+'</div>':'')
           +'</div>';
       }
     }
