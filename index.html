@@ -222,6 +222,12 @@ function toggleMealForm(){
   try{localStorage.setItem("tc5_meal_form_open",mealFormOpen?"1":"0");}catch(e){}
   render();
 }
+// 打刻画面「今月の打刻状況」カードの開閉トグル（開閉状態は端末に保存）
+function toggleMonthPunch(){
+  monthPunchOpen=!monthPunchOpen;
+  try{localStorage.setItem("tc5_month_punch_open",monthPunchOpen?"1":"0");}catch(e){}
+  render();
+}
 // 賄い月初確認の回答を保存（done=済み / pending=まだ）。
 // tc5_meal_confirmations/{eid}/{ym} 単位の個別PUT（他月・他スタッフのノードに触れず、同一スタッフ・同一対象月は必ず上書き＝重複なし・回答変更可）。
 function mealConfSave(eid,ym,status){
@@ -1138,6 +1144,8 @@ var mealsData={}; // tc5_meals キャッシュ（employeeId→エントリ）。
 var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-MM、render()またぎ保持）
 // 打刻画面 賄いフォームの開閉状態（端末に保存して次回も維持。初期=閉じる）
 var mealFormOpen=(function(){try{return localStorage.getItem("tc5_meal_form_open")==="1";}catch(e){return false;}})();
+// 打刻画面「今月の打刻状況」カードの開閉状態（端末に保存・初期は折りたたみ）
+var monthPunchOpen=(function(){try{return localStorage.getItem("tc5_month_punch_open")==="1";}catch(e){return false;}})();
 var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
 var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
 // 賄い月初確認: tc5_meal_confirmations/{employeeId}/{YYYY-MM}={staffId,staffName,targetMonth,status,updatedAt}
@@ -2026,6 +2034,37 @@ function render(){
           +'</div>';
       }
     }
+    // ── 今月の打刻状況（当月・自分の打刻時刻のみの軽量一覧。表示専用＝集計/実働/残業/修正履歴は出さない・データは書き換えない） ──
+    var _monthHtml=(function(){
+      var _curYm=getJSTMonthRange().first.slice(0,7); // JST基準の当月 "YYYY-MM"
+      // 当月かつ本人の打刻のみ（既存の本日履歴と同じく氏名キーで突き合わせ／論理削除は除外）
+      var _mRecs=records.filter(function(r){return r.staff===staffName&&!r.deleted&&monthKey(r.date)===_curYm;});
+      // 日付ごとにグループ化（打刻時刻をそのまま並べるだけ。実働時間などの計算はしない）
+      var _byDate={};
+      _mRecs.forEach(function(r){(_byDate[r.date]=_byDate[r.date]||[]).push(r);});
+      var _dates=Object.keys(_byDate).sort(); // 日付昇順
+      var _arrow=monthPunchOpen?'▼':'▶';
+      var _head='<div onclick="toggleMonthPunch()" style="display:flex;justify-content:space-between;align-items:center;padding:11px 14px;background:#eef2ff;cursor:pointer;">'
+        +'<span style="font-size:.86rem;font-weight:700;color:#3730a3;">📅 今月の打刻状況</span>'
+        +'<span style="font-size:.72rem;color:#3730a3;">'+_arrow+'</span></div>';
+      var _body='';
+      if(monthPunchOpen){
+        if(_dates.length){
+          _body=_dates.map(function(d){
+            var _rows=_byDate[d].slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+            var _times=_rows.map(function(r){
+              return '<span style="display:inline-block;margin-right:12px;white-space:nowrap;"><span style="font-size:.72rem;color:#64748b;">'+esc(TYPE_LABEL[r.type]||r.type)+'</span> <span style="font-family:monospace;font-weight:600;color:#0f172a;">'+esc(r.time||"")+'</span></span>';
+            }).join("");
+            return '<div style="padding:8px 14px;border-top:1px solid #e5e7eb;">'
+              +'<div style="font-size:.78rem;font-weight:700;color:#334155;margin-bottom:3px;">'+esc(d)+'</div>'
+              +'<div style="line-height:1.9;">'+_times+'</div></div>';
+          }).join("");
+        }else{
+          _body='<div style="padding:12px 14px;border-top:1px solid #e5e7eb;font-size:.82rem;color:#94a3b8;">今月の打刻はまだありません</div>';
+        }
+      }
+      return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #c7d2fe;overflow:hidden;">'+_head+_body+'</div>';
+    })();
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
       +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+staffName+'</div>'
@@ -2202,6 +2241,7 @@ function render(){
       )
       +_mealConfHtml
       +_mealHtml
+      +_monthHtml
       +'</div>';
     if(showPaidLeaveForm){
       var plSubmitBtn=document.getElementById("btn-pl-submit");
