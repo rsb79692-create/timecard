@@ -374,6 +374,24 @@ function listenFirebase() {
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
         }
       }).catch(function(){});
+    // 打刻画面でも修正申請を同期（管理者の承認/却下で pending から外れた申請を「申請中の修正」表示から即時に消す。
+    // 早期 return より前に置くことで punch 画面でも反映される。管理者の履歴タブ操作には依存しない）。
+    if(screen==="punch" && staffName){
+      authFetch(FB_URL + "/tc5_correction_requests.json")
+        .then(function(r){return r.json();})
+        .then(function(val){
+          if(val && savingCount===0){
+            var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
+            var newReqs=(arr||[]).filter(Boolean);
+            if(JSON.stringify(newReqs)!==JSON.stringify(correctionRequests)){
+              correctionRequests=newReqs;
+              localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+              // 修正申請フォーム・有給フォーム入力中は再描画しない（入力状態のリセット防止）
+              if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
+            }
+          }
+        }).catch(function(){});
+    }
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
     authFetch(FB_URL + "/tc5_records.json")
       .then(function(r){return r.json();})
