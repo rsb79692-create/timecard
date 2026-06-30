@@ -248,6 +248,24 @@ function mealConfStatusOf(eid,ym){
   var c=mealConfData[eid]&&mealConfData[eid][ym];
   return (c&&c.status==="done")?"done":(c&&c.status==="pending")?"pending":"none";
 }
+// ===== 月次精査完了フラグ（労務士CSVゲート） =====
+// 対象月(ym)が精査完了済みか。reviewed===true のときのみ true。
+function monthReviewed(ym){var r=reviewStatus&&reviewStatus[ym];return !!(r&&r.reviewed===true);}
+// 精査完了/解除を保存。tc5_monthly_review_status/{ym} 単位の個別PUT（他月のノードに触れない）。
+// 解除も削除APIを使わず reviewed:false へ上書き（データ破壊を避ける）。管理者操作時のみ（viewerModeガード必須）。
+function reviewStatusSave(ym,reviewed){
+  if(viewerMode){console.warn("[viewerMode] review-status write blocked");return;}
+  if(!ym||ym.length<7){return;}
+  var entry={reviewed:!!reviewed,reviewedAt:new Date().toISOString(),reviewedBy:"admin"};
+  reviewStatus[ym]=entry;
+  render(); // 即時反映
+  authFetch(FB_URL+"/tc5_monthly_review_status/"+encodeURIComponent(ym)+".json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(entry)
+  }).then(function(res){
+    if(!res.ok){res.text().then(function(t){console.error("[reviewStatusSave] HTTP",res.status,ym,t);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});}
+  }).catch(function(e){console.error("[reviewStatusSave] network error:",ym,e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
+}
 // 「まだ」→先月の賄い入力へ移動（先月を表示しフォームを開く。回答はpendingで保存）
 function mealConfGoPrev(eid,ym){
   mealConfSave(eid,ym,"pending");
@@ -1124,6 +1142,9 @@ var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-M
 var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
 // 賄い月初確認: tc5_meal_confirmations/{employeeId}/{YYYY-MM}={staffId,staffName,targetMonth,status,updatedAt}
 var mealConfData={}; // tc5_meal_confirmations キャッシュ（employeeId→{"YYYY-MM":エントリ}）。打刻/有給/月別/賄いデータには書き込まない
+// 月次精査完了フラグ: tc5_monthly_review_status/{YYYY-MM}={reviewed,reviewedAt,reviewedBy}
+// 精査完了で労務士(viewer)のCSVダウンロードが解禁される。打刻/有給/賄いデータには書き込まない。
+var reviewStatus={}; // tc5_monthly_review_status キャッシュ（"YYYY-MM"→エントリ）
 var paidLeaveTab="list"; // 有給管理サブタブ: "list" | "balance"
 var paidLeaveRequests=[]; // tc5_paid_leave_requests キャッシュ
 var paidLeaveBalances=[]; // tc5_paid_leave_balances キャッシュ
@@ -1582,6 +1603,8 @@ function render(){
     var vMRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    // 労務士CSVゲート: 対象月(selMonth)が精査完了済みのときのみCSVボタンを表示
+    var vReviewed=monthReviewed(selMonth);
     app.innerHTML='<div class="admin-sticky-bar" style="padding:10px 16px 8px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">'
       +'<div style="display:flex;align-items:center;gap:8px;">'
@@ -1590,9 +1613,11 @@ function render(){
       +'</div>'
       +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       +'<select id="viewer-month" style="padding:4px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;background:#fff;">'+vMonthOpts+'</select>'
-      +'<button id="btn-viewer-csv-daily" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日次CSV</button>'
-      +'<button id="btn-viewer-csv" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
-      +'<button id="btn-viewer-staff-detail" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 人別明細CSV</button>'
+      +(vReviewed
+        ?'<button id="btn-viewer-csv-daily" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日次CSV</button>'
+          +'<button id="btn-viewer-csv" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
+          +'<button id="btn-viewer-staff-detail" style="background:#1e40af;color:#fff;border:none;padding:6px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 人別明細CSV</button>'
+        :'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.72rem;font-weight:700;padding:5px 10px;border-radius:2px;">勤怠精査が完了していないため、CSVダウンロードはまだできません</span>')
       +'</div></div>'
       +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       +'<button id="btn-date-prev-v" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:3px 8px;font-size:.9rem;cursor:pointer;line-height:1;">◀</button>'
@@ -1639,6 +1664,7 @@ function render(){
     // 日次CSV（自動承認書き込みなし）
     var vcDailyBtn=document.getElementById("btn-viewer-csv-daily");
     if(vcDailyBtn)vcDailyBtn.onclick=function(){
+      if(!monthReviewed(selMonth)){showAlert("勤怠精査が完了していないため、CSVダウンロードはまだできません");return;}
       var DAYS_D=["日","月","火","水","木","金","土"];
       var hdr="日付,曜日,社員番号,氏名,拠点,雇用形態,出勤時刻,退勤時刻,休憩1開始,休憩1終了,休憩2開始,休憩2終了,休憩回数,休憩回数超過,休憩合計,実働時間";
       var rows=[];
@@ -1667,6 +1693,7 @@ function render(){
     // 月次CSV（自動承認書き込みなし）
     var vcBtn=document.getElementById("btn-viewer-csv");
     if(vcBtn)vcBtn.onclick=function(){
+      if(!monthReviewed(selMonth)){showAlert("勤怠精査が完了していないため、CSVダウンロードはまだできません");return;}
       var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間";
       var csvRows=vStaff.map(function(s){
         var nm=s.name;
@@ -1680,7 +1707,7 @@ function render(){
     };
     // 人別明細CSV（閲覧専用）
     var vcSDBtn=document.getElementById("btn-viewer-staff-detail");
-    if(vcSDBtn)vcSDBtn.onclick=function(){dlStaffDetailCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
+    if(vcSDBtn)vcSDBtn.onclick=function(){if(!monthReviewed(selMonth)){showAlert("勤怠精査が完了していないため、CSVダウンロードはまだできません");return;}dlStaffDetailCSV(selMonth,vMRecs,buildCsvStaffList(vMRecs),approvals);};
     // 資料一覧（非同期）
     loadDocumentList(function(docs){
       var el=document.getElementById("viewer-docs-section");
@@ -2800,6 +2827,19 @@ function render(){
         +'<span style="font-size:.72rem;font-weight:700;color:#475569;width:48px;text-align:center;">勤務日数</span>'
         +'<span style="font-size:.72rem;font-weight:700;color:#1e40af;width:60px;text-align:right;">総実働時間</span>'
         +'</div>';
+      var revDone=monthReviewed(selMonth);
+      var reviewCardHTML='<div class="admin-card">'
+        +'<div class="admin-title">勤怠精査ステータス（'+selMonth+'）</div>'
+        +(revDone
+          ?'<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">'
+             +'<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;font-size:.82rem;font-weight:700;padding:5px 12px;border-radius:2px;">✓ 精査完了済み（労務士のCSVダウンロード可）</span>'
+             +'<button class="btn-export" id="btn-review-unset" style="width:auto;padding:8px 18px;background:#fee2e2;color:#dc2626;border:1px solid #fecaca;">精査完了を解除</button>'
+           +'</div>'
+          :'<div style="display:flex;flex-direction:column;gap:8px;">'
+             +'<div style="color:#92400e;background:#fef3c7;border:1px solid #fde68a;font-size:.82rem;padding:6px 10px;border-radius:2px;">未精査：労務士はこの月のCSVをダウンロードできません</div>'
+             +'<button class="btn-export" id="btn-review-done" style="width:auto;padding:10px 24px;">✓ この月の勤怠精査を完了</button>'
+           +'</div>')
+        +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">CSV エクスポート</div>'
         +'<select id="sel-month" style="width:100%;margin-bottom:10px;">'+monOpts+'</select>'
@@ -2809,6 +2849,7 @@ function render(){
         +'<button class="btn-export" id="btn-csv-staff-detail" style="width:auto;padding:10px 24px;">📥 人別明細CSV</button>'
         +'</div>'
         +'</div>'
+        +reviewCardHTML
         +'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHeader+sumHTML+'</div>';
     }
 
@@ -4542,6 +4583,18 @@ function render(){
     if(csvSD)csvSD.onclick=function(){
       var mR=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
       dlStaffDetailCSV(selMonth,mR,buildCsvStaffList(mR),approvals);
+    };
+
+    // 月次精査完了/解除（管理者のみ。労務士CSVダウンロードのゲート）
+    var revDoneBtn=document.getElementById("btn-review-done");
+    if(revDoneBtn)revDoneBtn.onclick=function(){
+      if(viewerMode)return;
+      showConfirm("この月の勤怠精査を完了します。労務士がCSVをダウンロード可能になります。よろしいですか？",function(){reviewStatusSave(selMonth,true);});
+    };
+    var revUnsetBtn=document.getElementById("btn-review-unset");
+    if(revUnsetBtn)revUnsetBtn.onclick=function(){
+      if(viewerMode)return;
+      showConfirm("この月の精査完了を解除します。労務士はCSVをダウンロードできなくなります。よろしいですか？",function(){reviewStatusSave(selMonth,false);});
     };
 
     // 応援集計タブ
@@ -6369,6 +6422,7 @@ async function initFirebase() {
       fetchJson(FB_URL+"/tc5_staff_notifications.json"),
       fetchJson(FB_URL+"/tc5_meals.json"),
       fetchJson(FB_URL+"/tc5_meal_confirmations.json"),
+      fetchJson(FB_URL+"/tc5_monthly_review_status.json"),
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
@@ -6380,6 +6434,7 @@ async function initFirebase() {
     var fbStaffNotifications=results[15];
     var fbMeals=results[16];
     var fbMealConf=results[17];
+    var fbReviewStatus=results[18];
 
     if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
@@ -6412,6 +6467,8 @@ async function initFirebase() {
     if(fbMeals&&typeof fbMeals==="object"){mealsData=fbMeals;}
     // 賄い月初確認（employeeId→{"YYYY-MM":エントリ}）
     if(fbMealConf&&typeof fbMealConf==="object"){mealConfData=fbMealConf;}
+    // 月次精査完了フラグ（"YYYY-MM"→{reviewed,reviewedAt,reviewedBy}）
+    if(fbReviewStatus&&typeof fbReviewStatus==="object"){reviewStatus=fbReviewStatus;}
     // スタッフ本人向け通知（社員番号→{notifId→通知}）
     if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
     // デモアクセス
