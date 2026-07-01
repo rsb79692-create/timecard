@@ -1657,6 +1657,28 @@ function render(){
             +'</tr>';
         }).join("")
       :'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8496a7;font-size:.85rem;">この月の有給申請はありません</td></tr>';
+    // この月の賄い回数（tc5_meals を read 参照のみ・書き込みなし）。
+    // 集計キーは締め対象月(reviewMonth)。回数 = mealsData[eid].dates のうちキーが reviewMonth で始まり taken===true の日数。
+    // 対象スタッフは管理「賄い一覧」と同基準（在籍 かつ 賄い対象 mealRequired）。並びは既存viewerに合わせ yomi 昇順。
+    function mealCountOf(eid,ym){
+      eid=(eid||"").trim();if(!eid)return 0;
+      var e=mealsData[eid];if(!e||!e.dates)return 0;
+      var pre=ym+"-";var n=0;
+      Object.keys(e.dates).forEach(function(d){if(d.indexOf(pre)===0&&e.dates[d]&&e.dates[d].taken===true)n++;});
+      return n;
+    }
+    var vMealStaff=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;})
+      .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
+    var vMealRowsHtml=vMealStaff.length
+      ?vMealStaff.map(function(s){
+          var cnt=mealCountOf(s.employeeId,reviewMonth);
+          return '<tr style="background:#fff;">'
+            +'<td style="'+vPlTd+'text-align:left;font-weight:900;color:#0f172a;white-space:nowrap;">'+esc(s.name)+'</td>'
+            +'<td style="'+vPlTd+'font-family:monospace;color:#1e40af;">'+esc(s.employeeId||"")+'</td>'
+            +'<td style="'+vPlTd+'font-family:monospace;font-weight:700;color:#15803d;">'+cnt+'</td>'
+            +'</tr>';
+        }).join("")
+      :'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8496a7;font-size:.85rem;">対象スタッフがいません</td></tr>';
     app.innerHTML='<div class="admin-sticky-bar" style="padding:10px 16px 8px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">'
       +'<div style="display:flex;align-items:center;gap:8px;">'
@@ -1703,6 +1725,18 @@ function render(){
       +'<th style="'+thSV+'">状態</th>'
       +'</tr></thead>'
       +'<tbody>'+vPlRowsHtml+'</tbody>'
+      +'</table></div>'
+      +'</div>'
+      +'<div style="margin-top:20px;padding:0 4px;">'
+      +'<div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">この月の賄い回数<span style="font-size:.72rem;font-weight:700;color:#64748b;margin-left:8px;">（'+reviewMonth+' 月締め対象）</span></div>'
+      +'<div style="overflow-x:auto;border:1px solid #adb5bd;border-radius:2px;background:#fff;">'
+      +'<table style="width:100%;border-collapse:collapse;min-width:300px;">'
+      +'<thead><tr style="background:#eaecef;">'
+      +'<th style="'+thSV+'text-align:left;border-right:1px solid #dee2e6;">氏名</th>'
+      +'<th style="'+thSV+'">社員番号</th>'
+      +'<th style="'+thSV+'">賄い回数</th>'
+      +'</tr></thead>'
+      +'<tbody>'+vMealRowsHtml+'</tbody>'
       +'</table></div>'
       +'</div>'
       +'<div style="margin-top:20px;padding:0 4px;">'
@@ -1760,14 +1794,14 @@ function render(){
     var vcBtn=document.getElementById("btn-viewer-csv");
     if(vcBtn)vcBtn.onclick=function(){
       if(!monthReviewed(reviewMonth)){showAlert(reviewMonth+" の勤怠精査が完了していないため、CSVダウンロードはまだできません");return;}
-      var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間";
+      var hdr="社員番号,氏名,拠点,雇用形態,勤務日数,総労働時間,残業時間,賄い回数";
       var csvRows=vStaff.map(function(s){
         var nm=s.name;
         var sr2=vMRecs.filter(function(r){return r.staff===nm;});
         var d2=[...new Set(sr2.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms3=d2.reduce(function(acc,dk){return acc+calcMs(sr2.filter(function(r){return r.date===dk;}));},0);
         var ot2=Math.max(0,ms3-d2.length*8*3600000);
-        return[(s.employeeId||""),nm,(s.location||""),(s.employmentType||""),d2.length,toHM(ms3)||"0:00",ot2>0?toHM(ot2):""].join(",");
+        return[(s.employeeId||""),nm,(s.location||""),(s.employmentType||""),d2.length,toHM(ms3)||"0:00",ot2>0?toHM(ot2):"",mealCountOf(s.employeeId,reviewMonth)].join(",");
       });
       dlCSV(hdr+"\n"+csvRows.join("\n"),"穂乃味_月次勤怠_"+reviewMonth+".csv");
     };
