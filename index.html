@@ -2443,6 +2443,15 @@ function render(){
   // ── スタッフ詳細 ──
   if(screen==="staffDetail"){
     var nm=selStaffDetail;
+    // 社員切替（▲▼・氏名クリック）用：入口(staffDetailFrom)ごとの一覧順に一致させる
+    // admin=在籍のみ / csvPreview(その他)=全件、いずれも yomi 昇順（一覧生成と同一comparator・null安全化）
+    var _detailStaffList=(staffDetailFrom==="admin"
+      ?staffList.filter(function(s){return !s.status||s.status==="在籍";})
+      :staffList.slice()
+    ).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
+    var _detailIdx=_detailStaffList.indexOf(nm);
+    var _prevStaff=_detailIdx>0?_detailStaffList[_detailIdx-1]:null;
+    var _nextStaff=(_detailIdx>=0&&_detailIdx<_detailStaffList.length-1)?_detailStaffList[_detailIdx+1]:null;
     var months2=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
@@ -2519,7 +2528,11 @@ function render(){
       // ① ヘッダー
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
         +'<button style="background:#dde1e7;color:#475569;font-size:.85rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
-        +'<div style="font-size:1.2rem;font-weight:900;">'+nm+'</div>'
+        +'<div style="display:flex;align-items:center;gap:8px;">'
+          +'<button id="det-prev-staff" '+(_prevStaff?'':'disabled ')+'title="前の職員" style="background:'+(_prevStaff?'#dde1e7':'#eef0f2')+';color:'+(_prevStaff?'#475569':'#c8ccd2')+';border:1px solid '+(_prevStaff?'#adb5bd':'#e5e7eb')+';border-radius:2px;font-size:1rem;font-weight:900;padding:5px 12px;cursor:'+(_prevStaff?'pointer':'not-allowed')+';font-family:inherit;line-height:1;">▲</button>'
+          +'<button id="det-name-btn" title="職員一覧から選択" style="font-size:1.2rem;font-weight:900;color:#0f172a;background:none;border:none;border-bottom:1px dashed #adb5bd;cursor:pointer;font-family:inherit;padding:2px 4px;">'+esc(nm)+'</button>'
+          +'<button id="det-next-staff" '+(_nextStaff?'':'disabled ')+'title="次の職員" style="background:'+(_nextStaff?'#dde1e7':'#eef0f2')+';color:'+(_nextStaff?'#475569':'#c8ccd2')+';border:1px solid '+(_nextStaff?'#adb5bd':'#e5e7eb')+';border-radius:2px;font-size:1rem;font-weight:900;padding:5px 12px;cursor:'+(_nextStaff?'pointer':'not-allowed')+';font-family:inherit;line-height:1;">▼</button>'
+        +'</div>'
         +'<div style="display:flex;align-items:center;gap:8px;">'
           +'<select id="det-month" style="font-size:.85rem;padding:6px;border:1px solid #adb5bd;border-radius:2px;">'+monOpts3+'</select>'
           +'<button id="btn-bulk-approve-detail" style="background:#1e40af;color:#fff;border:none;padding:7px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
@@ -2560,6 +2573,13 @@ function render(){
     // イベント
     var dm=document.getElementById("det-month");
     if(dm)dm.onchange=function(){selMonth=dm.value;render();};
+    // 社員切替（月は維持・戻り先も維持＝openStaffDetail経由でselMonth/staffDetailFrom不変）
+    var _pvBtn=document.getElementById("det-prev-staff");
+    if(_pvBtn&&_prevStaff)_pvBtn.onclick=function(){openStaffDetail(_prevStaff,staffDetailFrom);};
+    var _nxBtn=document.getElementById("det-next-staff");
+    if(_nxBtn&&_nextStaff)_nxBtn.onclick=function(){openStaffDetail(_nextStaff,staffDetailFrom);};
+    var _nmBtn=document.getElementById("det-name-btn");
+    if(_nmBtn)_nmBtn.onclick=function(){showStaffPicker(_detailStaffList,nm,staffDetailFrom);};
     document.querySelectorAll(".btn-approve").forEach(function(b){
       b.onclick=function(){
         if(b.disabled)return;
@@ -5272,6 +5292,29 @@ function filterCsvPreview(){
   if(cnt)cnt.textContent="全"+rows.length+"件"+(visible<rows.length?" / 表示"+visible+"件":"");
 }
 function openStaffDetail(nm,from){selStaffDetail=nm;staffDetailFrom=from||"csvPreview";screen="staffDetail";render();}
+// 個人勤怠詳細ヘッダーの氏名クリック→職員一覧から切替（月・戻り先はopenStaffDetailで維持）
+function showStaffPicker(list,current,from){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:16px;max-width:340px;width:100%;max-height:74vh;display:flex;flex-direction:column;border:1px solid #adb5bd;";
+  var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;";ttl.textContent="職員を選択";card.appendChild(ttl);
+  var listWrap=document.createElement("div");listWrap.style.cssText="overflow-y:auto;display:flex;flex-direction:column;gap:6px;";
+  function close(){if(ov.parentNode)document.body.removeChild(ov);}
+  (list||[]).forEach(function(name){
+    var b=document.createElement("button");
+    b.textContent=name;
+    var isCur=name===current;
+    b.style.cssText="text-align:left;padding:10px 12px;border-radius:2px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;border:1px solid "+(isCur?"#1e40af":"#adb5bd")+";background:"+(isCur?"#1e40af":"#fff")+";color:"+(isCur?"#fff":"#0f172a")+";";
+    b.onclick=function(){close();if(name!==current)openStaffDetail(name,from);};
+    listWrap.appendChild(b);
+  });
+  card.appendChild(listWrap);
+  var cancel=document.createElement("button");cancel.textContent="キャンセル";cancel.style.cssText="margin-top:12px;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cancel.onclick=close;card.appendChild(cancel);
+  ov.appendChild(card);
+  ov.onclick=function(e){if(e.target===ov)close();};
+  document.body.appendChild(ov);
+}
 function openHrmEdit(nm){
   var s=nm?staffList.find(function(x){return x.name===nm;}):null;
   var modal=document.getElementById("hrm-modal");
