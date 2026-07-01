@@ -398,6 +398,17 @@ function listenFirebase() {
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
         }
       }).catch(function(){});
+    // 精査完了フラグ(tc5_monthly_review_status)を画面を問わず常時同期。
+    // 管理者の「精査完了」押下を、開きっぱなしの労務士(viewer)/管理者/スタッフ画面へ最大10秒で反映し、
+    // CSVダウンロード制限を解除する。読み取り専用の反映のため再描画は安全（入力状態には触れない）。
+    authFetch(FB_URL + "/tc5_monthly_review_status.json")
+      .then(function(r){return r.json();})
+      .then(function(val){
+        if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
+          reviewStatus=val;
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+        }
+      }).catch(function(){});
     // 打刻画面でも修正申請を同期（管理者の承認/却下で pending から外れた申請を「申請中の修正」表示から即時に消す。
     // 早期 return より前に置くことで punch 画面でも反映される。管理者の履歴タブ操作には依存しない）。
     if(screen==="punch" && staffName){
