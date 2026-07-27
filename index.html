@@ -429,6 +429,26 @@ function listenFirebase() {
             }
           }
         }).catch(function(){});
+      // 本人向けアプリ内通知（有給の付与・承認・却下）を同期。開いたままの打刻画面へ承認/却下結果を反映する。
+      // 読み取りは本人の社員番号配下のみ（他スタッフの通知は取得しない）。
+      var _snPollSid=resolveStaffId(staffName);
+      if(_snPollSid){
+        authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(_snPollSid)+".json")
+          .then(function(r){return r.json();})
+          .then(function(val){
+            if(!val||typeof val!=="object")return;
+            var cur=staffNotifications[_snPollSid]||{};
+            // 既読フラグはローカル（既読化PUT済み）を優先し、反映遅延による未読への巻き戻しを防ぐ
+            Object.keys(val).forEach(function(k){if(val[k]&&cur[k]&&cur[k].read===true)val[k].read=true;});
+            if(JSON.stringify(val)!==JSON.stringify(cur)){
+              // ローカル生成済みで未伝播の通知は保持（承認直後の管理者端末などで消えないように）
+              Object.keys(cur).forEach(function(k){if(!val[k])val[k]=cur[k];});
+              staffNotifications[_snPollSid]=val;
+              // 他 polling と同じガード（打刻保存中・修正入力中・有給フォーム入力中は再描画しない）
+              if(savingCount===0&&!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
+            }
+          }).catch(function(){});
+      }
     }
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
     authFetch(FB_URL + "/tc5_records.json")
@@ -465,17 +485,24 @@ function listenFirebase() {
           }
         }
       }).catch(function(){});
-    if(screen==="admin"&&adminTab==="paidleave"){
+    // 有給申請(正本)は管理者画面表示中は常時同期。有給管理タブ以外でも未対応件数バッジを最新化するため（読み取りのみ・書き込みなし）
+    if(screen==="admin"){
       authFetch(FB_URL+"/tc5_paid_leave_requests.json")
         .then(function(r){return r.json();})
         .then(function(val){
           if(val){
             var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
-            paidLeaveRequests=(arr||[]).filter(Boolean);
-            // 残日数入力フォーム編集中・タブ閲覧中はrenderをスキップ（UI状態リセット防止）
-            if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard) render();
+            var next=(arr||[]).filter(Boolean);
+            // 他 polling と同様に差分時のみ反映・再描画（定常再描画による入力欄・モーダル状態のリセット防止）
+            if(JSON.stringify(next)!==JSON.stringify(paidLeaveRequests)){
+              paidLeaveRequests=next;
+              // 残日数入力フォーム編集中・タブ閲覧中・月別出勤日数入力中はrenderをスキップ（UI状態リセット防止）
+              if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            }
           }
         }).catch(function(){});
+    }
+    if(screen==="admin"&&adminTab==="paidleave"){
       // 残日数も polling で同期（承認処理中・フォーム編集中はスキップ）
       if(!paidLeaveBalanceSaving&&!paidLeaveBalanceDirty){
         authFetch(FB_URL+"/tc5_paid_leave_balances.json")
@@ -899,6 +926,12 @@ function fmtDate(d){return d.getFullYear()+"/"+pad(d.getMonth()+1)+"/"+pad(d.get
 function fmtDateKey(d){return d.getFullYear()+"-"+pad(d.getMonth()+1)+"-"+pad(d.getDate());}
 function fmtTime(d){return pad(d.getHours())+":"+pad(d.getMinutes());}
 function fmtTimeSec(d){return pad(d.getHours())+":"+pad(d.getMinutes())+":"+pad(d.getSeconds());}
+// "YYYY-MM-DD" → "YYYY年M月D日"（有給通知の対象日表示用。不正値はそのまま返す）
+function fmtJPDate(ymd){
+  var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd||""));
+  if(!m)return String(ymd||"");
+  return m[1]+"年"+parseInt(m[2],10)+"月"+parseInt(m[3],10)+"日";
+}
 function monthKey(iso){return iso?iso.substring(0,7):"";}
 // JST 明示で date+time から Date を生成（UTC解釈ズレを防ぐ）
 function parseJstDateTime(date,time){
@@ -1169,6 +1202,7 @@ var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日
 var plFormMonth=""; // 有給申請フォームで表示中の年月（YYYY-MM、render()またぎ保持）
 var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
 var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
+var plHighlightId=null; // 通知から有給申請一覧へ移動した際にハイライトする申請ID（1回適用したらクリア）
 var pinRevealSet={}; // {staffName: true} スタッフ管理画面でPINを表示中の行を管理
 var showBreakColumn=false;
 var showUnapprovedOnly=false;
@@ -1331,6 +1365,15 @@ function getUnapprovedSummary(){
 function goUnapprovedRecords(){
   adminTab="records";showUnapprovedOnly=true;render();
 }
+// セキュリティ: 申請IDは onclick 文字列・DOM id へ素で埋め込むため、英数字・ハイフン・アンダースコアのみ許可。
+// 不正文字を含む場合は空文字を返し、呼び出し側でハイライト・行idを付けない（既存の賄いカードと同じ方針）。
+function plSafeId(id){var s=String(id==null?"":id);return /^[A-Za-z0-9_-]+$/.test(s)?s:"";}
+// 有給申請一覧（有給管理タブ）へ移動。plId 指定時は該当行までスクロールして一時ハイライト。
+function goPaidLeaveRequests(plId){
+  plHighlightId=plSafeId(plId)||null;
+  showPaidLeaveHistory=false; // 履歴表示中でも申請中の行が見える状態にする
+  setTab("paidleave"); // 一覧の再取得＋描画は setTab 側の既存処理に従う
+}
 
 // ===== 通知件数集計 =====
 function getNotificationCounts(){
@@ -1358,8 +1401,11 @@ function getNotificationCounts(){
   });
   // 打刻漏れ(missingPunch)は管理者通知合計から除外。スタッフ本人の打刻画面に移管。
   var pendingCrq=correctionRequests.filter(function(r){return r.status==="pending";}).length;
-  var total=Object.keys(notifyIds).length+pendingCrq;
-  return{unapproved:unapproved,missingPunch:mp,total:total,pendingCorrectionRequests:pendingCrq,_missingList:missingList};
+  // 有給申請の未対応件数は正本(tc5_paid_leave_requests)の status==="pending" のみから算出。
+  // 承認/却下/取消(canceled)は自動的に対象外になるため、通知レコードを別途持たない（二重通知・件数ズレが起きない）。
+  var pendingPl=paidLeaveRequests.filter(function(r){return r&&r.status==="pending";}).length;
+  var total=Object.keys(notifyIds).length+pendingCrq+pendingPl;
+  return{unapproved:unapproved,missingPunch:mp,total:total,pendingCorrectionRequests:pendingCrq,pendingPaidLeave:pendingPl,_missingList:missingList};
 }
 function updateAppBadge(count){
   if(!('setAppBadge' in navigator))return;
@@ -1987,10 +2033,16 @@ function render(){
     if(_snList.length){
       if(staffNotifOpen){
         var _snRows=_snList.slice(0,10).map(function(n){ // 最大10件
-          return '<div style="padding:8px 12px;border-top:1px solid #e5e7eb;'+(n.read?'':'background:#eff6ff;')+'">'
-            +'<div style="font-size:.84rem;font-weight:700;color:#1e3a8a;">'+esc(n.title||"")+'</div>'
+          // 種別で色分け: 却下=注意（赤）／引戻=注意（橙）／承認・付与=成功（緑）／その他=既存の青
+          var _snRej=(n.type==="paid_leave_rejected");
+          var _snRev=(n.type==="paid_leave_reverted");
+          var _snOk=(n.type==="paid_leave_approved"||n.type==="paid_leave_grant");
+          var _snAcc=_snRej?"#991b1b":(_snRev?"#92400e":(_snOk?"#166534":"#1e3a8a"));
+          var _snUnreadBg=_snRej?"background:#fef2f2;":(_snRev?"background:#fffbeb;":(_snOk?"background:#f0fdf4;":"background:#eff6ff;"));
+          return '<div style="padding:8px 12px;border-top:1px solid #e5e7eb;border-left:3px solid '+_snAcc+';'+(n.read?'':_snUnreadBg)+'">'
+            +'<div style="font-size:.84rem;font-weight:700;color:'+_snAcc+';">'+(_snRej?"⚠ ":(_snRev?"↩ ":(_snOk?"✅ ":"")))+esc(n.title||"")+'</div>'
             +'<div style="font-size:.82rem;color:#334155;margin-top:2px;line-height:1.5;">'+esc(n.body||"")+'</div>'
-            +'<div style="font-size:.68rem;color:#94a3b8;margin-top:3px;font-family:monospace;">'+esc((n.createdAt||"").slice(0,10))+'</div>'
+            +'<div style="font-size:.68rem;color:#94a3b8;margin-top:3px;font-family:monospace;">'+esc(isoToJSTDateTime(n.createdAt)||(n.createdAt||"").slice(0,10))+'</div>'
             +'</div>';
         }).join("");
         _snHtml='<div style="margin:0 0 12px;border:1px solid #93c5fd;border-radius:8px;overflow:hidden;">'
@@ -1999,10 +2051,16 @@ function render(){
           +'<span style="font-size:.72rem;color:#1e40af;">閉じる ▲</span></div>'
           +_snRows+'</div>';
       }else{
-        _snHtml='<div onclick="staffNotifReadAndOpen()" style="margin:0 0 12px;padding:11px 14px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;'
-          +(_snUnread>0?'background:#dbeafe;border:1px solid #93c5fd;':'background:#f1f5f9;border:1px solid #cbd5e1;')+'">'
-          +'<span style="font-size:.9rem;font-weight:700;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">🔔 '+esc(_snBannerTitle)+(_snUnread>1?'（未読'+_snUnread+'件）':'')+'</span>'
-          +'<span style="font-size:.72rem;color:'+(_snUnread>0?'#1e40af':'#64748b')+';">履歴を見る ▼</span></div>';
+        // 未読先頭の種別でバナー色を切替（却下=注意／承認・付与=成功／その他=既存の青）。既読のみの場合は従来のグレー
+        var _snTopType=_snUnread>0?(_snUnreadList[0].type||""):"";
+        var _snBnBg='background:#dbeafe;border:1px solid #93c5fd;',_snBnFg='#1e40af';
+        if(_snTopType==="paid_leave_rejected"){_snBnBg='background:#fef2f2;border:1px solid #fca5a5;';_snBnFg='#991b1b';}
+        else if(_snTopType==="paid_leave_reverted"){_snBnBg='background:#fffbeb;border:1px solid #fcd34d;';_snBnFg='#92400e';}
+        else if(_snTopType==="paid_leave_approved"||_snTopType==="paid_leave_grant"){_snBnBg='background:#f0fdf4;border:1px solid #86efac;';_snBnFg='#166534';}
+        _snHtml='<div onclick="staffNotifReadAndOpen()" style="margin:0 0 12px;padding:11px 14px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;'
+          +(_snUnread>0?_snBnBg:'background:#f1f5f9;border:1px solid #cbd5e1;')+'">'
+          +'<span style="font-size:.9rem;font-weight:700;min-width:0;color:'+(_snUnread>0?_snBnFg:'#64748b')+';">🔔 '+esc(_snBannerTitle)+(_snUnread>1?'（未読'+_snUnread+'件）':'')+'</span>'
+          +'<span style="font-size:.72rem;white-space:nowrap;flex-shrink:0;color:'+(_snUnread>0?_snBnFg:'#64748b')+';">履歴を見る ▼</span></div>';
       }
     }
     // ── 賄い（まかない）入力欄（「賄い 要」のスタッフのみ表示・本人操作。初期は折りたたみ） ──
@@ -3545,10 +3603,29 @@ function render(){
               +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#dc2626;font-weight:700;">'+item.reason+'</td></tr>';
           }).join("")
         :'<tr><td colspan="3" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
+      // ── 有給申請の未対応通知（正本 tc5_paid_leave_requests の pending のみ。取消・却下・承認済は自動的に対象外） ──
+      var _plPending=paidLeaveRequests.filter(function(r){return r&&r.status==="pending";}).slice()
+        .sort(function(a,b){return String(b.createdAt||"").localeCompare(String(a.createdAt||""));});
+      var _plNotifRows=_plPending.length
+        ?_plPending.map(function(r){
+            var _lds=getLeaveDates(r).slice().sort();
+            var _dsp=_lds.length?fmtJPDate(_lds[0])+(_lds.length>1?" ほか"+(_lds.length-1)+"日":""):"日付未設定";
+            var _plnId=plSafeId(r.id); // 不正IDなら引数なし＝一覧の先頭へ移動（ハイライトなし）
+            return '<div onclick="goPaidLeaveRequests('+(_plnId?'\''+_plnId+'\'':'')+')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:9px 12px;border-top:1px solid #e9ecef;cursor:pointer;">'
+              +'<div style="min-width:0;">'
+              +'<div style="font-size:.84rem;color:#0f172a;font-weight:700;">'+esc(r.staffName||"")+'さんから、'+esc(_dsp)+'の有給申請があります</div>'
+              +'<div style="font-size:.7rem;color:#8496a7;margin-top:2px;">申請日時: '+esc(isoToJSTDateTime(r.createdAt)||"-")+'</div>'
+              +'</div>'
+              +'<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">'
+              +'<span style="background:#fef3c7;color:#92400e;font-size:.68rem;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;">申請中</span>'
+              +'<span style="font-size:.72rem;color:#1e40af;font-weight:700;white-space:nowrap;">一覧へ ›</span>'
+              +'</div></div>';
+          }).join("")
+        :'<div style="padding:12px;color:#8496a7;text-align:center;font-size:.82rem;">未対応の有給申請はありません</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">🔔 通知管理</div>'
-        +'<div style="font-size:.8rem;color:#64748b;margin-bottom:12px;">打刻漏れはスタッフ本人の打刻画面に通知されます。管理者には修正申請の承認待ちと未承認打刻を表示します。</div>'
-        +'<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">'
+        +'<div style="font-size:.8rem;color:#64748b;margin-bottom:12px;">打刻漏れはスタッフ本人の打刻画面に通知されます。管理者には修正申請の承認待ちと未承認打刻、有給申請の未対応件数を表示します。</div>'
+        +'<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px;">'
         +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">未承認打刻</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.unapproved+'</div>'
@@ -3560,11 +3637,23 @@ function render(){
         +'<div style="font-size:1.5rem;font-weight:900;color:#92400e;">'+_nc.pendingCorrectionRequests+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +'</div>'
+        +'<div style="background:'+(_nc.pendingPaidLeave>0?"#f0fdf4":"#f8fafc")+';border-radius:8px;padding:12px;text-align:center;">'
+        +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">有給申請待ち</div>'
+        +'<div style="font-size:1.5rem;font-weight:900;color:'+(_nc.pendingPaidLeave>0?"#166534":"#8496a7")+';">'+_nc.pendingPaidLeave+'</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +(_nc.pendingPaidLeave>0
+          ?'<button onclick="goPaidLeaveRequests()" style="margin-top:8px;background:#166534;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
+          :'')
+        +'</div>'
         +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">合計</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#1e40af;">'+_nc.total+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +'</div>'
+        +'</div>'
+        +'<div style="border:1px solid '+(_nc.pendingPaidLeave>0?"#86efac":"#e2e8f0")+';border-radius:8px;overflow:hidden;">'
+        +'<div style="padding:8px 12px;background:'+(_nc.pendingPaidLeave>0?"#f0fdf4":"#f8fafc")+';font-size:.84rem;font-weight:700;color:'+(_nc.pendingPaidLeave>0?"#166534":"#64748b")+';">🌴 有給申請'+(_nc.pendingPaidLeave>0?' '+_nc.pendingPaidLeave+'件':'')+'</div>'
+        +_plNotifRows
         +'</div>'
         +'</div>';
     }
@@ -3616,7 +3705,8 @@ function render(){
             var isProxy=(r.adminProxy===true)||(r.requestSource==="admin_proxy");
             var proxyBadge=isProxy?'<span title="管理者による代理申請" style="margin-left:5px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;white-space:nowrap;">管理者代理</span>':"";
             var noteDisp=(isProxy&&r.note)?'<span title="'+String(r.note).replace(/"/g,"&quot;")+'" style="margin-left:4px;color:#8496a7;font-size:.62rem;cursor:help;">📝</span>':"";
-            return '<tr style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
+            var _plRowId=plSafeId(r.id); // 通知からのスクロール先アンカー（不正IDなら付与しない）
+            return '<tr'+(_plRowId?' id="plrow_'+_plRowId+'"':'')+' style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
               +'<td style="'+_plTd+'white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';'+_plBadge+'white-space:nowrap;">'+sl+'</span></td>'
               +'<td style="'+_plName+'">'+r.staffName+proxyBadge+noteDisp+'</td>'
               +'<td style="'+_plTd+'font-family:monospace;">'+dateDisp+dayCountDisp+'</td>'
@@ -4354,13 +4444,25 @@ function render(){
       +'<button class="tab-btn '+(adminTab==="notify"?"tab-on":"tab-off")+'" onclick="setTab(\'notify\')">'
       +'通知'+(counts.total>0?'<span style="display:inline-block;background:#dc2626;color:#fff;border-radius:9999px;padding:0 5px;font-size:.6rem;font-weight:700;margin-left:3px;vertical-align:middle;">'+counts.total+'</span>':'')
       +'</button>'
-      +'<button class="tab-btn '+(adminTab==="paidleave"?"tab-on":"tab-off")+'" onclick="setTab(\'paidleave\')">有給管理</button>'
+      +'<button class="tab-btn '+(adminTab==="paidleave"?"tab-on":"tab-off")+'" onclick="setTab(\'paidleave\')">'
+      +'有給管理'+(counts.pendingPaidLeave>0?'<span style="display:inline-block;background:#16a34a;color:#fff;border-radius:9999px;padding:0 5px;font-size:.6rem;font-weight:700;margin-left:3px;vertical-align:middle;">'+counts.pendingPaidLeave+'</span>':'')
+      +'</button>'
       +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
       +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
       +'<button class="tab-btn '+(adminTab==="leavePlan"?"tab-on":"tab-off")+'" onclick="setTab(\'leavePlan\')">有給取得計画</button>'
       +'<button class="tab-btn '+(adminTab==="meals"?"tab-on":"tab-off")+'" onclick="setTab(\'meals\')">賄い一覧</button>'
       +'</div>'
       +'</div>'+tc;
+
+    // 通知から有給申請一覧へ移動した場合: 一覧取得後の描画で該当行までスクロールしてハイライト（1回だけ）
+    if(adminTab==="paidleave"&&plHighlightId&&!paidLeaveLoading){
+      var _plHiEl=document.getElementById("plrow_"+plHighlightId);
+      if(_plHiEl){
+        _plHiEl.style.background="#fef9c3";
+        if(_plHiEl.scrollIntoView)_plHiEl.scrollIntoView({block:"center"});
+      }
+      plHighlightId=null;
+    }
 
     // イベント
     function applySelDate(){
@@ -4598,6 +4700,7 @@ function render(){
             if(wasApproved){req.consumedSnapshot=[];}
             return patchPaidLeaveRequest(plId,{status:"rejected",approvedBy:"管理者",approvedAt:req.approvedAt,consumedSnapshot:wasApproved?[]:snapshot});
           }).then(function(){
+            createPaidLeaveRejectionNotification(req,getReqStaffId(req)); // 却下保存成功後のみ・失敗は握りつぶし
             paidLeaveBalanceSaving=false;
             _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
           }).catch(function(e){
@@ -4623,6 +4726,7 @@ function render(){
           req.status="pending";req.approvedBy="";req.approvedAt="";req.consumedSnapshot=[];
           return patchPaidLeaveRequest(plId,{status:"pending",approvedBy:"",approvedAt:"",consumedSnapshot:[]});
         }).then(function(){
+          createPaidLeaveRevertNotification(req,getReqStaffId(req)); // 引戻保存成功後のみ・失敗は握りつぶし
           paidLeaveBalanceSaving=false;
           _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
         }).catch(function(e){
@@ -6337,12 +6441,13 @@ function createPaidLeaveApprovalNotification(req,staffId){
     if(!sid)return; // 社員番号未設定 → 通知スキップ
     var dates=(getLeaveDates(req)||[]).slice().sort();
     if(!dates.length)return;
-    var first=String(dates[0]).replace(/-/g,"/"); // YYYY/MM/DD
+    var first=fmtJPDate(dates[0]); // YYYY年M月D日
     var remain=getValidRemainDays(sid); // 消化後の有効期限内合算残
     var body=(dates.length<=1)
-      ? "有給申請が承認されました。取得日："+first+"。現在の残日数は"+remain+"日です。"
-      : "有給申請が承認されました。取得日："+first+" ほか"+(dates.length-1)+"日。現在の残日数は"+remain+"日です。";
-    var nid="pln_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+      ? first+"の有給申請が承認されました。現在の残日数は"+remain+"日です。"
+      : first+" ほか"+(dates.length-1)+"日の有給申請が承認されました。現在の残日数は"+remain+"日です。";
+    // 通知IDは「申請ID×通知種別」で決定的に生成 → 再承認・再描画でも同一パスへPUTされ通知が増殖しない
+    var nid=plNotifId(req,"approved");
     var notif={
       id:nid,staffId:sid,staffName:req.staffName||"",type:"paid_leave_approved",
       title:"有給申請が承認されました",
@@ -6357,6 +6462,69 @@ function createPaidLeaveApprovalNotification(req,staffId){
     }).then(function(res){if(!res.ok)console.error("[notif] approval save failed",res.status);})
       .catch(function(e){console.error("[notif] approval network error",e);});
   }catch(e){console.error("[notif] createPaidLeaveApprovalNotification error",e);} // 通知失敗は承認に影響させない
+}
+// 通知IDを「申請ID×通知種別」で決定的に生成（RTDBキー禁止文字 . # $ / [ ] は _ に置換）。
+// 申請IDが無い旧データのみランダムIDへフォールバック。
+function plNotifId(req,kind){
+  var rid=String((req&&req.id)||"").replace(/[.#$/[\]]/g,"_");
+  if(!rid)return "pln_"+Date.now()+"_"+Math.random().toString(36).slice(2,8);
+  return "pln_"+rid+"_"+kind;
+}
+// 有給申請の「却下保存成功後」にのみ呼ぶ。staffId未設定はスキップ。失敗は握りつぶし、却下処理・画面に影響させない。
+// tc5_staff_notifications を付与通知・承認通知と共用（同じ履歴一覧に並ぶ）。
+function createPaidLeaveRejectionNotification(req,staffId){
+  try{
+    var sid=(staffId||"").trim();
+    if(!sid)return; // 社員番号未設定 → 通知スキップ
+    var dates=(getLeaveDates(req)||[]).slice().sort();
+    if(!dates.length)return;
+    var first=fmtJPDate(dates[0]);
+    var body=(dates.length<=1)
+      ? first+"の有給申請が却下されました。詳細は管理者にご確認ください。"
+      : first+" ほか"+(dates.length-1)+"日の有給申請が却下されました。詳細は管理者にご確認ください。";
+    var nid=plNotifId(req,"rejected");
+    var notif={
+      id:nid,staffId:sid,staffName:req.staffName||"",type:"paid_leave_rejected",
+      title:"有給申請が却下されました",
+      body:body,
+      leaveDates:dates,
+      createdAt:new Date().toISOString(),read:false
+    };
+    if(!staffNotifications[sid])staffNotifications[sid]={};
+    staffNotifications[sid][nid]=notif; // 即時in-memory反映
+    authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+nid+".json",{
+      method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(notif)
+    }).then(function(res){if(!res.ok)console.error("[notif] rejection save failed",res.status);})
+      .catch(function(e){console.error("[notif] rejection network error",e);});
+  }catch(e){console.error("[notif] createPaidLeaveRejectionNotification error",e);} // 通知失敗は却下に影響させない
+}
+// 有給申請の「引戻（既存の差し戻し機能）保存成功後」にのみ呼ぶ。承認通知だけが残って承認済みと誤認されるのを防ぐ。
+// staffId未設定はスキップ。失敗は握りつぶし、引戻処理・画面に影響させない。
+function createPaidLeaveRevertNotification(req,staffId){
+  try{
+    var sid=(staffId||"").trim();
+    if(!sid)return; // 社員番号未設定 → 通知スキップ
+    var dates=(getLeaveDates(req)||[]).slice().sort();
+    if(!dates.length)return;
+    var first=fmtJPDate(dates[0]);
+    var body=(dates.length<=1)
+      ? first+"の有給申請の承認が取り消され、申請中に戻りました。詳細は管理者にご確認ください。"
+      : first+" ほか"+(dates.length-1)+"日の有給申請の承認が取り消され、申請中に戻りました。詳細は管理者にご確認ください。";
+    var nid=plNotifId(req,"reverted");
+    var notif={
+      id:nid,staffId:sid,staffName:req.staffName||"",type:"paid_leave_reverted",
+      title:"有給申請が申請中に戻されました",
+      body:body,
+      leaveDates:dates,
+      createdAt:new Date().toISOString(),read:false
+    };
+    if(!staffNotifications[sid])staffNotifications[sid]={};
+    staffNotifications[sid][nid]=notif; // 即時in-memory反映
+    authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+nid+".json",{
+      method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(notif)
+    }).then(function(res){if(!res.ok)console.error("[notif] revert save failed",res.status);})
+      .catch(function(e){console.error("[notif] revert network error",e);});
+  }catch(e){console.error("[notif] createPaidLeaveRevertNotification error",e);} // 通知失敗は引戻に影響させない
 }
 // 打刻画面: 通知履歴を開く＝開いた時点で本人の通知を既読化（要件: 履歴を開いたら既読）
 function staffNotifReadAndOpen(){
