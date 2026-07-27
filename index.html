@@ -776,8 +776,7 @@ function showCorrectionRequestModal(staffNm,opts){
   var _fromNotif=!!opts.type;
   card.appendChild(lbl("対象日付"));
   var dateInp=document.createElement("input");dateInp.type="date";dateInp.value=dk;
-  dateInp.style.cssText="width:100%;padding:7px 10px;font-size:.88rem;border:1px solid #adb5bd;border-radius:2px;font-family:inherit;margin-bottom:10px;box-sizing:border-box;outline:none;"
-    +(_fromNotif?"background:#f1f5f9;color:#64748b;":"");
+  dateInp.style.cssText="width:100%;padding:7px 10px;font-size:.95rem;font-weight:700;border:2px solid #1e40af;border-radius:2px;font-family:inherit;margin-bottom:10px;box-sizing:border-box;outline:none;background:#dbeafe;color:#1e3a8a;-webkit-text-fill-color:#1e3a8a;opacity:1;";
   if(_fromNotif)dateInp.disabled=true;
   card.appendChild(dateInp);
   card.appendChild(lbl("修正対象"));
@@ -788,20 +787,6 @@ function showCorrectionRequestModal(staffNm,opts){
   if(opts.type)typeSel.value=opts.type;
   if(_fromNotif)typeSel.disabled=true;
   card.appendChild(typeSel);
-  var curTimeWrap=document.createElement("div");
-  curTimeWrap.style.cssText="background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:6px;";
-  var curTimeLbl=document.createElement("span");curTimeLbl.style.cssText="font-size:.75rem;font-weight:700;color:#64748b;white-space:nowrap;";curTimeLbl.textContent="現在の打刻時刻：";
-  var curTimeVal=document.createElement("span");curTimeVal.style.cssText="font-size:.92rem;font-weight:700;font-family:monospace;";
-  curTimeWrap.appendChild(curTimeLbl);curTimeWrap.appendChild(curTimeVal);card.appendChild(curTimeWrap);
-  function updateCurTime(){
-    var dt=dateInp.value,tp=typeSel.value;
-    var rec=dt&&tp?records.find(function(r){return r.staff===staffNm&&r.date===dt&&r.type===tp&&!r.deleted;}):null;
-    curTimeVal.textContent=rec?rec.time:"未打刻";
-    curTimeVal.style.color=rec?"#0f172a":"#9ca3af";
-  }
-  updateCurTime();
-  dateInp.onchange=updateCurTime;
-  typeSel.onchange=updateCurTime;
   card.appendChild(lbl("修正後の時刻"));
   var timeInp=document.createElement("input");timeInp.type="time";
   timeInp.style.cssText="width:100%;padding:7px 10px;font-size:1rem;font-family:monospace;border:1px solid #adb5bd;border-radius:2px;margin-bottom:10px;box-sizing:border-box;outline:none;";
