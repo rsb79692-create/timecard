@@ -260,6 +260,16 @@ function monthReviewed(ym){var r=reviewStatus&&reviewStatus[ym];return !!(r&&r.r
 // 締め対象月（＝当月の前月）を "YYYY-MM" で返す単一の真実源。CSVゲート判定・精査完了操作はすべてこれを基準にする。
 // 例: 2026-07-01→"2026-06" / 2026-07-31→"2026-06" / 2027-01-01→"2026-12"。今日基準（today/pad を再利用）。
 function reviewTargetMonth(){var d=new Date(today.getFullYear(),today.getMonth()-1,1);return d.getFullYear()+"-"+pad(d.getMonth()+1);}
+// JST基準で当日が「その月の実際の最終日」のときだけ当月を "YYYY-MM" で返す（月末前・翌月1日は ""）。
+// 端末TZ/UTCで日付がずれないよう getTodayJSTStr() を使用。最終日は Date.UTC(y,m,0) で月ごとに算出（1/31・2/28・閏年2/29・4/30 等に対応）。
+// 例: 2026-07-30→"" / 2026-07-31→"2026-07" / 2026-08-01→""。締め対象月セレクタの選択肢追加にのみ使用する。
+function reviewCurrentMonthIfMonthEnd(){
+  var t=getTodayJSTStr(); // "YYYY-MM-DD"（JST）
+  var y=parseInt(t.slice(0,4),10),m=parseInt(t.slice(5,7),10),d=parseInt(t.slice(8,10),10);
+  if(!y||!m||!d)return "";
+  var lastDay=new Date(Date.UTC(y,m,0)).getUTCDate(); // 当月の実際の最終日
+  return d===lastDay?(y+"-"+pad(m)):"";
+}
 // 精査完了/解除を保存。tc5_monthly_review_status/{ym} 単位の個別PUT（他月のノードに触れない）。
 // 解除も削除APIを使わず reviewed:false へ上書き（データ破壊を避ける）。管理者操作時のみ（viewerModeガード必須）。
 function reviewStatusSave(ym,reviewed){
@@ -3043,6 +3053,9 @@ function render(){
       var revMonList=[];
       for(var _rm=1;_rm<=6;_rm++){var _rd=new Date(today.getFullYear(),today.getMonth()-_rm,1);revMonList.push(_rd.getFullYear()+"-"+pad(_rd.getMonth()+1));}
       if(revMonList.indexOf(reviewMonth)<0)revMonList.unshift(reviewMonth);
+      // JST基準で当日が月末日のときのみ当月を選択肢の先頭に追加（月末前は従来どおり前月まで）。既定選択は reviewMonth のまま。
+      var _revCurYm=reviewCurrentMonthIfMonthEnd();
+      if(_revCurYm&&revMonList.indexOf(_revCurYm)<0)revMonList.unshift(_revCurYm);
       var revMonOpts=revMonList.map(function(m){return'<option value="'+m+'"'+(m===reviewMonth?" selected":"")+'>'+m+'</option>';}).join("");
       var reviewCardHTML='<div class="admin-card">'
         +'<div class="admin-title">勤怠精査ステータス（精査対象月: '+reviewMonth+'）</div>'
