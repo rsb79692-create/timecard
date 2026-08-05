@@ -1123,6 +1123,14 @@ function fmtJPDate(ymd){
   return m[1]+"年"+parseInt(m[2],10)+"月"+parseInt(m[3],10)+"日";
 }
 function monthKey(iso){return iso?iso.substring(0,7):"";}
+// "YYYY-MM" を delta か月ずらす（年またぎは Date の桁上がりに委ねる）。不正値はそのまま返す。
+function shiftMonthKey(m,delta){
+  var p=String(m||"").split("-");
+  var y=parseInt(p[0],10),mo=parseInt(p[1],10);
+  if(!y||!mo)return m;
+  var d=new Date(y,mo-1+delta,1);
+  return d.getFullYear()+"-"+pad(d.getMonth()+1);
+}
 // JST 明示で date+time から Date を生成（UTC解釈ズレを防ぐ）
 function parseJstDateTime(date,time){
   if(!date||!time)return null;
@@ -1370,6 +1378,8 @@ var mealFormOpen=(function(){try{return localStorage.getItem("tc5_meal_form_open
 // 打刻画面「今月の打刻状況」カードの開閉状態（端末に保存・初期は折りたたみ）
 var monthPunchOpen=(function(){try{return localStorage.getItem("tc5_month_punch_open")==="1";}catch(e){return false;}})();
 var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
+// 管理者「修正履歴」タブの表示月（YYYY-MM）。初期値は当月(JST)。selMonth/reviewMonth とは独立に管理し、他画面へ影響させない。
+var adjLogMonth="";
 var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
 // 賄い月初確認: tc5_meal_confirmations/{employeeId}/{YYYY-MM}={staffId,staffName,targetMonth,status,updatedAt}
 var mealConfData={}; // tc5_meal_confirmations キャッシュ（employeeId→{"YYYY-MM":エントリ}）。打刻/有給/月別/賄いデータには書き込まない
@@ -4439,9 +4449,30 @@ function _renderInner(){
     }
 
     if(adminTab==="adjustlog"){
-      var adjNow=new Date();
-      var adjCurMonth=adjNow.getFullYear()+"-"+pad(adjNow.getMonth()+1);
-      var adjRecs=records.filter(function(r){return !r.deleted&&r.adjustReason&&monthKey(r.date)===adjCurMonth;});
+      // 表示月は adjLogMonth（初期＝当月）。当月判定は JST 基準で端末TZに依存させない。未来月は表示させない。
+      var adjCurMonth=getTodayJSTStr().substring(0,7);
+      if(!adjLogMonth)adjLogMonth=adjCurMonth;
+      if(adjLogMonth>adjCurMonth)adjLogMonth=adjCurMonth;
+      // 月候補：修正履歴のある最古月〜当月を連続で列挙（履歴0件の月・年またぎも選択できる）
+      var adjOldest=adjCurMonth;
+      records.forEach(function(r){
+        if(r.deleted||!r.adjustReason||!r.date)return;
+        var mk=r.date.substring(0,7);
+        if(/^\d{4}-\d{2}$/.test(mk)&&mk>="2000-01"&&mk<adjOldest)adjOldest=mk;
+      });
+      if(adjLogMonth<adjOldest)adjOldest=adjLogMonth;
+      var adjMonthList=[],_adjM=adjCurMonth;
+      while(_adjM>=adjOldest&&adjMonthList.length<240){adjMonthList.push(_adjM);_adjM=shiftMonthKey(_adjM,-1);}
+      // 上限(240ヶ月)を超えて遡った場合でも、表示中の月は必ず選択肢に含める（見出しとセレクトの不一致防止）
+      if(adjMonthList.indexOf(adjLogMonth)<0)adjMonthList.push(adjLogMonth);
+      var adjMonthOpts=adjMonthList.map(function(m){
+        var p=m.split("-");
+        return'<option value="'+m+'"'+(m===adjLogMonth?" selected":"")+'>'+p[0]+'年'+parseInt(p[1],10)+'月</option>';
+      }).join("");
+      var adjY=parseInt(adjLogMonth.split("-")[0],10),adjM=parseInt(adjLogMonth.split("-")[1],10);
+      var adjIsCur=(adjLogMonth>=adjCurMonth);
+      var adjLabel=adjY+"年"+adjM+"月";
+      var adjRecs=records.filter(function(r){return !r.deleted&&r.adjustReason&&monthKey(r.date)===adjLogMonth;});
       adjRecs.sort(function(a,b){return (b.adjustedAt||b.editedAt||"").localeCompare(a.adjustedAt||a.editedAt||"");});
       var adjByStaff={};
       adjRecs.forEach(function(r){
@@ -4463,7 +4494,7 @@ function _renderInner(){
             +'<td style="padding:6px 10px;text-align:center;font-size:.88rem;font-weight:700;color:#1e40af;">'+c.total+'</td>'
             +'</tr>';
         }).join("")
-        :'<tr><td colspan="6" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">当月の修正データはありません</td></tr>';
+        :'<tr><td colspan="6" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">'+esc(adjLabel)+'の修正データはありません</td></tr>';
       var adjLogRows=adjRecs.length
         ?adjRecs.map(function(r){
           var adjDt=(r.adjustedAt||r.editedAt||"").replace("T"," ").slice(0,16);
@@ -4481,10 +4512,18 @@ function _renderInner(){
             +'<td style="padding:5px 8px;font-size:.75rem;color:#8496a7;white-space:nowrap;">'+esc(adjDt)+'</td>'
             +'</tr>';
         }).join("")
-        :'<tr><td colspan="7" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">当月の修正履歴はありません</td></tr>';
+        :'<tr><td colspan="7" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">'+esc(adjLabel)+'の修正履歴はありません</td></tr>';
       var adjThS="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
+      // 月切替バー（スマホでも押しやすいよう高さ44px・セレクトは残り幅いっぱい）。閲覧操作のみのため デモ画面でも操作可。
+      var adjNavBtnS="padding:10px 12px;min-height:44px;border:1px solid #adb5bd;border-radius:2px;background:#fff;color:#1e40af;font-size:.9rem;font-weight:700;font-family:inherit;white-space:nowrap;";
+      var adjNav='<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">'
+        +'<button id="adj-prev-month" data-demo-allow="1" style="'+adjNavBtnS+'cursor:pointer;">◀ 前月</button>'
+        +'<select id="sel-adj-month" data-demo-allow="1" aria-label="表示する年月" style="flex:1 1 auto;width:auto;min-width:0;max-width:220px;padding:9px 10px;min-height:44px;font-size:15px;font-family:inherit;">'+adjMonthOpts+'</select>'
+        +'<button id="adj-next-month" data-demo-allow="1"'+(adjIsCur?' disabled title="当月より先の月はありません"':'')+' style="'+adjNavBtnS+(adjIsCur?'opacity:.45;color:#8496a7;cursor:not-allowed;':'cursor:pointer;')+'">翌月 ▶</button>'
+        +'</div>';
       tc='<div class="admin-card admin-wrap">'
-        +'<div class="admin-title">修正集計（当月：'+adjCurMonth+'）</div>'
+        +'<div class="admin-title">'+esc(adjLabel)+'　修正集計</div>'
+        +adjNav
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:400px;margin-bottom:4px;">'
         +'<thead><tr style="background:#eaecef;">'
@@ -4499,7 +4538,7 @@ function _renderInner(){
         +'</table></div>'
         +'</div>'
         +'<div class="admin-card admin-wrap" style="margin-top:10px;">'
-        +'<div class="admin-title">修正履歴一覧（当月：'+adjCurMonth+'）</div>'
+        +'<div class="admin-title">'+esc(adjLabel)+'　修正履歴</div>'
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:620px;">'
         +'<thead><tr style="background:#eaecef;">'
@@ -5402,6 +5441,23 @@ function _renderInner(){
       });
       var noteMd="# 「*」付きの数値は打刻データが無い過去月のExcel取込実績です";
       dlCSV(noteMd+"\n"+hdrMd+"\n"+rowsMd.join("\n"),"穂乃味_月別出勤日数_"+y+".csv");
+    };
+
+    // 修正履歴タブの月切替（adjLogMonth のみ変更。selMonth/reviewMonth・他タブへは影響させない）
+    var adjCurM=getTodayJSTStr().substring(0,7);
+    var adjMonthSel=document.getElementById("sel-adj-month");
+    if(adjMonthSel)adjMonthSel.onchange=function(){
+      var v=adjMonthSel.value;
+      if(!/^\d{4}-\d{2}$/.test(v)||v>adjCurM)return;
+      adjLogMonth=v;render();
+    };
+    var adjPrevBtn=document.getElementById("adj-prev-month");
+    if(adjPrevBtn)adjPrevBtn.onclick=function(){adjLogMonth=shiftMonthKey(adjLogMonth||adjCurM,-1);render();};
+    var adjNextBtn=document.getElementById("adj-next-month");
+    if(adjNextBtn)adjNextBtn.onclick=function(){
+      var nx=shiftMonthKey(adjLogMonth||adjCurM,1);
+      if(nx>adjCurM)return; // 未来月へは進めない
+      adjLogMonth=nx;render();
     };
 
     // 賄い一覧
