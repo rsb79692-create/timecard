@@ -78,13 +78,159 @@ async function getAuthToken(){
   return _fbIdToken;
 }
 
+// ===== 画面モードと書き込みポリシー（フェイルクローズ）=====
+// uiMode      : normal | adminDemo | staffDemo | viewer
+// writePolicy : full | readonlyWithAllowList | sandbox
+// URLパラメータを見た時点で最も制限の強い側へ倒す。認証成功後も権限を昇格させない。
+var uiMode="normal";
+var writePolicy="full";
+(function(){
+  var _q=new URLSearchParams(location.search);
+  if(_q.get("staffDemo")!==null){uiMode="staffDemo";writePolicy="sandbox";}
+  else if(_q.get("demo")!==null){uiMode="adminDemo";writePolicy="readonlyWithAllowList";}
+})();
+var demoTokenKey="";        // 新方式 demoTokens/{token} における自分のトークン
+var demoTokenExpiresAt="";  // 発行元デモトークンの有効期限（発行する閲覧用トークンの上限）
+var demoLegacyAuth=false;   // 旧 config/demoAccess で認証したか（移行期間のみ true）
+// このデモセッションで発行した閲覧用トークンだけを記録する。
+// 値 "pending" = 本体PUTを1回だけ許可 / true = 発行済み（以後は無効化のみ）
+var _demoIssuedVt={};
+function _demoOwnsVt(t){return Object.prototype.hasOwnProperty.call(_demoIssuedVt,t);}
+// トークン文字列の形式検証（キー・パス組み立ての安全性を担保）
+function isSafeTokenStr(t){return typeof t==="string"&&/^[A-Za-z0-9_-]{1,64}$/.test(t);}
+// デモから発行する閲覧用トークンの内容検証（発行元IDの一致・期限必須・デモ期限以内・有効状態）
+function _isValidDemoIssuedVtBody(body){
+  if(typeof body!=="string")return false;
+  var o;try{o=JSON.parse(body);}catch(e){return false;}
+  if(!o||typeof o!=="object"||Array.isArray(o))return false;
+  if(o.issuedByDemoTokenId!==demoTokenKey)return false;
+  if(o.enabled!==true)return false;
+  if(typeof o.expiresAt!=="string"||!/^\d{4}-\d{2}-\d{2}$/.test(o.expiresAt))return false;
+  if(!demoTokenExpiresAt||o.expiresAt>demoTokenExpiresAt)return false;
+  if(o.expiresAt<getTodayJSTStr())return false;
+  return true;
+}
+// 管理者デモで例外的に許可する書き込み。前方一致の乱用を避け、パスを厳密に判定する。
+// /config/ の前方一致は絶対に使わない（adminPinHash 等が同じ配下にあるため）。
+function _isDemoAllowedWrite(url,method,opts){
+  if(typeof url!=="string")return false;
+  var base=FB_URL+"/";
+  if(url.indexOf(base)!==0)return false;
+  var path=url.slice(base.length);
+  var qi=path.indexOf("?");if(qi>=0)path=path.slice(0,qi);
+  var isFalseBody=(typeof opts==="object"&&opts&&typeof opts.body==="string"&&opts.body==="false");
+  // ① 自分のデモトークンの「無効化」だけ許可（再有効化・期限延長・変更・新規発行は不可）
+  if(demoTokenKey&&path==="demoTokens/"+demoTokenKey+"/enabled.json"){
+    return method==="PUT"&&isFalseBody;
+  }
+  // ② 閲覧用トークン: このデモセッションで発行したものだけ
+  var vm=path.match(/^viewerTokens\/([A-Za-z0-9_-]+)(\/enabled)?\.json$/);
+  if(vm){
+    if(!demoTokenKey||!_demoOwnsVt(vm[1]))return false;
+    if(vm[2])return method==="PUT"&&isFalseBody;          // 無効化のみ（再有効化不可）
+    if(method!=="PUT"||_demoIssuedVt[vm[1]]!=="pending")return false; // 新規発行の1回のみ
+    // 発行内容も検証する（発行UIを迂回されても、期限超過や発行元欠落のレコードは書かせない）
+    return _isValidDemoIssuedVtBody(opts&&opts.body);
+  }
+  // ③ 発行インデックス（発行元デモトークンIDで絞った自分の枝のみ）
+  if(demoTokenKey){
+    var idxPrefix="demoIssuedViewerTokens/"+demoTokenKey+"/";
+    if(path.indexOf(idxPrefix)===0){
+      var im=path.slice(idxPrefix.length).match(/^([A-Za-z0-9_-]+)(\/enabled)?\.json$/);
+      if(!im||!_demoOwnsVt(im[1]))return false;
+      if(im[2])return method==="PUT"&&isFalseBody;
+      return method==="PUT";
+    }
+  }
+  // ④ 旧方式（移行期間）: デモアクセスの無効化のみ
+  if(demoLegacyAuth&&path==="config/demoAccess.json")return method==="DELETE";
+  return false;
+}
+function _writeAllowed(url,method,opts){
+  if(writePolicy==="full")return true;
+  if(writePolicy==="sandbox")return false;
+  return _isDemoAllowedWrite(url,method,opts);
+}
+// X-HTTP-Method-Override 等でGETを装った書き込みを弾く（RTDB RESTはこのヘッダを解釈する）
+function _hasMethodOverride(opts){
+  var h=opts&&opts.headers;
+  if(!h)return false;
+  try{
+    // Headers / Map など get() を持つものはダックタイピングで判定（cross-realm対策）
+    if(typeof h.get==="function"){
+      return !!(h.get("x-http-method-override")||h.get("X-HTTP-Method-Override")||h.get("x-method-override"));
+    }
+    if(Array.isArray(h)){
+      for(var i=0;i<h.length;i++){if(/^x-(http-)?method-override$/i.test(String(h[i]&&h[i][0])))return true;}
+      return false;
+    }
+    if(typeof h!=="object")return true; // 判定不能はフェイルクローズ
+    for(var k in h){if(/^x-(http-)?method-override$/i.test(k))return true;}
+  }catch(e){return true;} // 判定不能はフェイルクローズ
+  return false;
+}
+// ログにトークン等の秘密値を出さないためのパス伏せ字
+var _MASK_KNOWN_NODES=["viewerTokens","demoTokens","staffDemoTokens","demoIssuedViewerTokens",
+  "tc5_records","tc5_staff","tc5_pins","tc5_approvals","tc5_correction_requests",
+  "tc5_paid_leave_requests","tc5_paid_leave_balances","tc5_monthly_days_import",
+  "tc5_staff_notifications","tc5_meals","tc5_meal_confirmations","tc5_monthly_review_status",
+  "tc5_fcm_tokens","tc_master_depts","config","master","locations","documents","enabled","staff_uploads"];
+// ログにトークン等の秘密値を出さないためのパス伏せ字（ノード名は残し、キー部分だけ伏せる）
+function _maskPath(u){
+  var p=String(u||"").split("?")[0];
+  if(p.indexOf(FB_URL)===0)p=p.slice(FB_URL.length);
+  return p.split("/").map(function(seg){
+    if(!seg)return seg;
+    var bare=seg.replace(/\.json$/,"");
+    if(_MASK_KNOWN_NODES.indexOf(bare)>=0)return seg;
+    return seg.length>=8?"***":seg;
+  }).join("/");
+}
+var _demoBlockNoticeAt=0;
+function _demoBlockNotice(){
+  var t=Date.now();
+  if(t-_demoBlockNoticeAt<1500)return;
+  _demoBlockNoticeAt=t;
+  if(typeof showAlert==="function")showAlert("この画面では変更できません");
+}
+// 遮断時の戻り値。reject すると savingCount 等の減算（.then）が走らず同期が停止するため、
+// Response 互換オブジェクトを返して既存チェーンを無傷で通す。
+function _blockedResponse(ok){
+  return {ok:!!ok,status:ok?200:403,
+    json:function(){return Promise.resolve(null);},
+    text:function(){return Promise.resolve("");}};
+}
+// 書き込み系ヘルパーの前段ガード。管理者デモでのみ真を返し、メモリ／localStorage を
+// 汚す前に停止させる（「保存できたように見えて10秒後に巻き戻る」挙動の防止）。
+// サンドボックスは false を返す＝既存処理をそのまま通し、_lsSet と authFetch 側で止める。
+function demoWriteBlocked(){
+  if(writePolicy!=="readonlyWithAllowList")return false;
+  _demoBlockNotice();
+  return true;
+}
+// サンドボックス中は本番用 localStorage キーへ書かない
+function _lsSet(k,v){
+  if(writePolicy==="sandbox")return;
+  try{localStorage.setItem(k,v);}catch(e){}
+}
 async function authFetch(url,opts){
+  var _m=String((opts&&opts.method)||"GET").toUpperCase();
+  // 非GETに加え、メソッド偽装ヘッダ・GETへのbody添付も「書き込み」として扱う
+  var _isWrite=(_m!=="GET")||_hasMethodOverride(opts)||!!(opts&&opts.body!=null)
+               ||/method-override/i.test(String(url).split("?")[1]||"");
+  if(_isWrite&&writePolicy!=="full"&&!_writeAllowed(url,_m,opts)){
+    console.warn("[write blocked]",writePolicy,_m,_maskPath(url));
+    if(writePolicy!=="sandbox")_demoBlockNotice();
+    // sandbox は成功を装う（画面上のテスト操作を成立させるため）／デモは失敗を返す
+    return _blockedResponse(writePolicy==="sandbox");
+  }
   var tok=await getAuthToken();
   var authUrl=url+(url.indexOf('?')>=0?'&':'?')+'auth='+tok;
   return fetch(authUrl,opts||{});
 }
 
 function saveToFirebase(key, val) {
+  if(demoWriteBlocked())return;
   authFetch(FB_URL + "/" + key + ".json", {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
@@ -106,6 +252,7 @@ function saveToFirebase(key, val) {
 // tc5_monthly_days_import に staffId(=社員番号=employeeId) 単位で書き込む。
 // 既存の有給計算（付与日数・勤続・残日数・申請・消化）はこのデータを参照しないため影響なし。
 function mdSaveCell(inputEl, eid, ym){
+  if(demoWriteBlocked()){render();return;}
   monthlyDaysEditing=false;
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");render();return;}
@@ -157,6 +304,7 @@ function mealStaffNameById(eid){
 }
 // employeeId 単位で tc5_meals/{eid} を全量PUT（他スタッフ・他keyに影響させない）
 function mealSaveEntry(eid){
+  if(demoWriteBlocked())return;
   eid=String(eid||"").trim();
   if(!eid||!/^[A-Za-z0-9_-]+$/.test(eid))return;
   if(!mealsData[eid])return;
@@ -219,19 +367,20 @@ function mealSelectAttendance(eid,ym){
 // 打刻画面の賄いフォーム開閉トグル（開閉状態は端末に保存し、次回も同じ状態を維持）
 function toggleMealForm(){
   mealFormOpen=!mealFormOpen;
-  try{localStorage.setItem("tc5_meal_form_open",mealFormOpen?"1":"0");}catch(e){}
+  _lsSet("tc5_meal_form_open",mealFormOpen?"1":"0");
   render();
 }
 // 打刻画面「今月の打刻状況」カードの開閉トグル（開閉状態は端末に保存）
 function toggleMonthPunch(){
   monthPunchOpen=!monthPunchOpen;
-  try{localStorage.setItem("tc5_month_punch_open",monthPunchOpen?"1":"0");}catch(e){}
+  _lsSet("tc5_month_punch_open",monthPunchOpen?"1":"0");
   render();
 }
 // 賄い月初確認の回答を保存（done=済み / pending=まだ）。
 // tc5_meal_confirmations/{eid}/{ym} 単位の個別PUT（他月・他スタッフのノードに触れず、同一スタッフ・同一対象月は必ず上書き＝重複なし・回答変更可）。
 function mealConfSave(eid,ym,status){
   if(viewerMode){console.warn("[viewerMode] meal-conf write blocked");return;}
+  if(demoWriteBlocked())return;
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
   if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
@@ -274,6 +423,7 @@ function reviewCurrentMonthIfMonthEnd(){
 // 解除も削除APIを使わず reviewed:false へ上書き（データ破壊を避ける）。管理者操作時のみ（viewerModeガード必須）。
 function reviewStatusSave(ym,reviewed){
   if(viewerMode){console.warn("[viewerMode] review-status write blocked");return;}
+  if(demoWriteBlocked())return;
   if(!ym||ym.length<7){return;}
   var entry={reviewed:!!reviewed,reviewedAt:new Date().toISOString(),reviewedBy:"admin"};
   reviewStatus[ym]=entry;
@@ -290,15 +440,16 @@ function mealConfGoPrev(eid,ym){
   mealConfSave(eid,ym,"pending");
   mealFormMonth=ym;        // 先月へ切替
   mealFormOpen=true;       // 賄いカードを展開
-  try{localStorage.setItem("tc5_meal_form_open","1");}catch(e){}
+  _lsSet("tc5_meal_form_open","1");
   render();
 }
 
 // ===== tc5_records 個別書込ヘルパー (Phase 2-B) =====
 function saveRecord(rec) {
+  if(demoWriteBlocked())return;
   var url = FB_URL + "/tc5_records/" + rec.id + ".json";
   console.log("[saveRecord] called:", rec.id, url);
-  localStorage.setItem("tc5_records", JSON.stringify(records));
+  _lsSet("tc5_records", JSON.stringify(records));
   savingCount++;
   authFetch(url, {
     method: "PUT",
@@ -321,9 +472,10 @@ function saveRecord(rec) {
   });
 }
 function patchRecord(id, partial) {
+  if(demoWriteBlocked())return;
   var url = FB_URL + "/tc5_records/" + id + ".json";
   console.log("[patchRecord] called:", id, partial, url);
-  localStorage.setItem("tc5_records", JSON.stringify(records));
+  _lsSet("tc5_records", JSON.stringify(records));
   savingCount++;
   authFetch(url, {
     method: "PATCH",
@@ -351,9 +503,10 @@ function softDeleteRecord(id) {
 
 // ===== tc5_approvals 書込ヘルパー =====
 function saveApprovals(approvalsObj) {
+  if(demoWriteBlocked())return;
   var url = FB_URL + "/tc5_approvals.json";
   console.log("[saveApprovals] called");
-  try { localStorage.setItem("tc5_approvals", JSON.stringify(approvalsObj)); } catch(e) {}
+  _lsSet("tc5_approvals", JSON.stringify(approvalsObj));
   savingCount++;
   authFetch(url, {
     method: "PUT",
@@ -378,15 +531,17 @@ function saveApprovals(approvalsObj) {
 
 // ===== tc5_correction_requests 書込ヘルパー =====
 function saveCorrectionRequestFb(req){
+  if(demoWriteBlocked())return;
   var url=FB_URL+"/tc5_correction_requests/"+req.id+".json";
   console.log("[saveCorrReq] called:",req.id);
-  localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+  _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
   savingCount++;
   authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(req)})
     .then(function(res){savingCount--;if(!res.ok)res.text().then(function(t){console.error("[saveCorrReq] HTTP",res.status,t);showAlert("保存に失敗しました。通信状態を確認してください。");});else console.log("[saveCorrReq] OK:",req.id);})
     .catch(function(e){savingCount--;console.error("[saveCorrReq] network error:",e);showAlert("保存に失敗しました。通信状態を確認してください。");});
 }
 function patchCorrectionRequestFb(id,partial){
+  if(demoWriteBlocked())return;
   var url=FB_URL+"/tc5_correction_requests/"+id+".json";
   console.log("[patchCorrReq] called:",id,partial);
   savingCount++;
@@ -402,10 +557,12 @@ function fetchJson(url) {
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
   setInterval(function(){
+    // サンドボックス（スタッフテスト画面）中は本番値でメモリ上のテストデータを上書きしない
+    if(writePolicy==="sandbox")return;
     // tc5_pins は画面を問わず常時同期（スタッフ選択画面でも反映されるよう）
     authFetch(FB_URL + "/tc5_pins.json")
       .then(function(r){return r.json();})
-      .then(function(val){
+      .then(function(val){if(writePolicy==="sandbox")return;
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
@@ -416,7 +573,7 @@ function listenFirebase() {
     // CSVダウンロード制限を解除する。読み取り専用の反映のため再描画は安全（入力状態には触れない）。
     authFetch(FB_URL + "/tc5_monthly_review_status.json")
       .then(function(r){return r.json();})
-      .then(function(val){
+      .then(function(val){if(writePolicy==="sandbox")return;
         if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
           reviewStatus=val;
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -427,13 +584,13 @@ function listenFirebase() {
     if(screen==="punch" && staffName){
       authFetch(FB_URL + "/tc5_correction_requests.json")
         .then(function(r){return r.json();})
-        .then(function(val){
+        .then(function(val){if(writePolicy==="sandbox")return;
           if(val && savingCount===0){
             var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
             var newReqs=(arr||[]).filter(Boolean);
             if(JSON.stringify(newReqs)!==JSON.stringify(correctionRequests)){
               correctionRequests=newReqs;
-              localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+              _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
               // 修正申請フォーム・有給フォーム入力中は再描画しない（入力状態のリセット防止）
               if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
             }
@@ -445,7 +602,7 @@ function listenFirebase() {
       if(_snPollSid){
         authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(_snPollSid)+".json")
           .then(function(r){return r.json();})
-          .then(function(val){
+          .then(function(val){if(writePolicy==="sandbox")return;
             if(!val||typeof val!=="object")return;
             var cur=staffNotifications[_snPollSid]||{};
             // 既読フラグはローカル（既読化PUT済み）を優先し、反映遅延による未読への巻き戻しを防ぐ
@@ -468,7 +625,7 @@ function listenFirebase() {
           var arr=Array.isArray(val)?val:Object.values(val);
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
-            localStorage.setItem("tc5_records",JSON.stringify(records));
+            _lsSet("tc5_records",JSON.stringify(records));
             if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }
@@ -478,7 +635,7 @@ function listenFirebase() {
       .then(function(val){
         if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
-          localStorage.setItem("tc5_approvals",JSON.stringify(approvals));
+          _lsSet("tc5_approvals",JSON.stringify(approvals));
           if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
         }
       }).catch(function(){});
@@ -490,7 +647,7 @@ function listenFirebase() {
           var newReqs=(arr||[]).filter(Boolean);
           if(JSON.stringify(newReqs)!==JSON.stringify(correctionRequests)){
             correctionRequests=newReqs;
-            localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+            _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
             if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }
@@ -619,6 +776,14 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
   th.sticky-name-col{left:auto!important;border-right:none!important;}
 }
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
+/* デモ／スタッフテスト画面の固定バナー */
+.mode-banner{position:fixed;top:0;left:0;right:0;z-index:60;padding:7px 12px;text-align:center;line-height:1.35;box-shadow:0 1px 5px rgba(0,0,0,.2);}
+.mode-banner .mb-t{font-size:.88rem;font-weight:900;letter-spacing:.04em;}
+.mode-banner .mb-s{font-size:.71rem;font-weight:700;opacity:.95;}
+.mode-banner-demo{background:#b45309;color:#fff;}
+.mode-banner-sandbox{background:#5b21b6;color:#fff;}
+body.has-mode-banner{padding-top:var(--mode-banner-h,56px);}
+body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .records-th{position:sticky;z-index:2;background:#eaecef;box-shadow:0 2px 4px rgba(0,0,0,.08);}
 .records-th.sticky-name-col{z-index:3;}
 /* テーブル共通 */
@@ -883,23 +1048,24 @@ var VALID_TOKENS=buildValidTokens();
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
 // Hash fallback: #token=all, #token=xxx, bare #all / #xxx
 if(!urlToken){var _h=location.hash.replace(/^#/,"");if(_h){var _hToken=new URLSearchParams(_h).get("token")||"";if(!_hToken&&!/[&=]/.test(_h)){_hToken=_h;}if(_hToken){urlToken=_hToken;}}}
-console.log("[TC]","query:",(new URLSearchParams(location.search).get("token")||"-"),"hash:",(location.hash||"-"));
+console.log("[TC]","query token:",(new URLSearchParams(location.search).get("token")?"(set)":"-"),"hash:",(location.hash?"(set)":"-"));
 var isAllToken=(urlToken==="all");
 // Persist — all: tc_url_token="all" + facilityToken削除; facility: 両キー保存
 if(isAllToken){localStorage.setItem("tc_url_token","all");localStorage.removeItem("facilityToken");}
 else if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){localStorage.setItem("facilityToken",urlToken);localStorage.setItem("tc_url_token",urlToken);}
 // Restore: tc_url_token を facilityToken より優先
 if(!urlToken){var _saved=localStorage.getItem("tc_url_token")||"";if(_saved){urlToken=_saved;isAllToken=(urlToken==="all");if(isAllToken){localStorage.removeItem("facilityToken");}}}
-console.log("[TC]","restored:",(urlToken||"-"),"isAllToken:",isAllToken);
+console.log("[TC]","restored:",(urlToken?"(set)":"-"),"isAllToken:",isAllToken);
 var effectiveToken=isAllToken?"":urlToken||localStorage.getItem("facilityToken")||"";
 var tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
 var facilityName=VALID_TOKENS[effectiveToken]||"";
-console.log("[TC]","effectiveToken:",(effectiveToken||"-"),"facilityName:",(facilityName||"-"),"tokenValid:",tokenValid);
+console.log("[TC]","effectiveToken:",(effectiveToken?"(set)":"-"),"facilityName:",(facilityName||"-"),"tokenValid:",tokenValid);
 var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
 var viewerInvalid=false;
 var viewerExpired=false;
+var viewerIsDemoIssued=false; // デモ画面から発行された閲覧用URLか（true なら完全読み取り専用）
 var viewerTokensList=null; // 管理者用トークン一覧（null=未ロード）
 var viewerTokensLoading=false;
 var ADMIN_TOKEN=""; // Firebase config/adminToken（旧形式・移行用フォールバック）
@@ -914,7 +1080,21 @@ var demoUrlUsed=demoParam!==null;
 var demoMode=false;
 var demoExpired=false;
 var demoInvalid=false;
-var demoAccessConfig=null;
+var demoAccessConfig=null;      // 旧 config/demoAccess（移行期間のみ使用）
+var demoTokenRec=null;          // 新方式 demoTokens/{token} のノード
+var demoTokensList=null;        // 管理画面のデモトークン一覧（null=未ロード／通常管理者のみ）
+var demoTokensLoading=false;
+var demoIssuedVtList=null;      // このデモURLから発行した閲覧用トークン一覧（null=未ロード）
+// ── スタッフテスト画面（サンドボックス）──
+var staffDemoParam=new URLSearchParams(location.search).get("staffDemo");
+var staffDemoUrlUsed=staffDemoParam!==null;
+var staffDemoPending=staffDemoUrlUsed;
+var staffDemoMode=false;        // サンドボックスの打刻画面を表示中
+var staffDemoInvalid=false;
+var staffDemoExpired=false;
+var staffDemoTokensList=null;
+var staffDemoTokensLoading=false;
+var _sandboxSnapshot=null;      // 本番stateの退避（サンドボックス終了時に復元）
 // 既存の機密データをlocalStorageから削除（Phase 1-B 移行処理）
 localStorage.removeItem("tc5_pins");
 localStorage.removeItem("tc_admin_pin");
@@ -1157,8 +1337,9 @@ function findOpenClockInAcrossFacilities(staff,date){
 function loadData(k,d){try{var v=localStorage.getItem(k);return v?JSON.parse(v):d;}catch(e){return d;}}
 var SENSITIVE_KEYS=["tc5_pins","tc_admin_pin","config/adminPin","config/adminPinHash","config/adminToken","config/adminTokenHash"];
 function saveData(k,v){
+  if(demoWriteBlocked())return; // メモリ/localStorageを汚す前に停止（管理者デモ）
   if(SENSITIVE_KEYS.indexOf(k)<0){
-    try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}
+    _lsSet(k,JSON.stringify(v));
   }
   saveToFirebase(k, v);
 }
@@ -1433,6 +1614,8 @@ function _showFcmStatus(msg){
   setTimeout(function(){if(el.parentNode)el.parentNode.removeChild(el);},4000);
 }
 function initFcmForAdmin(){
+  // デモ／スタッフテスト画面では通知許可ダイアログもトークン登録も行わない
+  if(uiMode!=="normal"){console.log('[FCM] skip (uiMode='+uiMode+')');return;}
   console.log('[FCM] initFcmForAdmin() 開始');
   _showFcmStatus('通知設定確認中...');
   if(!('Notification' in window)){
@@ -1491,7 +1674,7 @@ function initFcmForAdmin(){
       msg.getToken({vapidKey:FCM_VAPID_KEY,serviceWorkerRegistration:reg})
         .then(function(token){
           if(token){
-            console.log('[FCM] token 取得成功:',token.slice(0,20)+'...');
+            console.log('[FCM] token 取得成功');
             _saveFcmToken(token);
             _showFcmStatus('通知設定完了');
           }else{
@@ -1513,19 +1696,115 @@ function initFcmForAdmin(){
 }
 function _saveFcmToken(token){
   var key=token.replace(/[^A-Za-z0-9_-]/g,"").slice(0,40);
-  getAuthToken().then(function(idToken){
-    fetch(FB_URL+"/tc5_fcm_tokens/"+key+".json?auth="+idToken,{
-      method:"PUT",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({token:token,savedAt:new Date().toISOString()})
-    }).then(function(){
-      console.log('[FCM] token 保存完了 (key:'+key+')');
-    }).catch(function(e){console.error("[FCM] token save エラー",e);});
-  });
+  // 生fetchを廃止し authFetch へ統一（書き込み一元遮断の対象に含めるため）
+  authFetch(FB_URL+"/tc5_fcm_tokens/"+key+".json",{
+    method:"PUT",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({token:token,savedAt:new Date().toISOString()})
+  }).then(function(){
+    console.log('[FCM] token 保存完了');
+  }).catch(function(e){console.error("[FCM] token save エラー",e);});
 }
 
 // ===== レンダリング =====
+// ===== モードバナー / デモUIロック =====
+// 固定バナー（常時表示）。body の padding と admin-sticky-bar の top をCSS変数で追従させる。
+function _applyModeBanner(){
+  var el=document.getElementById("mode-banner");
+  var show=null;
+  if(staffDemoMode){
+    show={cls:"mode-banner-sandbox",t:"スタッフテスト画面",s:"この画面の操作は本番データへ保存されません。",
+      actions:'<div style="margin-top:5px;display:flex;gap:6px;justify-content:center;">'
+        +'<button onclick="sandboxReset()" style="background:#ede9fe;color:#4c1d95;border:1px solid #c4b5fd;padding:3px 12px;border-radius:2px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">リセット</button>'
+        +'<button onclick="openStaffDemoPicker()" style="background:rgba(255,255,255,.16);color:#fff;border:1px solid rgba(255,255,255,.5);padding:3px 12px;border-radius:2px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">スタッフ選択へ</button>'
+        +'</div>'};
+  }else if(demoMode){
+    show={cls:"mode-banner-demo",t:"デモモード",s:"本番データを表示しています。変更操作は保存できません。"};
+  }
+  if(!show){
+    if(el&&el.parentNode)el.parentNode.removeChild(el);
+    document.body.classList.remove("has-mode-banner");
+    document.body.style.removeProperty("--mode-banner-h");
+    return;
+  }
+  if(!el){el=document.createElement("div");el.id="mode-banner";document.body.appendChild(el);}
+  el.className="mode-banner "+show.cls;
+  el.innerHTML='<div class="mb-t">'+esc(show.t)+'</div><div class="mb-s">'+esc(show.s)+'</div>'+(show.actions||"");
+  document.body.classList.add("has-mode-banner");
+  document.body.style.setProperty("--mode-banner-h",el.offsetHeight+"px");
+}
+function _modeBannerH(){
+  var el=document.getElementById("mode-banner");
+  return el?el.offsetHeight:0;
+}
+// 管理者デモ: 「本番データを書き換える操作」だけを無効化する。
+// 閲覧・画面遷移・絞り込み・日付移動・プレビュー・再取得・CSVは通常どおり操作できる。
+// これはUI前段ガードであり、認可の正本ではない（最終防波堤は authFetch）。
+var DEMO_BLOCK_SELECTORS=[
+  // 勤怠の承認・取消・編集・削除・追加
+  ".btn-approve",".btn-withdraw",".btn-save",".btn-del-rec",
+  "#btn-bulk-approve","#btn-bulk-approve-detail","#btn-add-rec",
+  // 打刻修正申請の承認・却下
+  ".btn-crq-approve",".btn-crq-reject",
+  // 有給の承認・却下・引戻・付与・残数編集・削除
+  ".btn-pl-approve",".btn-pl-reject",".btn-pl-withdraw",
+  ".btn-pl-bal-row-save",".btn-pl-bal-row-delete","#btn-pl-bal-save",
+  "#pl-bal-new-staff","#pl-bal-new-grant-date","#pl-bal-new-granted",
+  // 勤怠精査の完了・解除
+  "#btn-review-done","#btn-review-unset",
+  // スタッフの追加・編集・削除・PIN（PIN確認は平文表示のため閲覧も不可）
+  "#btn-hrm-add",".btn-hrm-edit",".btn-hrm-del","#btn-modal-save",
+  ".btn-pin-view",".btn-pin-change",".btn-pin-reset",
+  // マスター（部門・拠点）
+  "#btn-add-dept","#new-dept",".btn-del-dept",
+  "#btn-add-loc","#new-loc-name","#new-loc-token",".btn-del-loc",".btn-copy-url",
+  // 管理者PIN・管理者トークン（デモでは非描画だが二重に封じる）
+  "#btn-change-pin","#new-admin-pin","#btn-change-token","#new-admin-token",
+  // 資料の追加・削除
+  "#btn-doc-upload","#doc-title","#doc-memo","#doc-file-input",
+  ".btn-doc-delete","#btn-staff-doc-del",
+  // 閲覧用/デモ/テスト用トークンの既存レコード操作（自分が発行したものは data-demo-allow で除外）
+  ".btn-vt-copy",".btn-vt-toggle",".btn-vt-del","#btn-vt-issue",
+  "#vt-new-name","#vt-new-expires","#vt-new-memo",
+  ".btn-dt-copy",".btn-dt-del","#btn-dt-issue","#dt-new-name","#dt-new-expires","#dt-new-memo",
+  ".btn-st-copy",".btn-st-del","#btn-st-issue","#st-new-name","#st-new-expires"
+].join(",");
+// インラインハンドラから書き込み関数を呼ぶ要素も自動的に封じる（将来追加分への保険）
+var DEMO_WRITE_FN_RE=/\b(saveRecord|patchRecord|softDeleteRecord|saveApprovals|saveCorrectionRequestFb|patchCorrectionRequestFb|savePaidLeaveRequest|patchPaidLeaveRequest|savePaidLeaveBalance|patchPaidLeaveBalance|deletePaidLeaveBalance|saveData|saveToFirebase|mealSaveEntry|mealToggleDate|mealSelectAttendance|mealConfSave|mealConfGoPrev|reviewStatusSave|mdSaveCell|deleteDocument|bulkDeleteDocuments|bulkDeleteStaffDocs|uploadDocument|uploadStaffDocument|saveFacilities|adminSavePin|showAdminPinSetModal|delStaff|viewerDownloadAndDelete|submitProxyLeaveRequest|savePaidLeaveGrantRecord|openPaidLeaveGrantModal|openProxyLeaveModal|adminViewPin|staffNotifReadAndOpen)\s*\(/;
+function _applyDemoUiLock(){
+  if(writePolicy!=="readonlyWithAllowList")return;
+  var app=document.getElementById("app");
+  if(!app)return;
+  var lock=function(el){
+    if(!el||el.hasAttribute("data-demo-allow"))return;
+    el.disabled=true;
+    el.style.cursor="not-allowed";
+    el.style.opacity="0.55";
+    el.title="デモ画面では変更できません";
+  };
+  var blocked=app.querySelectorAll(DEMO_BLOCK_SELECTORS);
+  for(var i=0;i<blocked.length;i++)lock(blocked[i]);
+  var cand=app.querySelectorAll("button,input,select,textarea");
+  for(var j=0;j<cand.length;j++){
+    var el=cand[j];
+    if(el.disabled||el.hasAttribute("data-demo-allow"))continue;
+    var h=(el.getAttribute("onclick")||"")+" "+(el.getAttribute("onchange")||"")
+         +" "+(el.getAttribute("oninput")||"")+" "+(el.getAttribute("onblur")||"");
+    if(DEMO_WRITE_FN_RE.test(h))lock(el);
+  }
+  // 勤怠一覧のインライン時刻編集（クリック→セレクト変更で即保存）を封じる
+  var cells=app.querySelectorAll(".time-cell");
+  for(var k=0;k<cells.length;k++){cells[k].style.pointerEvents="none";cells[k].style.opacity="0.8";}
+  var edits=app.querySelectorAll(".time-edit-wrap select,.time-edit-wrap input,.time-edit-wrap button");
+  for(var m=0;m<edits.length;m++)lock(edits[m]);
+}
 function render(){
+  _applyModeBanner();
+  _renderInner();
+  _applyDemoUiLock();
+  _applyModeBanner(); // 描画後の高さで再計測
+}
+function _renderInner(){
   var now=new Date();
   var app=document.getElementById("app");
   var isAdminScreen=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode);
@@ -1542,9 +1821,24 @@ function render(){
     return;
   }
 
-  // ── 管理系画面の認証ガード ──
-  if((screen==="admin"||screen==="csvPreview"||screen==="staffDetail")&&!isAdminAuthenticated&&!demoMode){
-    screen="home";
+  // ── 管理系画面の認証ガード（スタッフテスト画面からは常に遮断）──
+  if((screen==="admin"||screen==="csvPreview"||screen==="staffDetail")
+     &&(staffDemoMode||uiMode==="staffDemo"||(!isAdminAuthenticated&&!demoMode))){
+    screen=(staffDemoMode||uiMode==="staffDemo")?"staffDemoPick":"home";
+    render();
+    return;
+  }
+  // ── スタッフテスト画面ではPIN認証画面・通常ホームへ遷移させない（本番PINを使わせない）──
+  if((staffDemoMode||uiMode==="staffDemo")
+     &&(screen==="home"||screen==="staffPin"||screen==="staffPinNew"||screen==="pin")){
+    screen="staffDemoPick";
+    render();
+    return;
+  }
+  // ── 管理者デモは打刻画面・PIN画面へ落とさない（サンドボックス外での打刻を防ぐ）──
+  if(uiMode==="adminDemo"&&!staffDemoMode
+     &&(screen==="home"||screen==="staffPin"||screen==="staffPinNew"||screen==="pin"||screen==="punch")){
+    screen="admin";
     render();
     return;
   }
@@ -1611,6 +1905,63 @@ function render(){
       +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">認証中…</div>'
       +'<div style="font-size:.85rem;color:#8496a7;">しばらくお待ちください</div>'
       +'</div>';
+    return;
+  }
+
+  // ── スタッフテストURL 不正 ──
+  if(staffDemoInvalid){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">テスト用URLが正しくありません</div>'
+      +'</div>';
+    return;
+  }
+  // ── スタッフテストURL 期限切れ ──
+  if(staffDemoExpired){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">⏰</div>'
+      +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このテスト用URLは期限切れです</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">管理者にお問い合わせください</div>'
+      +'</div>';
+    return;
+  }
+  // ── スタッフテストURL 認証中 ──
+  if(staffDemoPending){
+    app.innerHTML='<div class="center" style="padding-top:80px;">'
+      +'<div style="font-size:3.5rem;margin-bottom:16px;">🔐</div>'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">認証中…</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">しばらくお待ちください</div>'
+      +'</div>';
+    return;
+  }
+
+  // ── スタッフ画面テスト: 対象スタッフの選択 ──
+  if(screen==="staffDemoPick"){
+    // 不整合state（デモ以外でstaffDemoPick）に落ちた場合は、再帰ループを避けるため
+    // staffDemoMode も同時に解除してからホームへ戻す
+    if(uiMode!=="adminDemo"&&uiMode!=="staffDemo"){staffDemoMode=false;screen="home";render();return;}
+    var sdActive=staffList.filter(function(s){return s.status!=="退職"&&s.status!=="休職";});
+    var sdRows=KANA_ROWS.filter(function(r){return sdActive.some(function(s){return getKanaRow(s)===r;});});
+    var sdTabs='<button class="yomi-tab '+(yomiTab==="すべて"?"yomi-on":"yomi-off")+'" onclick="setYomi(\'すべて\')">すべて</button>'
+      +sdRows.map(function(r){
+        return '<button class="yomi-tab '+(yomiTab===r?"yomi-on":"yomi-off")+'" onclick="setYomi(\''+r+'\')">'+r.replace("行","")+'</button>';
+      }).join("");
+    var sdPick=sdActive.filter(function(s){return yomiTab==="すべて"||getKanaRow(s)===yomiTab;});
+    var sdHTML=sdPick.length?sdPick.map(function(s){
+      var dn=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
+      var ll=s.location?'<div style="font-size:.72rem;color:#64748b;font-weight:500;margin-top:3px;letter-spacing:.03em;">'+esc(s.location)+'</div>':"";
+      return '<button class="btn-staff" data-demo-allow="1" onclick="enterStaffDemo(&#39;'+esc(String(s.name).replace(/\\/g,"\\\\").replace(/'/g,"\\'"))+'&#39;)">'+esc(dn)+ll+'</button>';
+    }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
+    app.innerHTML=(uiMode==="adminDemo"
+        ?'<button class="btn-back" data-demo-allow="1" onclick="exitStaffDemo()">← 管理者デモへ戻る</button>':'')
+      +'<div class="center" style="margin-bottom:10px;padding-top:4px;">'
+      +'<div style="font-size:1.05rem;font-weight:900;color:#0f172a;">スタッフ画面をテスト</div>'
+      +'<div style="font-size:.78rem;color:#64748b;font-weight:700;margin-top:4px;">確認したいスタッフを選んでください</div>'
+      +'<div style="font-size:.72rem;color:#7c3aed;font-weight:700;margin-top:6px;">操作結果は本番データへ保存されません</div>'
+      +'</div>'
+      +'<div class="yomi-tabs">'+sdTabs+'</div>'
+      +'<div class="staff-grid">'+sdHTML+'</div>';
     return;
   }
 
@@ -1926,7 +2277,7 @@ function render(){
         +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このURLからは打刻できません</div>'
         +'<div style="font-size:.85rem;color:#8496a7;">正しい施設URLをご利用ください</div>'
         +'</div>'
-        +'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>';
+        +(uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'');
       return;
     }
     var list=filteredStaff();
@@ -1948,7 +2299,7 @@ function render(){
     var statusLabel=firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
       :(firebaseReady?'':'');
-    app.innerHTML=(!urlToken||isAllToken?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
+    app.innerHTML=((!urlToken||isAllToken)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
       +'<div class="center" style="margin-bottom:10px;padding-top:4px;">'
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
@@ -2421,12 +2772,15 @@ function render(){
         // ── Firebaseから最新の有給残日数を直接取得してブロック判定 ──
         plSubmitting=true;
         try{
-          var raw=await authFetch(FB_URL+"/tc5_paid_leave_balances.json").then(function(r){return r.json();});
-          if(raw){
-            var arr=typeof raw==="object"&&!Array.isArray(raw)?Object.values(raw):raw;
-            paidLeaveBalances=(arr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
-          } else {
-            paidLeaveBalances=[];
+          // サンドボックス（スタッフテスト画面）では本番残数を再取得せず、メモリ上のテストデータで判定する
+          if(writePolicy!=="sandbox"){
+            var raw=await authFetch(FB_URL+"/tc5_paid_leave_balances.json").then(function(r){return r.json();});
+            if(raw){
+              var arr=typeof raw==="object"&&!Array.isArray(raw)?Object.values(raw):raw;
+              paidLeaveBalances=(arr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
+            } else {
+              paidLeaveBalances=[];
+            }
           }
         }catch(e){
           plSubmitting=false;
@@ -2584,7 +2938,7 @@ function render(){
     app.innerHTML=''
       // ① ヘッダー
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
-        +'<button style="background:#dde1e7;color:#475569;font-size:.85rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
+        +'<button data-demo-allow="1" style="background:#dde1e7;color:#475569;font-size:.85rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=staffDetailFrom;render();">← 戻る</button>'
         +'<div style="display:flex;align-items:center;gap:8px;">'
           +'<button id="det-prev-staff" '+(_prevStaff?'':'disabled ')+'title="前の職員" style="background:'+(_prevStaff?'#dde1e7':'#eef0f2')+';color:'+(_prevStaff?'#475569':'#c8ccd2')+';border:1px solid '+(_prevStaff?'#adb5bd':'#e5e7eb')+';border-radius:2px;font-size:1rem;font-weight:900;padding:5px 12px;cursor:'+(_prevStaff?'pointer':'not-allowed')+';font-family:inherit;line-height:1;">▲</button>'
           +'<button id="det-name-btn" title="職員一覧から選択" style="font-size:1.2rem;font-weight:900;color:#0f172a;background:none;border:none;border-bottom:1px dashed #adb5bd;cursor:pointer;font-family:inherit;padding:2px 4px;">'+esc(nm)+'</button>'
@@ -2763,7 +3117,7 @@ function render(){
       +'<div style="font-size:1.15rem;font-weight:900;color:#0f172a;">'+titleP+'</div>'
       +'<div style="display:flex;gap:8px;">'
       +'<button id="btn-csv-preview-dl" style="background:#1e40af;color:#fff;border:none;padding:8px 20px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 CSV出力</button>'
-      +'<button onclick="screen=\'admin\';adminTab=\'export\';render();" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:8px 20px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">← 戻る</button>'
+      +'<button data-demo-allow="1" onclick="screen=\'admin\';adminTab=\'export\';render();" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:8px 20px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">← 戻る</button>'
       +'</div></div>'
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
       +'<select id="csv-f-month" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+prevMonthOpts+'</select>'
@@ -3261,14 +3615,17 @@ function render(){
         var facUrl="https://rsb79692-create.github.io/timecard/?token="+encodeURIComponent(f.token||"");
         return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
           +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
-          +'<div><div style="font-size:.95rem;font-weight:700;color:#0f172a;">'+f.name+'</div>'
-          +'<div style="font-size:.75rem;color:#8496a7;font-family:monospace;">'+(f.token||"トークンなし")+'</div></div>'
+          +'<div><div style="font-size:.95rem;font-weight:700;color:#0f172a;">'+esc(f.name)+'</div>'
+          // 施設トークンは打刻URLの資格情報。デモ画面では値もURLもコピー導線も出さない
+          +'<div style="font-size:.75rem;color:#8496a7;font-family:monospace;">'+(demoMode?esc(maskToken(f.token||"")):esc(f.token||"トークンなし"))+'</div></div>'
           +'<button class="btn-del-loc" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div>'
-          +'<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">'
-          +'<div style="font-size:.72rem;color:#475569;font-family:monospace;word-break:break-all;flex:1;">'+facUrl+'</div>'
-          +'<button class="btn-copy-url" data-url="'+facUrl+'" style="flex-shrink:0;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">コピー</button>'
-          +'</div></div>';
+          +(demoMode?''
+            :'<div style="display:flex;align-items:center;gap:6px;margin-top:6px;">'
+             +'<div style="font-size:.72rem;color:#475569;font-family:monospace;word-break:break-all;flex:1;">'+esc(facUrl)+'</div>'
+             +'<button class="btn-copy-url" data-url="'+esc(facUrl)+'" style="flex-shrink:0;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">コピー</button>'
+             +'</div>')
+          +'</div>';
       }).join("");
       tc='<div class="admin-card">'
         +'<div class="admin-title">部門マスター</div>'
@@ -3287,6 +3644,8 @@ function render(){
         +'</div>'
         +'<button id="btn-add-loc" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 拠点追加</button>'
         +'</div></div>'
+        // 管理者PIN／管理者トークンはデモ画面には描画しない（値の露出と変更導線を断つ）
+        +(demoMode?'':''
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者PIN設定</div>'
         +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">状態: <strong style="color:'+(adminPinReady()?"#1e40af":"#b91c1c")+';">'+(adminPinReady()?"設定済み（ハッシュ化済み）":"未設定（ログイン不可）")+'</strong></div>'
@@ -3302,6 +3661,9 @@ function render(){
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
+        )
+        // 既存の閲覧用トークンはデモ画面には一切描画しない（取得もしない）
+        +(demoMode?'':''
         +'<div class="admin-card">'
         +'<div class="admin-title">閲覧用URL管理（労務士向け）</div>'
         +(viewerTokensList===null
@@ -3309,19 +3671,19 @@ function render(){
           :viewerTokensList.length===0
             ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">発行済みトークンなし</div>'
             :viewerTokensList.map(function(vt){
-              var vtUrl=location.origin+location.pathname+'?viewer='+vt.token;
               return '<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
                 +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
-                +'<strong style="font-size:.9rem;flex:1;">'+vt.name+'</strong>'
+                +'<strong style="font-size:.9rem;flex:1;">'+esc(vt.name)+'</strong>'
                 +(vt.enabled?'<span style="background:#dcfce7;color:#166534;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">有効</span>':'<span style="background:#fee2e2;color:#991b1b;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">無効</span>')
                 +'</div>'
-                +(vt.expiresAt?'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+vt.expiresAt+'</div>':'')
-                +(vt.memo?'<div style="font-size:.75rem;color:#64748b;margin-bottom:3px;">メモ: '+vt.memo+'</div>':'')
-                +'<div style="font-size:.72rem;color:#94a3b8;word-break:break-all;margin-bottom:8px;">'+vtUrl+'</div>'
+                +(vt.expiresAt?'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+esc(vt.expiresAt)+'</div>':'')
+                +(vt.memo?'<div style="font-size:.75rem;color:#64748b;margin-bottom:3px;">メモ: '+esc(vt.memo)+'</div>':'')
+                +'<div style="font-size:.72rem;color:#94a3b8;word-break:break-all;margin-bottom:8px;font-family:monospace;">'+esc(maskToken(vt.token))+'</div>'
+                +(vt.issuedByDemoTokenId?'<div style="font-size:.72rem;color:#9a3412;margin-bottom:6px;">デモ画面から発行（発行元: '+esc(maskToken(vt.issuedByDemoTokenId))+'）</div>':'')
                 +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
-                +'<button class="btn-vt-copy" data-vt-token="'+vt.token+'" style="background:#1e40af;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
-                +'<button class="btn-vt-toggle" data-vt-token="'+vt.token+'" data-vt-enabled="'+(vt.enabled?'1':'0')+'" style="background:'+(vt.enabled?'#fef3c7':'#d1fae5')+';color:'+(vt.enabled?'#92400e':'#065f46')+';border:1px solid '+(vt.enabled?'#fcd34d':'#6ee7b7')+';padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(vt.enabled?'無効化':'有効化')+'</button>'
-                +'<button class="btn-vt-del" data-vt-token="'+vt.token+'" data-vt-name="'+vt.name+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+                +'<button class="btn-vt-copy" data-vt-token="'+esc(vt.token)+'" style="background:#1e40af;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
+                +'<button class="btn-vt-toggle" data-vt-token="'+esc(vt.token)+'" data-vt-enabled="'+(vt.enabled?'1':'0')+'" style="background:'+(vt.enabled?'#fef3c7':'#d1fae5')+';color:'+(vt.enabled?'#92400e':'#065f46')+';border:1px solid '+(vt.enabled?'#fcd34d':'#6ee7b7')+';padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(vt.enabled?'無効化':'有効化')+'</button>'
+                +'<button class="btn-vt-del" data-vt-token="'+esc(vt.token)+'" data-vt-name="'+esc(vt.name)+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
                 +'</div>'
                 +'</div>';
             }).join('')
@@ -3334,22 +3696,125 @@ function render(){
         +'</div>'
         +'<input id="vt-new-memo" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
         +'<button id="btn-vt-issue" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する</button>'
-        +'</div></div>'
+        +'</div></div>')
+        // ── デモ画面専用: このデモURLから発行した閲覧用URLだけを表示・操作する ──
+        // 既存の閲覧用トークンは取得も表示もしない。許可するのは「新規発行」と「無効化」のみ。
+        +(!demoMode?'':''
         +'<div class="admin-card">'
-        +'<div class="admin-title">デモアクセス管理</div>'
-        +(demoAccessConfig
-          ?'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">トークン: <strong style="color:#1e40af;font-family:monospace;">'+demoAccessConfig.token+'</strong></div>'
-           +'<div style="font-size:.85rem;color:#475569;margin-bottom:8px;">有効期限: <strong style="color:#1e40af;font-family:monospace;">'+demoAccessConfig.expireDate+'</strong></div>'
-           +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:10px;word-break:break-all;">デモURL: https://rsb79692-create.github.io/timecard/?demo='+encodeURIComponent(demoAccessConfig.token)+'</div>'
-           +'<button id="btn-demo-disable" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:6px 16px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:12px;">無効化</button>'
-          :'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">デモアクセス未設定</div>'
+        +'<div class="admin-title">閲覧用URL発行（このデモURLから発行した分のみ）</div>'
+        +'<div style="font-size:.78rem;color:#64748b;margin-bottom:10px;">このデモURLの有効期限（'+esc(demoTokenExpiresAt||"—")+'）を超える期限は設定できません。発行後の再有効化・期限変更・削除はできません。</div>'
+        +(demoIssuedVtList===null
+          ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">読込中...</div>'
+          :demoIssuedVtList.length===0
+            ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">このデモURLから発行した閲覧用URLはありません</div>'
+            :demoIssuedVtList.map(function(vt){
+              return '<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
+                +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                +'<strong style="font-size:.9rem;flex:1;">'+esc(vt.name||"(名称なし)")+'</strong>'
+                +(vt.enabled!==false?'<span style="background:#dcfce7;color:#166534;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">有効</span>':'<span style="background:#fee2e2;color:#991b1b;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">無効</span>')
+                +'</div>'
+                +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:8px;">有効期限: '+esc(vt.expiresAt||"—")+'</div>'
+                +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+                +'<button class="btn-dvt-copy" data-demo-allow="1" data-dvt-token="'+esc(vt.token)+'" style="background:#1e40af;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
+                +(vt.enabled!==false
+                  ?'<button class="btn-dvt-disable" data-demo-allow="1" data-dvt-token="'+esc(vt.token)+'" data-dvt-name="'+esc(vt.name||"")+'" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">無効化</button>'
+                  :'')
+                +'</div></div>';
+            }).join('')
         )
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-        +'<input id="new-demo-token" type="text" placeholder="デモトークン（例: demo20260430）" style="flex:1;">'
-        +'<input id="new-demo-expire" type="date" style="width:130px;">'
+        +'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
+        +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規発行（有効期限必須）</div>'
+        +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
+        +'<input id="dvt-new-name" data-demo-allow="1" type="text" placeholder="名称（例: 田中税理士事務所）" style="flex:1;">'
+        +'<input id="dvt-new-expires" data-demo-allow="1" type="date"'+(demoTokenExpiresAt?' max="'+esc(demoTokenExpiresAt)+'"':'')+' style="width:160px;">'
         +'</div>'
-        +'<button id="btn-save-demo" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">設定・更新</button>'
+        +'<input id="dvt-new-memo" data-demo-allow="1" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
+        +'<button id="btn-dvt-issue" data-demo-allow="1" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する</button>'
+        +'</div></div>')
+        // ── 管理者デモURL管理（demoTokens/{token} 方式）──
+        // デモ画面からは「自分のトークンの無効化」だけ可能。発行・変更・期限延長は通常管理者のみ。
+        +'<div class="admin-card">'
+        +'<div class="admin-title">'+(demoMode?'このデモURL':'管理者デモURL管理')+'</div>'
+        // デモ画面では他のデモURLを取得・表示せず、使用中の1件だけを扱う
+        +(demoMode
+          ?'<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
+           +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+esc(demoTokenExpiresAt||"—")+'</div>'
+           +'<div style="font-size:.72rem;color:#94a3b8;margin-bottom:8px;font-family:monospace;">'+esc(maskToken(demoTokenKey))+'</div>'
+           +(demoTokenKey
+             ?'<button class="btn-dt-disable" data-demo-allow="1" data-dt-token="'+esc(demoTokenKey)+'" data-dt-name="このデモURL" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">このデモURLを無効化</button>'
+             :'')
+           +'</div>'
+          :(demoTokensList===null
+            ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">読込中...</div>'
+            :demoTokensList.length===0
+              ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">発行済みデモURLなし</div>'
+              :demoTokensList.map(function(dt){
+                return '<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
+                  +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                  +'<strong style="font-size:.9rem;flex:1;">'+esc(dt.name||"(名称なし)")+'</strong>'
+                  +(dt.enabled!==false?'<span style="background:#dcfce7;color:#166534;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">有効</span>':'<span style="background:#fee2e2;color:#991b1b;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">無効</span>')
+                  +'</div>'
+                  +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+esc(dt.expiresAt||"—")+'</div>'
+                  +(dt.memo?'<div style="font-size:.75rem;color:#64748b;margin-bottom:3px;">メモ: '+esc(dt.memo)+'</div>':'')
+                  +'<div style="font-size:.72rem;color:#94a3b8;word-break:break-all;margin-bottom:8px;font-family:monospace;">'+esc(maskToken(dt.token))+'</div>'
+                  +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+                  +'<button class="btn-dt-copy" data-dt-token="'+esc(dt.token)+'" style="background:#1e40af;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
+                  +(dt.enabled!==false?'<button class="btn-dt-disable" data-dt-token="'+esc(dt.token)+'" data-dt-name="'+esc(dt.name||"")+'" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">無効化</button>':'')
+                  +'<button class="btn-dt-del" data-dt-token="'+esc(dt.token)+'" data-dt-name="'+esc(dt.name||"")+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+                  +'</div>'
+                  +'</div>';
+              }).join('')
+          )
+        )
+        +(demoMode?'<div style="font-size:.75rem;color:#8496a7;margin-top:10px;">デモ画面からは、このデモURLの無効化のみ行えます。他のデモURLは取得・表示しません。</div>'
+          :'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
+           +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規デモURL発行（トークンは自動生成）</div>'
+           +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
+           +'<input id="dt-new-name" type="text" placeholder="名称（例: 4月商談用）" style="flex:1;">'
+           +'<input id="dt-new-expires" type="date" style="width:160px;">'
+           +'</div>'
+           +'<input id="dt-new-memo" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
+           +'<button id="btn-dt-issue" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する（有効期限必須）</button>'
+           +'</div>')
         +'</div>'
+        // ── スタッフテスト画面URL（?staffDemo=）。通常管理者のみ発行・管理できる ──
+        +(demoMode?'':'<div class="admin-card">'
+          +'<div class="admin-title">スタッフテスト画面URL（直接共有・任意）</div>'
+          +'<div style="font-size:.78rem;color:#64748b;margin-bottom:10px;">通常は管理者デモ画面の「スタッフ画面をテスト」から入れます。単独で共有したい場合のみ発行してください。本番データへは保存されません。</div>'
+          +(staffDemoTokensList===null
+            ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">読込中...</div>'
+            :staffDemoTokensList.length===0
+              ?'<div style="color:#8496a7;font-size:.85rem;margin-bottom:12px;">発行済みURLなし</div>'
+              :staffDemoTokensList.map(function(st){
+                return '<div style="border:1px solid #e5e7eb;border-radius:2px;padding:10px 12px;margin-bottom:8px;background:#f8fafc;">'
+                  +'<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+                  +'<strong style="font-size:.9rem;flex:1;">'+esc(st.name||"(名称なし)")+'</strong>'
+                  +(st.enabled!==false?'<span style="background:#dcfce7;color:#166534;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">有効</span>':'<span style="background:#fee2e2;color:#991b1b;font-size:.72rem;padding:2px 7px;border-radius:9px;font-weight:700;">無効</span>')
+                  +'</div>'
+                  +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:3px;">有効期限: '+esc(st.expiresAt||"—")+'</div>'
+                  +'<div style="font-size:.72rem;color:#94a3b8;margin-bottom:8px;font-family:monospace;">'+esc(maskToken(st.token))+'</div>'
+                  +'<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+                  +'<button class="btn-st-copy" data-st-token="'+esc(st.token)+'" style="background:#5b21b6;color:#fff;border:none;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">URLコピー</button>'
+                  +'<button class="btn-st-del" data-st-token="'+esc(st.token)+'" data-st-name="'+esc(st.name||"")+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:5px 12px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+                  +'</div></div>';
+              }).join('')
+          )
+          +'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
+          +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
+          +'<input id="st-new-name" type="text" placeholder="名称（例: 操作説明用）" style="flex:1;">'
+          +'<input id="st-new-expires" type="date" style="width:160px;">'
+          +'</div>'
+          +'<button id="btn-st-issue" style="background:#5b21b6;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 発行する（有効期限必須）</button>'
+          +'</div></div>')
+        // ── 旧デモアクセス（config/demoAccess）の移行用。存在するときだけ表示し、廃止を促す ──
+        +(((!demoMode||demoLegacyAuth)&&demoAccessConfig)
+          ?'<div class="admin-card" style="border:1px solid #fecaca;">'
+           +'<div class="admin-title" style="color:#b91c1c;">旧デモアクセス（要廃止）</div>'
+           +'<div style="font-size:.8rem;color:#475569;margin-bottom:8px;">旧方式は全訪問者にトークンが配信されるため廃止対象です。新方式でURLを発行し直してから削除してください。</div>'
+           +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:10px;font-family:monospace;">トークン: '+esc(maskToken(demoAccessConfig.token))+' / 期限: '+esc(demoAccessConfig.expireDate||"—")+'</div>'
+           +'<button id="btn-demo-legacy-del" '+(demoLegacyAuth?'data-demo-allow="1" ':'')+'style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:6px 16px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">旧デモアクセスを無効化（削除）</button>'
+           +'</div>'
+          :'')
     }
 
     if(adminTab==="documents"){
@@ -4442,7 +4907,9 @@ function render(){
     app.innerHTML='<div class="admin-sticky-bar">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
       +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
-      +'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>'
+      +(demoMode
+        ?'<button class="admin-close-btn" data-demo-allow="1" style="background:#ede9fe;color:#5b21b6;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #c4b5fd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="openStaffDemoPicker()">🧪 スタッフ画面をテスト</button>'
+        :'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>')
       +'</div>'
       +_installHTML
       +_unapvHTML
@@ -4497,7 +4964,7 @@ function render(){
     // thead sticky: admin-sticky-bar の高さを測って top を設定
     if(adminTab==="records"){
       var sBar=document.querySelector('.admin-sticky-bar');
-      var sBarH=sBar?sBar.offsetHeight:0;
+      var sBarH=(sBar?sBar.offsetHeight:0)+_modeBannerH();
       document.querySelectorAll('.records-th').forEach(function(th){th.style.top=sBarH+'px';});
     }
 
@@ -4622,7 +5089,7 @@ function render(){
         }
         req.status="approved";req.approvedAt=nowIso;
         patchCorrectionRequestFb(req.id,{status:"approved",approvedAt:nowIso});
-        localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+        _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
         render();
       };
     });
@@ -4638,7 +5105,7 @@ function render(){
         var nowIso=new Date().toISOString();
         req.status="rejected";req.rejectedAt=nowIso;
         patchCorrectionRequestFb(req.id,{status:"rejected",rejectedAt:nowIso});
-        localStorage.setItem("tc5_correction_requests",JSON.stringify(correctionRequests));
+        _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
         render();
       };
     });
@@ -5298,30 +5765,196 @@ function render(){
         });
       };
     });
-    // デモアクセス設定
-    var saveDemoBtn=document.getElementById("btn-save-demo");
-    if(saveDemoBtn)saveDemoBtn.onclick=function(){
-      var tok=(document.getElementById("new-demo-token")?.value||"").trim();
-      var exp=(document.getElementById("new-demo-expire")?.value||"").trim().replace(/\D/g,"");
-      if(!tok){showAlert("デモトークンを入力してください");return;}
-      if(!/^\d{8}$/.test(exp)){showAlert("有効期限は8桁で入力してください（例：20260430）");return;}
-      demoAccessConfig={token:tok,expireDate:exp};
-      authFetch(FB_URL+"/config/demoAccess.json",{
-        method:"PUT",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify(demoAccessConfig)
-      }).then(function(){showAlert("デモアクセスを設定しました");render();})
-        .catch(function(){showAlert("Firebase保存に失敗しました");});
+    // ── デモ画面から発行する閲覧用トークン（自分が発行した分のみ操作可）──
+    var issueDvtBtn=document.getElementById("btn-dvt-issue");
+    if(issueDvtBtn)issueDvtBtn.onclick=function(){
+      if(!demoMode||!isSafeTokenStr(demoTokenKey)||!demoTokenExpiresAt){showAlert("このデモURLからは発行できません");return;}
+      var name=(document.getElementById("dvt-new-name")?.value||"").trim();
+      var expires=(document.getElementById("dvt-new-expires")?.value||"").trim();
+      var memo=(document.getElementById("dvt-new-memo")?.value||"").trim();
+      var today=getTodayJSTStr();
+      if(!name){showAlert("名称を入力してください");return;}
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(expires)){showAlert("有効期限は必須です（yyyy-mm-dd）");return;}
+      if(expires<today){showAlert("有効期限は本日以降を指定してください");return;}
+      if(expires>demoTokenExpiresAt){showAlert("有効期限はこのデモURLの期限（"+demoTokenExpiresAt+"）を超えられません");return;}
+      var token=generateViewerToken();
+      if(!isSafeTokenStr(token)){showAlert("トークン生成に失敗しました");return;}
+      var rec={name:name,enabled:true,createdAt:today,expiresAt:expires,issuedByDemoTokenId:demoTokenKey};
+      if(memo)rec.memo=memo;
+      _demoIssuedVt[token]="pending"; // 本体PUTは1回だけ許可（以後は内容変更・期限延長不可）
+      // インデックスを先に書く。逆順だと本体成功→インデックス失敗のときに
+      // デモ画面から無効化できない閲覧用URLが残る。
+      authFetch(FB_URL+"/demoIssuedViewerTokens/"+demoTokenKey+"/"+token+".json",{
+        method:"PUT",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({name:name,enabled:true,createdAt:today,expiresAt:expires})
+      }).then(function(idxRes){
+        if(!idxRes.ok){_demoIssuedVt[token]=true;showAlert("発行に失敗しました");return null;}
+        return authFetch(FB_URL+"/viewerTokens/"+token+".json",{
+          method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rec)
+        });
+      }).then(function(res){
+        _demoIssuedVt[token]=true;
+        if(!res)return;
+        if(!res.ok){showAlert("発行に失敗しました");return;}
+        if(!demoIssuedVtList)demoIssuedVtList=[];
+        demoIssuedVtList.push({token:token,name:name,enabled:true,createdAt:today,expiresAt:expires});
+        var url=location.origin+location.pathname+"?viewer="+token;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("発行しました。URLをコピーしました");render();})
+            .catch(function(){showAlert("発行しました。\n\n"+url);render();});
+        }else{showAlert("発行しました。\n\n"+url);render();}
+      }).catch(function(){_demoIssuedVt[token]=true;showAlert("発行に失敗しました");});
     };
-    // デモアクセス無効化
-    var disableDemoBtn=document.getElementById("btn-demo-disable");
-    if(disableDemoBtn)disableDemoBtn.onclick=function(){
-      showConfirm("デモアクセスを無効化しますか？",function(){
-        demoAccessConfig=null;
-        authFetch(FB_URL+"/config/demoAccess.json",{
-          method:"DELETE"
-        }).then(function(){showAlert("デモアクセスを無効化しました");render();})
-          .catch(function(){showAlert("Firebase操作に失敗しました");});
+    document.querySelectorAll(".btn-dvt-copy").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-dvt-token");
+        if(!_demoOwnsVt(tok))return;
+        var url=location.origin+location.pathname+"?viewer="+tok;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("URLをコピーしました");}).catch(function(){showAlert("以下のURLをコピーしてください。\n\n"+url);});
+        }else{showAlert("以下のURLをコピーしてください。\n\n"+url);}
+      };
+    });
+    document.querySelectorAll(".btn-dvt-disable").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-dvt-token");
+        var nm=btn.getAttribute("data-dvt-name")||"";
+        if(!_demoOwnsVt(tok)||!isSafeTokenStr(demoTokenKey))return;
+        showConfirm("閲覧用URL「"+nm+"」を無効化しますか？\n無効化後の再有効化はできません。",function(){
+          authFetch(FB_URL+"/viewerTokens/"+tok+"/enabled.json",{
+            method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(false)
+          }).then(function(res){
+            if(!res.ok){showAlert("無効化に失敗しました");return null;}
+            return authFetch(FB_URL+"/demoIssuedViewerTokens/"+demoTokenKey+"/"+tok+"/enabled.json",{
+              method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(false)
+            }).then(function(){
+              if(demoIssuedVtList){
+                var d=demoIssuedVtList.find(function(t){return t.token===tok;});
+                if(d)d.enabled=false;
+              }
+              showAlert("無効化しました");render();
+            });
+          }).catch(function(){showAlert("無効化に失敗しました");});
+        });
+      };
+    });
+    // ── 管理者デモURL（demoTokens）CRUD ──
+    // 発行は通常管理者のみ。デモ画面からは「使用中トークンの無効化」だけが許可リストを通る。
+    var issueDtBtn=document.getElementById("btn-dt-issue");
+    if(issueDtBtn)issueDtBtn.onclick=function(){
+      var name=(document.getElementById("dt-new-name")?.value||"").trim();
+      var expires=(document.getElementById("dt-new-expires")?.value||"").trim();
+      var memo=(document.getElementById("dt-new-memo")?.value||"").trim();
+      if(!name){showAlert("名称を入力してください");return;}
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(expires)){showAlert("有効期限は必須です（yyyy-mm-dd）");return;}
+      if(expires<getTodayJSTStr()){showAlert("有効期限は本日以降を指定してください");return;}
+      var token=generateViewerToken(); // crypto.getRandomValues 由来（24文字）
+      var rec={name:name,enabled:true,createdAt:getTodayJSTStr(),expiresAt:expires};
+      if(memo)rec.memo=memo;
+      authFetch(FB_URL+"/demoTokens/"+token+".json",{
+        method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rec)
+      }).then(function(res){
+        if(!res.ok){showAlert("Firebase保存に失敗しました");return;}
+        if(!demoTokensList)demoTokensList=[];
+        demoTokensList.push(Object.assign({token:token},rec));
+        var url=location.origin+location.pathname+"?demo="+token;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("発行しました。URLをコピーしました");render();})
+            .catch(function(){showAlert("発行しました。\n\n"+url);render();});
+        }else{showAlert("発行しました。\n\n"+url);render();}
+      }).catch(function(){showAlert("Firebase保存に失敗しました");});
+    };
+    document.querySelectorAll(".btn-dt-copy").forEach(function(btn){
+      btn.onclick=function(){
+        var url=location.origin+location.pathname+"?demo="+btn.getAttribute("data-dt-token");
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("URLをコピーしました");}).catch(function(){showAlert("以下のURLをコピーしてください。\n\n"+url);});
+        }else{showAlert("以下のURLをコピーしてください。\n\n"+url);}
+      };
+    });
+    document.querySelectorAll(".btn-dt-disable").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-dt-token");
+        var nm=btn.getAttribute("data-dt-name")||"";
+        showConfirm("デモURL「"+nm+"」を無効化しますか？",function(){
+          authFetch(FB_URL+"/demoTokens/"+tok+"/enabled.json",{
+            method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(false)
+          }).then(function(res){
+            if(!res.ok){showAlert("Firebase操作に失敗しました");return;}
+            if(demoTokensList){
+              var d=demoTokensList.find(function(t){return t.token===tok;});
+              if(d)d.enabled=false;
+            }
+            showAlert("無効化しました");render();
+          }).catch(function(){showAlert("Firebase操作に失敗しました");});
+        });
+      };
+    });
+    document.querySelectorAll(".btn-dt-del").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-dt-token");
+        var nm=btn.getAttribute("data-dt-name")||"";
+        showConfirm("デモURL「"+nm+"」を削除しますか？",function(){
+          authFetch(FB_URL+"/demoTokens/"+tok+".json",{method:"DELETE"}).then(function(res){
+            if(!res.ok){showAlert("削除に失敗しました");return;}
+            if(demoTokensList)demoTokensList=demoTokensList.filter(function(t){return t.token!==tok;});
+            showAlert("削除しました");render();
+          }).catch(function(){showAlert("削除に失敗しました");});
+        });
+      };
+    });
+    // ── スタッフテスト画面URL（staffDemoTokens）CRUD：通常管理者のみ ──
+    var issueStBtn=document.getElementById("btn-st-issue");
+    if(issueStBtn)issueStBtn.onclick=function(){
+      var name=(document.getElementById("st-new-name")?.value||"").trim();
+      var expires=(document.getElementById("st-new-expires")?.value||"").trim();
+      if(!name){showAlert("名称を入力してください");return;}
+      if(!/^\d{4}-\d{2}-\d{2}$/.test(expires)){showAlert("有効期限は必須です（yyyy-mm-dd）");return;}
+      if(expires<getTodayJSTStr()){showAlert("有効期限は本日以降を指定してください");return;}
+      var token=generateViewerToken();
+      var rec={name:name,enabled:true,createdAt:getTodayJSTStr(),expiresAt:expires};
+      authFetch(FB_URL+"/staffDemoTokens/"+token+".json",{
+        method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(rec)
+      }).then(function(res){
+        if(!res.ok){showAlert("Firebase保存に失敗しました");return;}
+        if(!staffDemoTokensList)staffDemoTokensList=[];
+        staffDemoTokensList.push(Object.assign({token:token},rec));
+        var url=location.origin+location.pathname+"?staffDemo="+token;
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("発行しました。URLをコピーしました");render();})
+            .catch(function(){showAlert("発行しました。\n\n"+url);render();});
+        }else{showAlert("発行しました。\n\n"+url);render();}
+      }).catch(function(){showAlert("Firebase保存に失敗しました");});
+    };
+    document.querySelectorAll(".btn-st-copy").forEach(function(btn){
+      btn.onclick=function(){
+        var url=location.origin+location.pathname+"?staffDemo="+btn.getAttribute("data-st-token");
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(function(){showAlert("URLをコピーしました");}).catch(function(){showAlert("以下のURLをコピーしてください。\n\n"+url);});
+        }else{showAlert("以下のURLをコピーしてください。\n\n"+url);}
+      };
+    });
+    document.querySelectorAll(".btn-st-del").forEach(function(btn){
+      btn.onclick=function(){
+        var tok=btn.getAttribute("data-st-token");
+        var nm=btn.getAttribute("data-st-name")||"";
+        showConfirm("テスト用URL「"+nm+"」を削除しますか？",function(){
+          authFetch(FB_URL+"/staffDemoTokens/"+tok+".json",{method:"DELETE"}).then(function(res){
+            if(!res.ok){showAlert("削除に失敗しました");return;}
+            if(staffDemoTokensList)staffDemoTokensList=staffDemoTokensList.filter(function(t){return t.token!==tok;});
+            showAlert("削除しました");render();
+          }).catch(function(){showAlert("削除に失敗しました");});
+        });
+      };
+    });
+    // 旧デモアクセス（config/demoAccess）の廃止
+    var legacyDelBtn=document.getElementById("btn-demo-legacy-del");
+    if(legacyDelBtn)legacyDelBtn.onclick=function(){
+      showConfirm("旧デモアクセスを削除しますか？\n旧形式のデモURLは使用できなくなります。",function(){
+        authFetch(FB_URL+"/config/demoAccess.json",{method:"DELETE"}).then(function(res){
+          if(!res.ok){showAlert("Firebase操作に失敗しました");return;}
+          demoAccessConfig=null;showAlert("旧デモアクセスを削除しました");render();
+        }).catch(function(){showAlert("Firebase操作に失敗しました");});
       });
     };
     // 資料アップロードボタン
@@ -5472,8 +6105,15 @@ function closeHrmModal(){
   var m=document.getElementById("hrm-modal");if(m)m.style.display="none";
 }
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
-function goHome(){staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();}
-function goPin(){pinInput="";pinError=false;screen="pin";render();}
+function goHome(){
+  if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
+  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();
+}
+function goPin(){
+  // デモ／スタッフテスト画面からは管理者PIN画面へ遷移させない（直接呼ばれても遷移しない）
+  if(uiMode==="adminDemo"||uiMode==="staffDemo"){console.warn("[goPin] blocked (uiMode="+uiMode+")");return;}
+  pinInput="";pinError=false;screen="pin";render();
+}
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
   adminTab=v;
@@ -5485,12 +6125,49 @@ function setTab(v){
   if(v==="documents"){
     docLoading=true;docList=[];render();
     loadDocumentList(function(docs){docList=docs;docLoading=false;render();});
-  } else if(v==="master"&&viewerTokensList===null&&!viewerTokensLoading){
+  } else if(v==="master"&&!viewerTokensLoading
+            &&(demoMode?demoIssuedVtList===null:(viewerTokensList===null||demoTokensList===null))){
     viewerTokensLoading=true;render();
-    authFetch(FB_URL+"/viewerTokens.json").then(function(r){return r.json();}).then(function(data){
-      viewerTokensList=data?Object.entries(data).map(function(e){return Object.assign({token:e[0]},e[1]);}):[];
-      viewerTokensLoading=false;render();
-    }).catch(function(){viewerTokensList=[];viewerTokensLoading=false;render();});
+    var _toMap=function(d){return d?Object.entries(d).map(function(e){return Object.assign({token:e[0]},(e[1]&&typeof e[1]==="object")?e[1]:{});}):[];};
+    if(demoMode){
+      // デモ画面: 既存トークンの全量取得は行わず、発行元デモトークンIDで絞った単一ノードだけを読む
+      var _dvtUrl=demoTokenKey?(FB_URL+"/demoIssuedViewerTokens/"+demoTokenKey+".json"):null;
+      (_dvtUrl?authFetch(_dvtUrl).then(function(r){return r.json();}).catch(function(){return null;}):Promise.resolve(null))
+        .then(function(d){
+          var list=_toMap(d).filter(function(t){return isSafeTokenStr(t.token);}).slice(0,50);
+          // 所有権はインデックスではなく実レコードの issuedByDemoTokenId で照合する
+          // （インデックスだけを根拠にすると、仕込まれた枝で他人のトークンを無効化できてしまう）
+          return Promise.all(list.map(function(t){
+            return authFetch(FB_URL+"/viewerTokens/"+t.token+"/issuedByDemoTokenId.json")
+              .then(function(r){return r.json();})
+              .then(function(owner){return (owner===demoTokenKey)?t:null;})
+              .catch(function(){return null;});
+          })).then(function(verified){
+            demoIssuedVtList=verified.filter(Boolean);
+            demoIssuedVtList.forEach(function(t){if(!_demoOwnsVt(t.token))_demoIssuedVt[t.token]=true;});
+            viewerTokensLoading=false;render();
+          });
+        }).catch(function(){demoIssuedVtList=[];viewerTokensLoading=false;render();});
+    } else {
+      Promise.all([
+        authFetch(FB_URL+"/viewerTokens.json").then(function(r){return r.json();}).catch(function(){return null;}),
+        authFetch(FB_URL+"/demoTokens.json").then(function(r){return r.json();}).catch(function(){return null;}),
+        // 旧 config/demoAccess は移行UIの表示用にマスター画面でのみ読む（全訪問者へは配信しない）
+        authFetch(FB_URL+"/config/demoAccess.json").then(function(r){return r.json();}).catch(function(){return null;}),
+        authFetch(FB_URL+"/staffDemoTokens.json").then(function(r){return r.json();}).catch(function(){return null;})
+      ]).then(function(res){
+        viewerTokensList=_toMap(res[0]);
+        demoTokensList=_toMap(res[1]);
+        demoAccessConfig=res[2]||null;
+        staffDemoTokensList=_toMap(res[3]);
+        viewerTokensLoading=false;render();
+      }).catch(function(){
+        if(viewerTokensList===null)viewerTokensList=[];
+        if(demoTokensList===null)demoTokensList=[];
+        if(staffDemoTokensList===null)staffDemoTokensList=[];
+        viewerTokensLoading=false;render();
+      });
+    }
   } else if(v==="paidleave"){
     paidLeaveLoading=true;_paidLeaveRenderGuard=false;render();
     Promise.all([
@@ -5508,6 +6185,8 @@ function setTab(v){
   }
 }
 function selStaff(s){
+  // スタッフテスト画面ではPIN認証を経由せず、直接サンドボックスの打刻画面へ入る
+  if(staffDemoMode||uiMode==="staffDemo"){enterStaffDemo(s);return;}
   if(!tokenValid)return;
   if(firebaseError){alert("通信エラーです。画面を再読み込みしてください");return;}
   if(!firebaseReady){alert("読込中です。数秒お待ちください");return;}
@@ -5544,7 +6223,12 @@ function _execPunch(type,d){
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
-  punchTimer=setTimeout(function(){punchMsg=null;staffName=null;selectedWorkFacility=null;screen="home";render();},1500);
+  punchTimer=setTimeout(function(){
+    punchMsg=null;staffName=null;selectedWorkFacility=null;
+    // サンドボックス中はホームではなくスタッフ選択画面へ戻す
+    screen=staffDemoMode?"staffDemoPick":"home";
+    render();
+  },1500);
   render();
 }
 function doPunch(type){
@@ -5630,6 +6314,94 @@ function generateViewerToken(){
   var arr=new Uint8Array(24);
   crypto.getRandomValues(arr);
   return Array.from(arr).map(function(b){return chars[b%chars.length];}).join('');
+}
+// トークンの伏せ字表示（先頭4文字＋末尾2文字のみ）
+function maskToken(t){
+  t=String(t||"");
+  if(t.length<=8)return t.replace(/./g,"•");
+  return t.slice(0,4)+"••••••••"+t.slice(-2);
+}
+
+// ===== スタッフテスト画面（サンドボックス）=====
+// 既存の render()/打刻処理/申請処理/賄い処理をそのまま使い、データソースと保存先だけを
+// メモリ上のコピーへ差し替える。本番業務データへは一切書き込まない（_lsSet と authFetch が遮断）。
+function _sbCopy(v){try{return JSON.parse(JSON.stringify(v));}catch(e){return v;}}
+function _sandboxSnapshotTake(){
+  if(_sandboxSnapshot)return;
+  _sandboxSnapshot={
+    records:records,correctionRequests:correctionRequests,
+    paidLeaveRequests:paidLeaveRequests,paidLeaveBalances:paidLeaveBalances,
+    mealsData:mealsData,mealConfData:mealConfData,staffNotifications:staffNotifications,
+    tokenValid:tokenValid,facilityName:facilityName,
+    adminTab:adminTab,writePolicy:writePolicy,
+    mealFormOpen:mealFormOpen,monthPunchOpen:monthPunchOpen,selectedWorkFacility:selectedWorkFacility
+  };
+}
+// 対象スタッフ分だけを深いコピーで積み込む（他スタッフのデータはサンドボックスに載せない）
+function _sandboxLoad(name){
+  var s=_sandboxSnapshot||{};
+  var sid=resolveStaffId(name);
+  records=_sbCopy((s.records||[]).filter(function(r){return r&&r.staff===name;}));
+  correctionRequests=_sbCopy((s.correctionRequests||[]).filter(function(r){return r&&r.staff===name;}));
+  paidLeaveRequests=_sbCopy((s.paidLeaveRequests||[]).filter(function(r){return r&&(r.staffName===name||(sid&&r.staffId===sid));}));
+  paidLeaveBalances=_sbCopy((s.paidLeaveBalances||[]).filter(function(b){return b&&sid&&(b.staffId===sid||b.employeeId===sid);}));
+  mealsData={};
+  if(sid&&s.mealsData&&s.mealsData[sid])mealsData[sid]=_sbCopy(s.mealsData[sid]);
+  mealConfData={};
+  if(sid&&s.mealConfData&&s.mealConfData[sid])mealConfData[sid]=_sbCopy(s.mealConfData[sid]);
+  staffNotifications={};
+  if(sid&&s.staffNotifications&&s.staffNotifications[sid])staffNotifications[sid]=_sbCopy(s.staffNotifications[sid]);
+}
+function _sandboxResetUiState(){
+  if(punchTimer){clearTimeout(punchTimer);punchTimer=null;}
+  selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];
+  punchMsg=null;staffNotifOpen=false;staffUploadFile=null;staffUploadMsg=null;
+  mealFormOpen=false;monthPunchOpen=false;mealFormMonth="";
+}
+function enterStaffDemo(name){
+  if(uiMode!=="adminDemo"&&uiMode!=="staffDemo")return;
+  if(!name)return;
+  _sandboxSnapshotTake();
+  _sandboxLoad(name);
+  _sandboxResetUiState();
+  staffDemoMode=true;
+  writePolicy="sandbox";
+  staffName=name;
+  tokenValid=true;facilityName=""; // 全施設モード相当（施設選択・応援先選択を試せる）
+  screen="punch";
+  render();
+}
+function sandboxReset(){
+  if(!staffDemoMode)return;
+  _sandboxLoad(staffName);
+  _sandboxResetUiState();
+  screen="punch";
+  render();
+}
+function exitStaffDemo(){
+  var s=_sandboxSnapshot;
+  if(punchTimer){clearTimeout(punchTimer);punchTimer=null;} // 打刻後の自動復帰が終了後に画面を上書きしないように
+  punchMsg=null;
+  staffDemoMode=false;
+  staffName=null;
+  if(s){
+    records=s.records;correctionRequests=s.correctionRequests;
+    paidLeaveRequests=s.paidLeaveRequests;paidLeaveBalances=s.paidLeaveBalances;
+    mealsData=s.mealsData;mealConfData=s.mealConfData;staffNotifications=s.staffNotifications;
+    tokenValid=s.tokenValid;facilityName=s.facilityName;
+    mealFormOpen=s.mealFormOpen;monthPunchOpen=s.monthPunchOpen;selectedWorkFacility=s.selectedWorkFacility;
+    writePolicy=s.writePolicy;
+    if(uiMode==="adminDemo")adminTab=s.adminTab||"records";
+  }
+  _sandboxSnapshot=null;
+  screen=(uiMode==="adminDemo")?"admin":"staffDemoPick";
+  render();
+}
+function openStaffDemoPicker(){
+  if(uiMode!=="adminDemo"&&uiMode!=="staffDemo")return;
+  if(staffDemoMode)exitStaffDemo();
+  screen="staffDemoPick";
+  render();
 }
 
 // ===== PIN ハッシュ化 (Phase 1-C/1-D) =====
@@ -5789,7 +6561,8 @@ async function pinOk(){
 }
 
 function saveFacilities(){
-  localStorage.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
+  if(demoWriteBlocked())return;
+  _lsSet("tc_master_facilities",JSON.stringify(masterFacilities));
   masterLocs=masterFacilities.map(function(f){return f.name;});
   VALID_TOKENS=buildValidTokens();
   tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
@@ -5929,6 +6702,7 @@ function bulkDownloadDocuments(){
   });
 }
 function bulkDeleteDocuments(){
+  if(demoWriteBlocked())return;
   if(!docList.length)return;
   showConfirm('全'+docList.length+'件の資料を削除します。この操作は取り消せません。\nよろしいですか？',function(){
     Promise.all(docList.map(function(d){
@@ -5980,9 +6754,10 @@ function handleDocDrop(event){
   if(titleEl&&!titleEl.value){titleEl.value=f.name.replace(/\.[^.]+$/,'');}
 }
 function uploadDocument(){
+  // デモ／テスト画面ではアップロード不可（機能復活時にも有効なよう、無効化returnより前に置く）
+  if(writePolicy!=="full"){demoWriteBlocked();return;}
   // CAMERA_UPLOAD_DISABLED
   return;
-  if(demoMode){showAlert('デモモードではアップロードできません');return;}
   var f=selectedDocFile;
   if(!f){showAlert('ファイルを選択してください');return;}
   var title=(document.getElementById('doc-title')||{value:''}).value.trim();
@@ -6063,6 +6838,8 @@ function onStaffFileSelect(input){
   render();
 }
 function uploadStaffDocument(){
+  // デモ／テスト画面ではアップロード不可（機能復活時にも有効なよう、無効化returnより前に置く）
+  if(writePolicy!=="full")return;
   // CAMERA_UPLOAD_DISABLED
   return;
   var f=staffUploadFile;
@@ -6128,6 +6905,8 @@ function uploadStaffDocument(){
 }
 // ===== 画像アップロード通知（非同期・失敗してもアップロード成功扱い） =====
 function sendUploadNotify(docId,sName,fName,uploadedAt){
+  // デモ／テスト画面から外部通知(Discord/LINE)を送らない
+  if(uiMode!=="normal"){console.warn('[NOTIFY] skip (uiMode='+uiMode+')');return;}
   console.log('[NOTIFY] sendUploadNotify called', {docId:docId,staffName:sName,facilityName:fName,uploadedAt:uploadedAt});
   console.log('[NOTIFY] NOTIFY_API_URL=', NOTIFY_API_URL);
   if(!NOTIFY_API_URL){
@@ -6175,6 +6954,7 @@ function loadDocumentList(callback){
     .catch(function(){if(callback)callback([]);});
 }
 function deleteDocument(docId){
+  if(demoWriteBlocked())return;
   showConfirm('この資料を削除しますか？',function(){
     Promise.all([
       authFetch(DB_DOCS+'/'+docId+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
@@ -6217,6 +6997,7 @@ function bulkDownloadStaffDocs(ids){
   });
 }
 function bulkDeleteStaffDocs(ids){
+  if(demoWriteBlocked())return;
   if(!ids.length)return;
   showConfirm('選択した'+ids.length+'件の書類を削除します。この操作は取り消せません。\nよろしいですか？',function(){
     Promise.all(ids.map(function(id){
@@ -6296,6 +7077,7 @@ function isoToJSTDateTime(isoStr){
 
 // \u6709\u7D66\u7533\u8ACB\u3092 Firebase \u306B\u4FDD\u5B58
 function savePaidLeaveRequest(req){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_requests/"+req.id+".json";
   return authFetch(url,{
     method:"PUT",
@@ -6309,6 +7091,7 @@ function savePaidLeaveRequest(req){
 
 // \u6709\u7D66\u7533\u8ACB\u306E\u30B9\u30C6\u30FC\u30BF\u30B9\u3092\u66F4\u65B0
 function patchPaidLeaveRequest(id,partial){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_requests/"+id+".json";
   return authFetch(url,{
     method:"PATCH",
@@ -6412,6 +7195,7 @@ function todayDateStr(){
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u3092 Firebase \u306B\u65B0\u898F\u4FDD\u5B58\uFF08PUT\u3001id \u30AD\u30FC\u3067\u4FDD\u5B58\uFF09
 function savePaidLeaveBalance(bal){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(bal.id)+".json";
   // 解決値は保存成否(boolean)。既存呼び出しは戻り値未使用のため後方互換。例外時もrejectせずfalseを返す。
   return authFetch(url,{
@@ -6546,6 +7330,7 @@ function staffNotifReadAndOpen(){
 }
 // 当該スタッフの未読通知をすべて既読化（in-memory即時＋Firebase反映）。失敗は握りつぶし。
 function markStaffNotifRead(sid){
+  if(demoWriteBlocked())return;
   sid=(sid||"").trim();if(!sid)return;
   var map=staffNotifications[sid];if(!map)return;
   Object.keys(map).forEach(function(nid){
@@ -6560,6 +7345,7 @@ function markStaffNotifRead(sid){
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u306B PATCH\uFF08\u90E8\u5206\u66F4\u65B0\uFF09
 function patchPaidLeaveBalance(id,partial){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
   return authFetch(url,{
     method:"PATCH",
@@ -6573,6 +7359,7 @@ function patchPaidLeaveBalance(id,partial){
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u304B\u3089\u524A\u9664
 function deletePaidLeaveBalance(id){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
   return authFetch(url,{method:"DELETE"})
     .then(function(res){
@@ -6769,6 +7556,39 @@ async function initFirebase() {
     // 認証トークンを1回取得してキャッシュ（Promise.all内の14並列fetchが個別にsignInして
     // Firebase匿名authレート制限に当たるのを防ぐ）
     await getAuthToken();
+
+    // ── スタッフテスト画面の直接共有URL（?staffDemo=）──
+    // 本番業務データは一切取得しない。表示条件に必要なスタッフ属性と拠点マスターのみ読む。
+    if(staffDemoUrlUsed){
+      // 端末のlocalStorageに残っている本番キャッシュをサンドボックスへ持ち込まない（トークンの正否に関わらず先に消す）
+      records=[];approvals={};correctionRequests=[];
+      paidLeaveRequests=[];paidLeaveBalances=[];
+      mealsData={};mealConfData={};staffNotifications={};monthlyDaysImport={};reviewStatus={};
+      staffPins={};
+      var sdRec=isSafeTokenStr(staffDemoParam)?await fetchJson(FB_URL+"/staffDemoTokens/"+encodeURIComponent(staffDemoParam)+".json"):null;
+      var sdToday=getTodayJSTStr();
+      if(!sdRec||typeof sdRec!=="object"||sdRec.enabled===false){staffDemoInvalid=true;}
+      else if(!sdRec.expiresAt||String(sdRec.expiresAt)<sdToday){staffDemoExpired=true;}
+      else{
+        // 表示条件に必要な最小限（スタッフ属性・拠点マスター）だけを取得する
+        var sdRes=await Promise.all([
+          fetchJson(FB_URL+"/tc5_staff.json"),
+          fetchJson(FB_URL+"/master/locations.json")
+        ]);
+        if(sdRes[0]){staffList=Array.isArray(sdRes[0])?sdRes[0]:Object.values(sdRes[0]);}
+        if(sdRes[1]){
+          masterFacilities=Array.isArray(sdRes[1])?sdRes[1]:Object.values(sdRes[1]);
+          VALID_TOKENS=buildValidTokens();
+          masterLocs=masterFacilities.map(function(f){return f.name;});
+        }
+        screen="staffDemoPick";
+      }
+      staffDemoPending=false;
+      firebaseReady=true;firebaseError=false;
+      render();
+      return; // listenFirebase() も起動しない
+    }
+
     var results=await Promise.all([
       fetchJson(FB_URL+"/tc5_staff.json"),
       fetchJson(FB_URL+"/tc5_records.json"),
@@ -6781,7 +7601,8 @@ async function initFirebase() {
       fetchJson(FB_URL+"/config/adminTokenHash.json"),
       fetchJson(FB_URL+"/config/adminToken.json"),
       (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
-      fetchJson(FB_URL+"/config/demoAccess.json"),
+      // デモトークンは「トークンをキーに単一ノードを引く」方式。デモURL以外では取得しない。
+      (demoUrlUsed&&demoParam)?fetchJson(FB_URL+"/demoTokens/"+encodeURIComponent(demoParam)+".json"):Promise.resolve(null),
       fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
       fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
       fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
@@ -6794,7 +7615,7 @@ async function initFirebase() {
     var fbDepts=results[4],fbLocations=results[5];
     var fbAdminPinHash=results[6],fbAdminPin=results[7];
     var fbAdminTokenHash=results[8],fbAdminToken=results[9];
-    var fbViewerTokenData=results[10],fbDemoAccess=results[11];
+    var fbViewerTokenData=results[10],fbDemoTokenRec=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
     var fbMonthlyImport=results[14];
     var fbStaffNotifications=results[15];
@@ -6816,13 +7637,14 @@ async function initFirebase() {
       tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
-    } else {
+    } else if(writePolicy==="full"){
+      // 既定値の自動書き込みは通常モードのみ（デモ／テスト画面で起動直後に遮断通知が出るのを防ぐ）
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
     // 管理者PIN: ハッシュ優先、旧平文フォールバック（文字列チェックでPermission deniedオブジェクトを除外）
     if(typeof fbAdminPinHash==="string"&&fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
     else if(typeof fbAdminPin==="string"&&fbAdminPin){ADMIN_PIN=fbAdminPin;}
-    if(!ADMIN_PIN_HASH&&!ADMIN_PIN){console.warn("[initFirebase] admin PIN not loaded. fbAdminPinHash=",fbAdminPinHash,"fbAdminPin=",fbAdminPin);}
+    if(!ADMIN_PIN_HASH&&!ADMIN_PIN){console.warn("[initFirebase] admin PIN not loaded. hash=",(fbAdminPinHash?"(set)":"(none)"),"legacy=",(fbAdminPin?"(set)":"(none)"));}
     else{console.log("[initFirebase] admin PIN loaded OK (hash="+(!!ADMIN_PIN_HASH)+")");}
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
@@ -6837,8 +7659,6 @@ async function initFirebase() {
     if(fbReviewStatus&&typeof fbReviewStatus==="object"){reviewStatus=fbReviewStatus;}
     // スタッフ本人向け通知（社員番号→{notifId→通知}）
     if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
-    // デモアクセス
-    if(fbDemoAccess){demoAccessConfig=fbDemoAccess;}
     // 有給申請
     if(fbPaidLeaveRequests){
       var _plArr=typeof fbPaidLeaveRequests==="object"&&!Array.isArray(fbPaidLeaveRequests)
@@ -6862,18 +7682,52 @@ async function initFirebase() {
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
     if(viewerPending){
       var _vtd=fbViewerTokenData;
-      var _todayIso=fmtDateKey(new Date());
+      var _todayIso=getTodayJSTStr(); // JST基準に統一
       if(!_vtd||!_vtd.enabled){viewerMode=false;viewerInvalid=true;}
-      else if(_vtd.expiresAt&&_vtd.expiresAt<_todayIso){viewerMode=false;viewerExpired=true;}
+      else if(_vtd.expiresAt&&String(_vtd.expiresAt)<_todayIso){viewerMode=false;viewerExpired=true;}
       else{viewerMode=true;viewerInvalid=false;}
+      // デモ画面から発行された閲覧用URLは、発行元デモトークンが失効した時点で利用不可にする。
+      // さらに、そのセッションは完全な読み取り専用にする（資料の論理削除など書き込みを一切許可しない）。
+      if(viewerMode&&_vtd&&_vtd.issuedByDemoTokenId){
+        if(!isSafeTokenStr(_vtd.issuedByDemoTokenId)){viewerMode=false;viewerInvalid=true;}
+        else{
+          var _srcDemo=await fetchJson(FB_URL+"/demoTokens/"+encodeURIComponent(_vtd.issuedByDemoTokenId)+".json");
+          if(!_srcDemo||typeof _srcDemo!=="object"||_srcDemo.enabled===false){viewerMode=false;viewerInvalid=true;}
+          else if(!_srcDemo.expiresAt||String(_srcDemo.expiresAt)<_todayIso){viewerMode=false;viewerExpired=true;}
+        }
+        if(viewerMode){
+          viewerIsDemoIssued=true;
+          // demoTokenKey は空のままなので許可リストは全件 false ＝ 完全な読み取り専用
+          writePolicy="readonlyWithAllowList";
+        }
+      }
+      if(viewerMode)uiMode="viewer";
       viewerPending=false;
     }
+    // 管理者デモ認証（demoTokens/{token} 方式）。
+    // isAdminAuthenticated は立てない（通常管理者と権限を同一にしない）／FCM登録も行わない。
     if(demoUrlUsed){
-      if(!demoAccessConfig||!demoAccessConfig.token||demoParam!==demoAccessConfig.token){demoInvalid=true;}
-      else{
-        var dn=new Date();var dTodayStr=dn.getFullYear()+pad(dn.getMonth()+1)+pad(dn.getDate());
-        if(dTodayStr>demoAccessConfig.expireDate){demoExpired=true;}
-        else{demoMode=true;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();}
+      var dToday=getTodayJSTStr(); // JST基準に統一（端末TZによる期限判定のズレを解消）
+      var dRec=(fbDemoTokenRec&&typeof fbDemoTokenRec==="object")?fbDemoTokenRec:null;
+      if(!isSafeTokenStr(demoParam)){demoInvalid=true;}
+      else if(dRec){
+        if(dRec.enabled===false){demoInvalid=true;}
+        else if(!dRec.expiresAt||String(dRec.expiresAt)<dToday){demoExpired=true;}
+        else{
+          demoTokenRec=dRec;demoTokenKey=demoParam;demoTokenExpiresAt=String(dRec.expiresAt);
+          demoMode=true;screen="admin";adminTab="records";
+        }
+      } else {
+        // 移行期間フォールバック：旧 config/demoAccess（デモURLでアクセスされた場合のみ読む）
+        var legacy=await fetchJson(FB_URL+"/config/demoAccess.json");
+        if(legacy&&legacy.token&&demoParam===legacy.token){
+          demoAccessConfig=legacy;
+          // expireDate 欠落はフェイルクローズ（新方式と同じ規則）
+          if(!legacy.expireDate||dToday.replace(/-/g,"")>String(legacy.expireDate)){demoExpired=true;}
+          else{demoLegacyAuth=true;demoMode=true;screen="admin";adminTab="records";}
+        } else {
+          demoInvalid=true;
+        }
       }
     }
     if(KANA_ROWS.concat(["すべて"]).indexOf(yomiTab)<0){yomiTab="すべて";}
@@ -7008,6 +7862,7 @@ function closePaidLeaveGrantModal(){
   _plGrantModalOpen=false;
 }
 function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt,grantedDays,usedDays,remainDays){
+  if(demoWriteBlocked())return Promise.resolve(false);
   var dup=paidLeaveBalances.some(function(b){
     var nb=normalizePaidLeaveBalance(b);return nb.staffId===staffId&&nb.grantDate===grantDate;
   });
@@ -7093,6 +7948,7 @@ function closeProxyLeaveModal(){
   _proxyLeaveModalOpen=false;
 }
 function submitProxyLeaveRequest(){
+  if(demoWriteBlocked())return;
   if(_proxyLeaveSubmitting||paidLeaveBalanceSaving)return;
   var name=((document.getElementById("pl-proxy-staff")||{}).value||"").trim();
   var date=((document.getElementById("pl-proxy-date")||{}).value||"").trim();
