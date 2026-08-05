@@ -1836,7 +1836,10 @@ function _renderInner(){
     return;
   }
   // ── 管理者デモは打刻画面・PIN画面へ落とさない（サンドボックス外での打刻を防ぐ）──
-  if(uiMode==="adminDemo"&&!staffDemoMode
+  // demoMode が確定するまでは作動させない。認証前に作動させると、直前の認証ガード
+  // （demoMode=false なので screen を "home" に戻す）との間で render() が相互再帰し、
+  // Maximum call stack size exceeded で真っ白画面になる。
+  if(demoMode&&uiMode==="adminDemo"&&!staffDemoMode
      &&(screen==="home"||screen==="staffPin"||screen==="staffPinNew"||screen==="pin"||screen==="punch")){
     screen="admin";
     render();
