@@ -4960,7 +4960,6 @@ function _renderInner(){
       +'<button class="tab-btn '+(adminTab==="export"?"tab-on":"tab-off")+'" onclick="setTab(\'export\')">CSV出力</button>'
       +'<button class="tab-btn '+(adminTab==="staff"?"tab-on":"tab-off")+'" onclick="setTab(\'staff\')">スタッフ管理</button>'
       +'<button class="tab-btn '+(adminTab==="master"?"tab-on":"tab-off")+'" onclick="setTab(\'master\')">マスター管理</button>'
-      +'<button class="tab-btn '+(adminTab==="documents"?"tab-on":"tab-off")+'" onclick="setTab(\'documents\')">資料管理</button>'
       +'<button class="tab-btn '+(adminTab==="support"?"tab-on":"tab-off")+'" onclick="setTab(\'support\')">応援集計</button>'
       +'<button class="tab-btn '+(adminTab==="morning"?"tab-on":"tab-off")+'" onclick="setTab(\'morning\')">朝出勤確認</button>'
       +'<button class="tab-btn '+(adminTab==="notify"?"tab-on":"tab-off")+'" onclick="setTab(\'notify\')">'
@@ -6175,6 +6174,7 @@ function goPin(){
 }
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
+  if(v==="documents"){v="records";} // 資料管理は非表示化中。要求されたら勤怠一覧へ戻す
   adminTab=v;
   // タブ切り替え時は残日数フォームのdirtyフラグをリセット
   if(v!=="paidleave"){
