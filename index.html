@@ -748,7 +748,7 @@ button:active{filter:brightness(.86);}
 .hist-worked{color:#1e40af;font-size:1.1rem;font-weight:900;font-family:monospace;}
 .hist-row{display:flex;justify-content:space-between;font-size:1.15rem;padding:12px 0;line-height:1.8;border-bottom:1px solid #e9ecef;}
 .hist-row:last-child{border-bottom:none;}
-.c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;}
+.c-in{color:#1e40af;font-weight:700;} .c-out{color:#b91c1c;font-weight:700;} .c-brk{color:#4b5563;} .c-fc{color:#b45309;font-weight:700;}
 /* 管理者 */
 .tab-row{display:flex;gap:4px;margin-bottom:12px;flex-wrap:wrap;}
 .tab-btn{padding:6px 12px;border-radius:5px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
@@ -1032,7 +1032,7 @@ function showCorrectionRequestModal(staffNm,opts){
 }
 
 // ===== 定数 =====
-const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了"};
+const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了",facilityChange:"施設変更"};
 var ADMIN_PIN=""; // メモリのみ保持（localStorageには保存しない）
 var ADMIN_PIN_HASH=""; // SHA-256ハッシュ（Firebase config/adminPinHashから）
 var DEFAULT_FACILITIES=[
@@ -1300,6 +1300,140 @@ function calcMs(rs){
   }
   return Math.max(0,tot-brk);
 }
+// ===== 施設別勤務時間（施設変更 facilityChange を境界に分割）=====
+// calcMs() は総実働時間（給与・残業の基礎）であり一切変更しない。本関数は施設別内訳の専用計算。
+// ・出勤〜最初の施設変更 → 出勤時の施設へ計上（移動時間は必ず変更前施設へ含める）
+// ・施設変更〜次の施設変更/退勤 → 変更後の施設へ計上
+// ・施設変更が無い日は全時間が出勤時の施設へ計上され、従来と同一結果になる（既存データ互換）
+// ・休憩は重なり分を該当区間から差し引く
+// 戻り値: {byFacility:{施設名:ms}, order:[施設名...], total:ms}
+function calcMsByFacility(rs){
+  var s=rs.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  // 出勤〜退勤が閉じた勤務だけを計上する（未退勤の日が 0 になる calcMs の挙動に合わせる）
+  var segs=[],pend=[],breaks=[],fac="",segStart=null,bsin=null;
+  for(var i=0;i<s.length;i++){
+    var r=s[i],ts=new Date(r.timestamp);
+    if(r.type==="clockIn"){pend=[];fac=r.workFacility||r.facilityName||"";segStart=ts;}
+    else if(r.type==="facilityChange"){
+      if(segStart!=null){
+        pend.push({fac:fac||r.fromFacility||"",start:segStart,end:ts});
+        segStart=ts;
+      }
+      fac=r.workFacility||r.facilityName||fac;
+    }
+    else if(r.type==="clockOut"){
+      if(segStart!=null){
+        pend.push({fac:fac,start:segStart,end:ts});
+        segs=segs.concat(pend);pend=[];segStart=null;
+      }
+    }
+    else if(r.type==="breakStart"){bsin=ts;}
+    else if(r.type==="breakEnd"){if(bsin){breaks.push({start:bsin,end:ts});bsin=null;}}
+  }
+  var byFacility={},order=[],total=0;
+  function reg(k){if(!Object.prototype.hasOwnProperty.call(byFacility,k)){byFacility[k]=0;order.push(k);}}
+  segs.forEach(function(sg){
+    var ms=sg.end-sg.start;
+    breaks.forEach(function(b){
+      var ov=Math.min(sg.end,b.end)-Math.max(sg.start,b.start);
+      if(ov>0)ms-=ov;
+    });
+    if(ms<0)ms=0;
+    var k=sg.fac||"";
+    reg(k);byFacility[k]+=ms;total+=ms;
+  });
+  // 未退勤（区間が閉じていない）場合も、勤務した施設は 0ms として order に載せる。
+  // これが無いと未退勤の応援日が集計から丸ごと消え、退勤漏れを発見できなくなる。
+  var open=(segStart!=null);
+  if(open){pend.forEach(function(sg){reg(sg.fac||"");});reg(fac||"");}
+  return{byFacility:byFacility,order:order,total:total,open:open};
+}
+// 現在有効な勤務施設（出勤〜退勤の間のみ有効。未出勤/退勤済は ""）
+// ※ breakEnd.workFacility は分割点として扱わない（フェーズ1のデータ記録のみ。既存集計を変えないため）
+function getCurrentWorkFacility(staff,date){
+  var dr=records.filter(function(r){return r.staff===staff&&r.date===date&&!r.deleted;})
+    .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  var fac="",open=false;
+  for(var i=0;i<dr.length;i++){
+    var r=dr[i];
+    if(r.type==="clockIn"){open=true;fac=r.workFacility||r.facilityName||"";}
+    else if(r.type==="clockOut"){open=false;fac="";}
+    else if(r.type==="facilityChange"&&open){fac=r.workFacility||r.facilityName||fac;}
+  }
+  return open?fac:"";
+}
+// 施設別勤務の明細行を構築（応援集計タブ・応援CSVの共通ロジック）
+// 対象日の判定は従来条件（isSupportWork / 登録施設≠出勤先施設）を維持しつつ、施設変更のある日を追加。
+// 各日について「登録施設以外の施設」ごとに1行を出力する。
+function buildFacilityWorkDetails(recs){
+  // 日単位に集約する。records の配列順（Firebase は UUID キー順で時系列ではない）に
+  // 依存しないよう、日ごとに timestamp 昇順へ並べ替えてから判定する。
+  var days={};
+  recs.forEach(function(r){
+    if(!r||r.deleted)return;
+    var k=r.staff+"__"+r.date;
+    if(!days[k])days[k]=[];
+    days[k].push(r);
+  });
+  var out=[];
+  Object.keys(days).forEach(function(k){
+    var dr=days[k].slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+    var cins=dr.filter(function(r){return r.type==="clockIn";});
+    if(!cins.length)return;
+    var cin=cins[0];
+    var hasChange=dr.some(function(r){return r.type==="facilityChange";});
+    // 対象日の判定は従来条件を維持（同日に複数出勤がある場合はいずれか1件でも該当すれば対象）
+    var legacySupport=cins.some(function(c){
+      return c.isSupportWork===true||(c.homeFacility&&c.workFacility&&c.homeFacility!==c.workFacility);
+    });
+    if(!hasChange&&!legacySupport)return;
+    var couts=dr.filter(function(r){return r.type==="clockOut";});
+    var outTime=couts.length?couts[couts.length-1].time:"未退勤";
+    var res=calcMsByFacility(dr);
+    var home=cin.homeFacility||"";
+    // 施設ごとの賃金種別：その施設を開始したレコード（出勤 or 施設変更）の wageType を使う
+    function wageOf(f){
+      for(var i=dr.length-1;i>=0;i--){
+        var r=dr[i];
+        if((r.type==="clockIn"||r.type==="facilityChange")&&(r.workFacility||r.facilityName||"")===f)return r.wageType||"";
+      }
+      return cin.wageType||"";
+    }
+    if(!home){
+      // 登録施設が未記録の旧データ：従来どおり出勤先施設の1行のみ（挙動を変えない）
+      out.push({date:cin.date,staff:cin.staff,home:"",work:cin.workFacility||"",
+        inTime:cin.time,outTime:outTime,ms:res.byFacility[cin.workFacility||""]||0,
+        wageType:cin.wageType||"",changed:hasChange});
+      return;
+    }
+    res.order.forEach(function(f){
+      if(!f||f===home)return;
+      out.push({date:cin.date,staff:cin.staff,home:home,work:f,
+        inTime:cin.time,outTime:outTime,ms:res.byFacility[f]||0,
+        wageType:wageOf(f),changed:hasChange});
+    });
+  });
+  return out.sort(function(a,b){return(a.date+a.staff+a.work)<(b.date+b.staff+b.work)?-1:1;});
+}
+// 対象スタッフ・対象期間の「応援勤務に該当した日数」（月次CSVと応援集計の定義を揃える）
+function countSupportDays(recs,staff){
+  var ds={};
+  buildFacilityWorkDetails(recs).forEach(function(d){if(d.staff===staff)ds[d.date]=true;});
+  return Object.keys(ds).length;
+}
+// 明細行 → 施設別サマリ（氏名×登録施設×応援先施設）
+function buildFacilityWorkSummary(details){
+  var map={};
+  details.forEach(function(d){
+    var key=d.staff+"__"+d.home+"__"+d.work;
+    if(!map[key])map[key]={staff:d.staff,home:d.home,work:d.work,days:0,ms:0,firstDate:"",lastDate:""};
+    var m=map[key];m.days++;m.ms+=d.ms;
+    if(!m.firstDate||d.date<m.firstDate)m.firstDate=d.date;
+    if(!m.lastDate||d.date>m.lastDate)m.lastDate=d.date;
+  });
+  return Object.keys(map).map(function(k){return map[k];})
+    .sort(function(a,b){return(a.staff+a.work)<(b.staff+b.work)?-1:1;});
+}
 // 休憩ペア配列を取得（{start:rec, end:rec|null}）。endがnullは休憩中
 function getBreakPairs(dr){
   var sorted=dr.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
@@ -1427,6 +1561,8 @@ var docList=[];var docLoading=false;var selectedDocFile=null;
 var selectedStaffDocIds=new Set();
 var staffUploadFile=null;var staffUploadMsg=null;
 var selectedWorkFacility=null;
+var facilityChangeTo=null; // 施設変更モーダルで選択された移動先施設（打刻直前のみ有効）
+var _fcModalOpen=false;    // 施設変更モーダルの多重表示防止
 var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=masterFacilities.map(function(f){return f.name;});
 if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
@@ -2385,13 +2521,16 @@ function _renderInner(){
     var _onBreak=_openCin&&_lastAny==="breakStart"; // 本人が休憩中（施設不問）
     var ci=!_done&&!_crossFacilityCin&&!_xCin;
     // クロス施設出勤中はクロス退勤可。ただし休憩中は順序維持のため休憩終了を先に求める
-    var co=_crossFacilityCin?!_onBreak:!!(_xCin&&!_xCout&&(last==="clockIn"||last==="breakEnd"));
+    var co=_crossFacilityCin?!_onBreak:!!(_xCin&&!_xCout&&(last==="clockIn"||last==="breakEnd"||last==="facilityChange"));
     // 休憩開始/終了は本人状態（_lastAny）で判定。同一施設のみの場合は従来と同一挙動
-    var cbs=!_done&&_openCin&&(_lastAny==="clockIn"||_lastAny==="breakEnd");
+    var cbs=!_done&&_openCin&&(_lastAny==="clockIn"||_lastAny==="breakEnd"||_lastAny==="facilityChange");
     var cbe=!_done&&_openCin&&_lastAny==="breakStart";
+    // 施設変更：勤務中（出勤済・未退勤）かつ休憩中でない応援可スタッフのみ
+    var _curFac=(!_done&&_openCin&&!_onBreak&&_pso.canSupportWork)?getCurrentWorkFacility(staffName,dk):"";
+    var cfc=!!_curFac; // 現在施設が確定できない場合はボタンを出さない（押しても必ず弾かれるため）
     var worked=toHM(calcMs(tr));
     var histHTML=tr.length?tr.map(function(r){
-      return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'">'+TYPE_LABEL[r.type]+'</span><span style="font-family:monospace;font-weight:600;">'+r.time+'</span></div>';
+      return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":r.type==="facilityChange"?"c-fc":"c-brk")+'">'+esc(TYPE_LABEL[r.type]||r.type)+(r.type==="facilityChange"&&r.workFacility?' → '+esc(r.workFacility):"")+'</span><span style="font-family:monospace;font-weight:600;">'+esc(r.time||"")+'</span></div>';
     }).join(""):'<div class="empty" style="padding:12px 0;">まだ打刻がありません</div>';
     // ── スタッフ本人向けアプリ内通知（フェーズ1：有給付与・承認のお知らせ＋履歴） ──
     var _snSid=resolveStaffId(staffName);
@@ -2608,8 +2747,8 @@ function _renderInner(){
             +'<div style="font-size:.75rem;color:#4b5563;">修正が必要な場合は下の申請ボタンから申請できます。</div>'
             +'</div>'
           :(_crossFacilityCin
-            ?'<div style="text-align:center;padding:10px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:0 0 12px;font-size:.9rem;font-weight:700;color:#92400e;">'+(_onBreak?'休憩中：':'出勤中：')+(_crossFacilityCin.facilityName||"他施設")+'</div>'
-            :(_pso.canSupportWork
+            ?'<div style="text-align:center;padding:10px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:0 0 12px;font-size:.9rem;font-weight:700;color:#92400e;">'+(_onBreak?'休憩中：':'出勤中：')+esc(_crossFacilityCin.facilityName||"他施設")+'</div>'
+            :((_pso.canSupportWork&&!_openCin)
               ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
                 +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
                 +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
@@ -2622,6 +2761,15 @@ function _renderInner(){
             +'<button class="btn-punch btn-bs" '+(cbs?"":"disabled")+' onclick="doPunch(\'breakStart\')">☕<br>休憩開始</button>'
             +'<button class="btn-punch btn-be" '+(cbe?"":"disabled")+' onclick="doPunch(\'breakEnd\')">▶<br>休憩終了</button>'
             +'</div>'
+            +(cfc
+              ?'<div style="margin:-8px 0 16px;">'
+                +'<button class="btn-punch" onclick="openFacilityChangeModal()" style="width:100%;background:#b45309;font-size:1.05rem;padding:14px 10px;">🔄 施設変更</button>'
+                +'<div style="text-align:center;font-size:.72rem;color:#4b5563;line-height:1.5;margin-top:6px;">'
+                  +'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">現在の勤務施設：<b>'+esc(_curFac)+'</b></div>'
+                  +'<div>移動時間は変更前の施設に計上されます</div>'
+                +'</div>'
+                +'</div>'
+              :"")
       )
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span></div>'
@@ -3195,7 +3343,8 @@ function _renderInner(){
           var cinRecs3=sr3.filter(function(r){return r.type==="clockIn";});
           var dys=[...new Set(cinRecs3.map(function(r){return r.date;}))];
           var ms3=dys.reduce(function(s,dk){return s+calcMs(sr3.filter(function(r){return r.date===dk;}));},0);
-          var supDys=cinRecs3.filter(function(r){return r.isSupportWork;}).length;
+          // 応援日数は応援集計タブ／応援CSVと同じ定義（施設変更で他施設へ移った日も含む）
+          var supDys=countSupportDays(sr3,nm);
           return[nm,selMonth,toHM(ms3)||"0:00",dys.length,supDys].join(",");
         });
         dlCSV(hdr3+"\n"+rows3.join("\n"),"穂乃味_月次勤怠_"+selMonth+".csv");
@@ -3329,12 +3478,14 @@ function _renderInner(){
           +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"#fff"))+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
           +(cin
-            ?'<div style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;">'
+            ?'<div style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;white-space:normal;max-width:200px;">'
               +(cin.isSupportWork
                 ?'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">応援</span> '
-                +'<span style="color:#374151;">'+(cin.workFacility||"")+'</span>'
+                +'<span style="color:#374151;">'+esc(cin.workFacility||"")+'</span>'
                 :'<span style="background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:2px;padding:0 3px;">通常</span>'
-                +(cin.workFacility?'<span style="color:#374151;margin-left:3px;">'+cin.workFacility+'</span>':""))
+                +(cin.workFacility?'<span style="color:#374151;margin-left:3px;">'+esc(cin.workFacility)+'</span>':""))
+              +sr.filter(function(r){return r.type==="facilityChange";})
+                 .map(function(r){return'<span style="display:inline-block;background:#e0f2fe;color:#0369a1;border:1px solid #bae6fd;border-radius:2px;padding:0 3px;font-weight:700;margin:2px 0 0 3px;white-space:nowrap;">🔄'+esc(r.time||"")+'→'+esc(r.workFacility||"")+'</span>';}).join("")
               +'</div>'
             :"")
           +'</td>'
@@ -3391,7 +3542,7 @@ function _renderInner(){
         +'<tbody>'+sumRows+'</tbody></table>'
         +(delRecs.length?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
           +'<div style="font-size:.72rem;color:#8496a7;margin-bottom:4px;">削除済み</div>'
-          +delRecs.map(function(r){return '<div style="opacity:.4;font-size:.78rem;text-decoration:line-through;">'+r.staff+' '+TYPE_LABEL[r.type]+' '+r.time+'</div>';}).join("")
+          +delRecs.map(function(r){return '<div style="opacity:.4;font-size:.78rem;text-decoration:line-through;">'+esc(r.staff||"")+' '+esc(TYPE_LABEL[r.type]||r.type)+' '+esc(r.time||"")+'</div>';}).join("")
           +'</div>':"")
         +'</div>';
       }
@@ -3461,7 +3612,7 @@ function _renderInner(){
           +'<span style="font-size:.75rem;color:#8496a7;">'+r.date+'</span>'
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
-          +'<span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":"c-brk")+'" style="font-size:.85rem;font-weight:700;">'+TYPE_LABEL[r.type]+'</span>'
+          +'<span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":r.type==="facilityChange"?"c-fc":"c-brk")+'" style="font-size:.85rem;font-weight:700;">'+esc(TYPE_LABEL[r.type]||r.type)+(r.type==="facilityChange"&&r.workFacility?'→'+esc(r.workFacility):"")+'</span>'
           +'<input type="time" class="edit-time" data-id="'+r.id+'" value="'+r.time+'" style="width:100px;">'
           +(r.editedFrom?'<span style="color:#8496a7;font-size:.7rem;">元:'+r.editedFrom+'</span>':"")
           +'</div>'
@@ -3936,29 +4087,9 @@ function _renderInner(){
 
     if(adminTab==="support"){
       var supRecs=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
-      var supCinRecs=supRecs.filter(function(r){
-        return r.type==="clockIn"&&(
-          r.isSupportWork===true||
-          (r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility)
-        );
-      });
-      var supDetails=supCinRecs.map(function(cin){
-        var dateRecs=supRecs.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});
-        var cout=dateRecs.find(function(r){return r.type==="clockOut";});
-        var ms=calcMs(dateRecs);
-        return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",
-          inTime:cin.time,outTime:cout?cout.time:"未退勤",ms:ms,wageType:cin.wageType||""};
-      }).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
-      var supSumMap={};
-      supDetails.forEach(function(d){
-        var key=d.staff+"__"+d.home+"__"+d.work;
-        if(!supSumMap[key])supSumMap[key]={staff:d.staff,home:d.home,work:d.work,days:0,ms:0,firstDate:"",lastDate:""};
-        var sm2=supSumMap[key];sm2.days++;sm2.ms+=d.ms;
-        if(!sm2.firstDate||d.date<sm2.firstDate)sm2.firstDate=d.date;
-        if(!sm2.lastDate||d.date>sm2.lastDate)sm2.lastDate=d.date;
-      });
-      var supSummary=Object.keys(supSumMap).map(function(k){return supSumMap[k];})
-        .sort(function(a,b){return(a.staff+a.work)<(b.staff+b.work)?-1:1;});
+      // 施設変更を境界に分割した施設別勤務時間を使用（施設変更が無い日は従来と同一結果）
+      var supDetails=buildFacilityWorkDetails(supRecs);
+      var supSummary=buildFacilityWorkSummary(supDetails);
       var monOptsSup=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
       var _th='padding:6px 8px;font-weight:700;white-space:nowrap;text-align:';
       var _td='padding:6px 8px;text-align:';
@@ -3971,9 +4102,9 @@ function _renderInner(){
           +'</tr></thead><tbody>'
           +supSummary.map(function(s){
             return'<tr style="border-bottom:1px solid #f3f4f6;">'
-              +'<td style="'+_td+'left;font-weight:700;">'+s.staff+'</td>'
-              +'<td style="'+_td+'left;color:#6b7280;">'+s.home+'</td>'
-              +'<td style="'+_td+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 4px;font-weight:700;">'+s.work+'</span></td>'
+              +'<td style="'+_td+'left;font-weight:700;">'+esc(s.staff||"")+'</td>'
+              +'<td style="'+_td+'left;color:#6b7280;">'+esc(s.home||"")+'</td>'
+              +'<td style="'+_td+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 4px;font-weight:700;">'+esc(s.work||"")+'</span></td>'
               +'<td style="'+_td+'right;font-family:monospace;font-weight:700;">'+s.days+'日</td>'
               +'<td style="'+_td+'right;font-family:monospace;color:#1e40af;">'+(s.ms>0?toHM(s.ms):"0:00")+'</td>'
               +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+s.firstDate+'</td>'
@@ -3994,13 +4125,14 @@ function _renderInner(){
           +supDetails.map(function(d){
             return'<tr style="border-bottom:1px solid #f3f4f6;">'
               +'<td style="'+_td2+'left;font-family:monospace;">'+d.date+'</td>'
-              +'<td style="'+_td2+'left;font-weight:700;">'+d.staff+'</td>'
-              +'<td style="'+_td2+'left;color:#6b7280;">'+d.home+'</td>'
-              +'<td style="'+_td2+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">'+d.work+'</span></td>'
+              +'<td style="'+_td2+'left;font-weight:700;">'+esc(d.staff||"")+'</td>'
+              +'<td style="'+_td2+'left;color:#6b7280;">'+esc(d.home||"")+'</td>'
+              +'<td style="'+_td2+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">'+esc(d.work||"")+'</span>'
+                +(d.changed?'<span title="この日は施設変更があり、出勤/退勤時刻はこの施設の在籍区間ではありません" style="margin-left:3px;color:#0369a1;font-weight:700;">🔄</span>':"")+'</td>'
               +'<td style="'+_td2+'center;font-family:monospace;color:#1e40af;">'+d.inTime+'</td>'
               +'<td style="'+_td2+'center;font-family:monospace;font-size:.75rem;color:'+(d.outTime==="未退勤"?"#dc2626":"#0f172a")+';">'+d.outTime+'</td>'
               +'<td style="'+_td2+'right;font-family:monospace;">'+(d.ms>0?toHM(d.ms):"—")+'</td>'
-              +'<td style="'+_td2+'center;font-size:.7rem;color:#6b7280;">'+(d.wageType||"通常")+'</td>'
+              +'<td style="'+_td2+'center;font-size:.7rem;color:#6b7280;">'+esc(d.wageType||"通常")+'</td>'
               +'</tr>';
           }).join("")+'</tbody></table></div>'
         :"";
@@ -5390,21 +5522,18 @@ function _renderInner(){
     var supCsvSum=document.getElementById("btn-sup-csv-sum");
     if(supCsvSum)supCsvSum.onclick=function(){
       var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
-      var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
-      var sdT=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",ms:calcMs(dr)};});
-      var smT={};
-      sdT.forEach(function(d){var k=d.staff+"__"+d.home+"__"+d.work;if(!smT[k])smT[k]={staff:d.staff,home:d.home,work:d.work,days:0,ms:0,firstDate:"",lastDate:""};var s=smT[k];s.days++;s.ms+=d.ms;if(!s.firstDate||d.date<s.firstDate)s.firstDate=d.date;if(!s.lastDate||d.date>s.lastDate)s.lastDate=d.date;});
-      var rows=Object.keys(smT).map(function(k){return smT[k];}).sort(function(a,b){return(a.staff+a.work)<(b.staff+b.work)?-1:1;});
+      var rows=buildFacilityWorkSummary(buildFacilityWorkDetails(sr));
       var hdrS="氏名,登録施設,応援先施設,応援日数,応援時間合計,最初の応援日,最後の応援日";
       dlCSV(hdrS+"\n"+rows.map(function(r){return[r.staff,r.home,r.work,r.days,toHM(r.ms)||"0:00",r.firstDate,r.lastDate].join(",");}).join("\n"),"穂乃味_応援集計_"+selMonth+".csv");
     };
     var supCsvDet=document.getElementById("btn-sup-csv-det");
     if(supCsvDet)supCsvDet.onclick=function(){
       var sr=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
-      var sc=sr.filter(function(r){return r.type==="clockIn"&&(r.isSupportWork===true||(r.homeFacility&&r.workFacility&&r.homeFacility!==r.workFacility));});
-      var sdD=sc.map(function(cin){var dr=sr.filter(function(r){return r.staff===cin.staff&&r.date===cin.date;});var cout=dr.find(function(r){return r.type==="clockOut";});var ms=calcMs(dr);return{date:cin.date,staff:cin.staff,home:cin.homeFacility||"",work:cin.workFacility||"",inTime:cin.time,outTime:cout?cout.time:"",ms:ms,wageType:cin.wageType||""};}).sort(function(a,b){return(a.date+a.staff)<(b.date+b.staff)?-1:1;});
-      var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別";
-      dlCSV(hdrD+"\n"+sdD.map(function(d){return[d.date,d.staff,d.home,d.work,d.inTime,d.outTime,d.ms>0?toHM(d.ms):"",d.wageType].join(",");}).join("\n"),"穂乃味_応援明細_"+selMonth+".csv");
+      var sdD=buildFacilityWorkDetails(sr);
+      // 施設変更列：出勤/退勤時刻は「その日」の値であり施設ごとの区間ではないため、
+      // 複数施設に分かれた日を読み手が識別できるようにする
+      var hdrD="日付,氏名,登録施設,応援先施設,出勤時刻,退勤時刻,勤務時間,賃金種別,施設変更";
+      dlCSV(hdrD+"\n"+sdD.map(function(d){return[d.date,d.staff,d.home,d.work,d.inTime,d.outTime==="未退勤"?"":d.outTime,d.ms>0?toHM(d.ms):"",d.wageType,d.changed?"あり":""].join(",");}).join("\n"),"穂乃味_応援明細_"+selMonth+".csv");
     };
 
     // 月別出勤日数
@@ -6165,7 +6294,7 @@ function closeHrmModal(){
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
 function goHome(){
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
-  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();
+  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();
 }
 function goPin(){
   // デモ／スタッフテスト画面からは管理者PIN画面へ遷移させない（直接呼ばれても遷移しない）
@@ -6244,6 +6373,7 @@ function setTab(v){
   }
 }
 function selStaff(s){
+  facilityChangeTo=null;_fcModalOpen=false; // スタッフ切替時に施設変更の選択状態を持ち越さない
   // スタッフテスト画面ではPIN認証を経由せず、直接サンドボックスの打刻画面へ入る
   if(staffDemoMode||uiMode==="staffDemo"){enterStaffDemo(s);return;}
   if(!tokenValid)return;
@@ -6276,14 +6406,31 @@ function _execPunch(type,d){
     nr.homeFacility=_hf||_fn||_wf;nr.workFacility=_wf;nr.isSupportWork=!!(_wf&&nr.homeFacility&&_wf!==nr.homeFacility);nr.wageType=nr.isSupportWork?"support_zero":"normal";
   } else if(type==="breakEnd"){
     // 休憩終了時に打刻した施設を「以降の勤務施設」として記録（施設をまたいだ休憩終了に対応）
-    // ※フェーズ1ではデータ記録のみ。施設別の時間按分集計は将来対応（既存集計は clockIn.workFacility 基準のまま）
+    // ※フェーズ1ではデータ記録のみ。施設別の時間按分は行わない（既存集計・既存データの結果を変えないため）
     if(_effFn)nr.workFacility=_effFn;
+  } else if(type==="facilityChange"){
+    // 施設変更：この時刻を境界に、以降の勤務時間を workFacility へ計上する
+    // fromFacility＝変更前施設（移動時間はこちらへ計上される）
+    // 認可は書き込みパス側で強制する（UIの非表示だけを認可として扱わない・フェイルクローズ）
+    var _from=getCurrentWorkFacility(staffName,nr.date)||"";
+    var _to=facilityChangeTo||"";
+    facilityChangeTo=null; // 使い切りにして、以降の打刻へ持ち越さない
+    if(!_so.canSupportWork||!_from||!_to||masterLocs.indexOf(_to)<0||_from===_to){
+      console.warn("[facilityChange] blocked");
+      showAlert("施設変更を記録できません。\n\n管理者に連絡してください。");
+      return;
+    }
+    nr.fromFacility=_from;
+    nr.workFacility=_to;
+    nr.homeFacility=_hf||_fn||"";
+    nr.isSupportWork=!!(nr.homeFacility&&_to!==nr.homeFacility);
+    nr.wageType=nr.isSupportWork?"support_zero":"normal";
   }
   records.push(nr);saveRecord(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){
-    punchMsg=null;staffName=null;selectedWorkFacility=null;
+    punchMsg=null;staffName=null;selectedWorkFacility=null;facilityChangeTo=null;
     // サンドボックス中はホームではなくスタッフ選択画面へ戻す
     screen=staffDemoMode?"staffDemoPick":"home";
     render();
@@ -6293,6 +6440,8 @@ function _execPunch(type,d){
 function doPunch(type){
   // A. 既存チェック
   if(!tokenValid)return;
+  // 打刻ボタンから来る4種以外は受け付けない（施設変更は doFacilityChange 経由のみ）
+  if(["clockIn","clockOut","breakStart","breakEnd"].indexOf(type)<0)return;
   var d=new Date();
   console.log("[doPunch start]", staffName, type, fmtDateKey(d));
   // B. 当日・当該スタッフ・未削除レコード取得（同一施設でフィルタ）
@@ -6367,6 +6516,82 @@ function doPunch(type){
   _execPunch(type,d);
 }
 
+// ===== 施設変更 =====
+// 勤務中に別施設へ移動したことを現在時刻で記録する。
+// 移動時間（出発〜到着）は変更前の施設へ計上されるため、到着後に押してもらう運用。
+function openFacilityChangeModal(){
+  if(!tokenValid)return;
+  if(viewerMode){console.warn("[viewerMode] write blocked");return;}
+  if(_fcModalOpen)return; // 連打によるモーダル多重表示を防ぐ
+  var _fso=staffList.find(function(s){return s.name===staffName;})||{};
+  if(!_fso.canSupportWork){showAlert("施設変更は応援勤務が可能なスタッフのみ利用できます。\n\n管理者に連絡してください。");return;}
+  var d=new Date(),dk=fmtDateKey(d);
+  var cur=getCurrentWorkFacility(staffName,dk);
+  if(!cur){showAlert("現在の勤務施設が確定できません。\n\n管理者に連絡してください。");return;}
+  var _dr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;})
+    .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  var _cin=_dr.find(function(r){return r.type==="clockIn";});
+  var _cout=_dr.find(function(r){return r.type==="clockOut";});
+  if(!_cin){showAlert("本日の出勤打刻がありません。\n\n先に出勤を打刻してください。");return;}
+  if(_cout){showAlert("本日はすでに退勤済みです。\n\n修正が必要な場合は管理者へ連絡してください。");return;}
+  var _lastAny=_dr.length?_dr[_dr.length-1].type:null;
+  if(_lastAny==="breakStart"){showAlert("休憩中です。\n\n先に休憩終了を打刻してください。");return;}
+  var opts=masterLocs.filter(function(l){return l&&l!==cur;});
+  if(!opts.length){showAlert("移動先として選択できる施設がありません。\n\n管理者に連絡してください。");return;}
+
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;";
+  var ttl=document.createElement("div");
+  ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;";
+  ttl.textContent="施設変更";card.appendChild(ttl);
+  var msg=document.createElement("div");
+  msg.style.cssText="font-size:.88rem;color:#0f172a;line-height:1.6;margin-bottom:14px;white-space:pre-line;";
+  // 記録される時刻は押下時点で確定するため、ここでは特定の時刻を約束しない
+  msg.textContent="現在の勤務施設："+cur+"\n移動先の施設を選んでください。\n\n「施設を変更する」を押した時刻を境界として記録します。\n移動時間は「"+cur+"」に計上されます。";
+  card.appendChild(msg);
+  var sel=document.createElement("select");
+  sel.style.cssText="width:100%;font-size:1rem;font-weight:700;padding:10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;color:#0f172a;font-family:inherit;margin-bottom:18px;";
+  opts.forEach(function(l){var o=document.createElement("option");o.value=l;o.textContent=l;sel.appendChild(o);});
+  card.appendChild(sel);
+  var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
+  function close(){_fcModalOpen=false;if(ov.parentNode)document.body.removeChild(ov);}
+  var cnl=document.createElement("button");
+  cnl.textContent="キャンセル";
+  cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  cnl.onclick=function(){close();};
+  row.appendChild(cnl);
+  var ok=document.createElement("button");
+  ok.textContent="施設を変更する";
+  ok.style.cssText="flex:1;background:#b45309;color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  ok.onclick=function(){var v=sel.value;close();if(v)doFacilityChange(v);};
+  row.appendChild(ok);
+  card.appendChild(row);ov.appendChild(card);
+  ov.onclick=function(e){if(e.target===ov)close();};
+  try{document.body.appendChild(ov);_fcModalOpen=true;ok.focus();}
+  catch(e){_fcModalOpen=false;}
+}
+function doFacilityChange(toFac){
+  if(!tokenValid)return;
+  if(viewerMode){console.warn("[viewerMode] write blocked");return;}
+  if(!toFac)return;
+  var _fso2=staffList.find(function(s){return s.name===staffName;})||{};
+  if(!_fso2.canSupportWork){console.warn("[facilityChange] not permitted");return;}
+  var d=new Date(),dk=fmtDateKey(d);
+  // 再チェック（モーダル表示中に状態が変わった場合の保険）
+  var _dr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;})
+    .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  var _cin=_dr.find(function(r){return r.type==="clockIn";});
+  var _cout=_dr.find(function(r){return r.type==="clockOut";});
+  var _lastAny=_dr.length?_dr[_dr.length-1].type:null;
+  if(!_cin||_cout||_lastAny==="breakStart"){showAlert("打刻状態が変わりました。\n画面を確認してもう一度操作してください。");render();return;}
+  var cur=getCurrentWorkFacility(staffName,dk);
+  if(cur&&cur===toFac){showAlert("すでに「"+toFac+"」で勤務中です。");return;}
+  facilityChangeTo=toFac;
+  _execPunch("facilityChange",d);
+}
+
 // ===== 閲覧用トークン生成 =====
 function generateViewerToken(){
   var chars='abcdefghijklmnopqrstuvwxyz0123456789';
@@ -6413,7 +6638,7 @@ function _sandboxLoad(name){
 }
 function _sandboxResetUiState(){
   if(punchTimer){clearTimeout(punchTimer);punchTimer=null;}
-  selectedWorkFacility=null;showPaidLeaveForm=false;plFormDate="";plFormDates=[];
+  selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];
   punchMsg=null;staffNotifOpen=false;staffUploadFile=null;staffUploadMsg=null;
   mealFormOpen=false;monthPunchOpen=false;mealFormMonth="";
 }
