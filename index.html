@@ -1035,13 +1035,16 @@ function showCorrectionRequestModal(staffNm,opts){
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了",facilityChange:"施設変更"};
 var ADMIN_PIN=""; // メモリのみ保持（localStorageには保存しない）
 var ADMIN_PIN_HASH=""; // SHA-256ハッシュ（Firebase config/adminPinHashから）
-var DEFAULT_FACILITIES=[
-  {name:"ナナイロ",token:"nanairo1214"},{name:"ココラ",token:"kokora1214"},
-  {name:"ハーベスト",token:"harvest1214"},{name:"ミュゲ貝塚",token:"miuge-kaizuka1214"},
-  {name:"ミュゲ春木",token:"miuge-haruki1214"},{name:"ミュゲの泉",token:"miuge-izumi1214"},
-  {name:"ハルイロ",token:"haruiro1214"}
-];
+// 施設マスタの正本は Firebase の master/locations。
+// 実施設名・施設トークンをクライアント配布物へ埋め込まないため、既定値は空とする。
+// 初回ロード時は RTDB 読込完了後に initFirebase 内で VALID_TOKENS / tokenValid が再計算され、
+// 続けて render() が呼ばれるため、打刻画面は正しく復帰する。
+var DEFAULT_FACILITIES=[];
 var masterFacilities=loadData("tc_master_facilities",[]);
+// RTDB の master/locations の「取得に成功したか」。saveFacilities の上書き可否判定に使う。
+// 内容が空（ノード不在）でも取得が成功していれば true。新規環境での初回登録を妨げないため。
+// localStorage 由来のキャッシュだけでは true にしない（取得失敗と区別できないため）。
+var facilitiesLoaded=false;
 if(!masterFacilities.length){masterFacilities=DEFAULT_FACILITIES.slice();}
 function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f.token)t[f.token]=f.name;});return t;}
 var VALID_TOKENS=buildValidTokens();
@@ -1099,11 +1102,10 @@ var _sandboxSnapshot=null;      // 本番stateの退避（サンドボックス�
 localStorage.removeItem("tc5_pins");
 localStorage.removeItem("tc_admin_pin");
 localStorage.removeItem("tc_admin_token");
-const DEF_STAFF=[
-  {name:"谷村",yomi:"たにむら"},{name:"茂野",yomi:"しげの"},{name:"吉田",yomi:"よしだ"},
-  {name:"中島",yomi:"なかしま"},{name:"大城",yomi:"おおしろ"},{name:"谷口",yomi:"たにぐち"},
-  {name:"坂下",yomi:"さかした"},{name:"久木原",yomi:"くきはら"},{name:"藤原",yomi:"ふじわら"},
-];
+// 従業員マスタの正本は Firebase の tc5_staff。
+// 実在従業員の氏名・よみをクライアント配布物へ埋め込まないため、既定値は空とする。
+// RTDB 読込完了後に staffList が差し替えられ、initFirebase 内の render() で再描画される。
+const DEF_STAFF=[];
 
 // ===== ユーティリティ =====
 function pad(n){return String(n).padStart(2,"0");}
@@ -1487,6 +1489,12 @@ function saveData(k,v){
 }
 
 function esc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");}
+// JS文字列コンテキスト用: JSエスケープ → HTMLエスケープ の二段。onclick="fn(&#39;…&#39;)" の内側で使う
+function escJs(s){return esc(String(s==null?"":s).replace(/\\/g,"\\\\").replace(/'/g,"\\'").replace(/\r/g,"\\r").replace(/\n/g,"\\n"));}
+// URL用: http/https のみ許可。それ以外（javascript: 等）は空文字を返す
+function escUrl(u){var v=String(u==null?"":u);return /^https?:\/\//i.test(v)?v:"";}
+// ZIPエントリ名の無害化: パス区切りと先頭ドットを潰して展開時のパス脱出（Zip Slip）を防ぐ
+function zipEntryName(n){var v=String(n==null?"":n).replace(/[\\/]/g,"_").replace(/^\.+/,"");return v||"file";}
 // ===== 状態 =====
 var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
@@ -2100,7 +2108,7 @@ function _renderInner(){
     var sdHTML=sdPick.length?sdPick.map(function(s){
       var dn=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
       var ll=s.location?'<div style="font-size:.72rem;color:#64748b;font-weight:500;margin-top:3px;letter-spacing:.03em;">'+esc(s.location)+'</div>':"";
-      return '<button class="btn-staff" data-demo-allow="1" onclick="enterStaffDemo(&#39;'+esc(String(s.name).replace(/\\/g,"\\\\").replace(/'/g,"\\'"))+'&#39;)">'+esc(dn)+ll+'</button>';
+      return '<button class="btn-staff" data-demo-allow="1" onclick="enterStaffDemo(&#39;'+escJs(s.name)+'&#39;)">'+esc(dn)+ll+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
     app.innerHTML=(uiMode==="adminDemo"
         ?'<button class="btn-back" data-demo-allow="1" onclick="exitStaffDemo()">← 管理者デモへ戻る</button>':'')
@@ -2146,17 +2154,17 @@ function _renderInner(){
       var approved=approvals[selDate+"__"+nm];
       var tdS="padding:8px 10px;font-family:monospace;font-size:.9rem;font-weight:700;text-align:center;vertical-align:middle;border-bottom:1px solid #e9ecef;";
       return '<tr style="'+(approved?"background:#f0fdf4;":"background:#fff;")+'">'
-        +'<td style="'+tdS+'text-align:left;font-family:inherit;font-weight:900;color:#0f172a;white-space:nowrap;">'+nm
+        +'<td style="'+tdS+'text-align:left;font-family:inherit;font-weight:900;color:#0f172a;white-space:nowrap;">'+esc(nm)
         +(cin&&cin.isSupportWork?'<span style="margin-left:4px;font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;vertical-align:middle;">応援</span>':"")
         +'</td>'
-        +'<td style="'+tdS+'color:'+(cin?"#1e40af":"#c8ccd2")+';">'+(cin?cin.time:"—")+'</td>'
+        +'<td style="'+tdS+'color:'+(cin?"#1e40af":"#c8ccd2")+';">'+(cin?esc(cin.time):"—")+'</td>'
         +(hasBrkV?'<td style="'+tdS+'color:#4b5563;font-size:.82rem;">'
           +(brkPairs.length>0
-            ?'<div>'+(bs?bs.time:"--:--")+'〜'+(be?be.time:"--:--")+'</div>'
-              +(brkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:3px;padding-top:3px;">'+(bs2?bs2.time:"--:--")+'〜'+(be2?be2.time:"--:--")+'</div>':"")
+            ?'<div>'+(bs?esc(bs.time):"--:--")+'〜'+(be?esc(be.time):"--:--")+'</div>'
+              +(brkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:3px;padding-top:3px;">'+(bs2?esc(bs2.time):"--:--")+'〜'+(be2?esc(be2.time):"--:--")+'</div>':"")
             :'<span style="color:#c8ccd2;">—</span>')
           +'</td>':"")
-        +'<td style="'+tdS+'color:'+(cout?"#dc2626":"#c8ccd2")+';">'+(cout?cout.time:"—")+'</td>'
+        +'<td style="'+tdS+'color:'+(cout?"#dc2626":"#c8ccd2")+';">'+(cout?esc(cout.time):"—")+'</td>'
         +'<td style="'+tdS+'color:'+(worked?"#1e40af":"#c8ccd2")+';">'+(worked||"—")+'</td>'
         +'<td style="'+tdS+'font-family:inherit;font-size:.75rem;">'
           +(approved?'<span style="color:#166534;font-weight:700;">承認済</span>':'<span style="color:#9ca3af;">未承認</span>')
@@ -2167,7 +2175,7 @@ function _renderInner(){
     // 労務士CSV: ゲート判定・CSV内容ともに締め対象月(reviewMonth=前月)に統一（selMonth/selDate とは独立）
     var vMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(vMonths.indexOf(reviewMonth)<0)vMonths.unshift(reviewMonth);
-    var vMonthOpts=vMonths.map(function(m){return'<option value="'+m+'"'+(m===reviewMonth?" selected":"")+'>'+m+'</option>';}).join("");
+    var vMonthOpts=vMonths.map(function(m){return'<option value="'+esc(m)+'"'+(m===reviewMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var vMRecs=records.filter(function(r){return monthKey(r.date)===reviewMonth&&!r.deleted;});
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
@@ -2196,7 +2204,7 @@ function _renderInner(){
           return '<tr style="background:#fff;">'
             +'<td style="'+vPlTd+'text-align:left;font-weight:900;color:#0f172a;white-space:nowrap;">'+esc(x.name)+'</td>'
             +'<td style="'+vPlTd+'font-family:monospace;color:#1e40af;">'+esc(x.date)+'</td>'
-            +'<td style="'+vPlTd+'"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;">'+sl+'</span></td>'
+            +'<td style="'+vPlTd+'"><span style="background:'+sbg+';color:'+sc+';font-size:.72rem;font-weight:700;padding:2px 8px;border-radius:8px;white-space:nowrap;">'+esc(sl)+'</span></td>'
             +'</tr>';
         }).join("")
       :'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8496a7;font-size:.85rem;">この月の有給申請はありません</td></tr>';
@@ -2366,13 +2374,17 @@ function _renderInner(){
             ov2.innerHTML='<div style="background:#fff;border-radius:2px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
             document.body.appendChild(ov2);
             var zip2=new JSZip();
+            var _skip2=0;
             Promise.all(docs.map(function(d){
-              return fetch(d.downloadURL).then(function(res){return res.blob();}).then(function(blob){zip2.file(d.fileName,blob);}).catch(function(){});
+              var _u2=escUrl(d.downloadURL);
+              if(!_u2){_skip2++;return Promise.resolve();} // 不正URLは取得しない（fetch("")が現在ページを取得するのを防ぐ）
+              return fetch(_u2).then(function(res){return res.blob();}).then(function(blob){zip2.file(zipEntryName(d.fileName),blob);}).catch(function(){});
             })).then(function(){return zip2.generateAsync({type:'blob'});}).then(function(content){
               if(ov2.parentNode)document.body.removeChild(ov2);
               var now3=new Date();
               var fname2='資料_'+now3.getFullYear()+pad(now3.getMonth()+1)+pad(now3.getDate())+'.zip';
               var a2=document.createElement('a');a2.href=URL.createObjectURL(content);a2.download=fname2;a2.click();URL.revokeObjectURL(a2.href);
+              if(_skip2)showAlert(_skip2+'件はURLが不正なためスキップしました');
               Promise.all(docs.map(function(d){
                 return Promise.all([
                   authFetch(DB_DOCS+'/'+d.id+'/isActive.json',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(false)}),
@@ -2398,19 +2410,19 @@ function _renderInner(){
         var date=d.uploadedAt?new Date(d.uploadedAt).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'';
         var ft=(d.fileType||'').toLowerCase();
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
-        var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
+        var safeUrl=escJs(d.downloadURL||'');
         var vDisplayName=getDisplayFileName(d.fileName,d.uploadedAt);
-        var vSafeDisplayName=vDisplayName.replace(/'/g,'&#39;');
+        var vSafeDisplayName=escJs(vDisplayName);
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#fff;">'
           +'<div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">'
           +'<span style="font-size:1.4rem;flex-shrink:0;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
-          +'<div style="font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+d.title+'</div>'
-          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">'+vDisplayName+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+d.memo:'')+'</div>'
+          +'<div style="font-weight:700;font-size:.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(d.title)+'</div>'
+          +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">'+esc(vDisplayName)+' ('+sizeStr+') &nbsp;'+date+(d.memo?' &nbsp;'+esc(d.memo):'')+'</div>'
           +'</div></div>'
           +'<div style="display:flex;gap:8px;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+vSafeDisplayName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="viewerDownloadAndDelete(\''+safeUrl+'\',\''+vSafeDisplayName+'\',\''+d.id+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
+          +(canPreview?'<button onclick="previewFile(&#39;'+safeUrl+'&#39;,&#39;'+escJs(ft)+'&#39;,&#39;'+vSafeDisplayName+'&#39;)" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="viewerDownloadAndDelete(&#39;'+safeUrl+'&#39;,&#39;'+vSafeDisplayName+'&#39;,&#39;'+escJs(d.id)+'&#39;)" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
           +'</div>'
           +'</div>';
       }).join('');
@@ -2421,12 +2433,31 @@ function _renderInner(){
   // ── ホーム ──
   if(screen==="home"){
     if(!tokenValid){
+      // 施設マスタ未取得（初回ロード中／通信失敗）を「URLが不正」と誤表示しないよう区別する。
+      // masterFacilities が空のままの tokenValid=false は、URLの誤りではなくマスタを読めていないだけ。
+      var _adminBtn=(uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'');
+      if(!masterFacilities.length){
+        var _msg;
+        if(firebaseError){
+          _msg='<div style="font-size:3.5rem;margin-bottom:16px;">⚠️</div>'
+            +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">通信エラーです</div>'
+            +'<div style="font-size:.85rem;color:#8496a7;">再読み込みしてください</div>';
+        }else if(!firebaseReady){
+          _msg='<div style="font-size:1rem;color:#8496a7;">読み込み中…</div>';
+        }else{
+          _msg='<div style="font-size:3.5rem;margin-bottom:16px;">⚙️</div>'
+            +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">施設マスタが未設定です</div>'
+            +'<div style="font-size:.85rem;color:#8496a7;">管理者メニューから施設を登録してください</div>';
+        }
+        app.innerHTML='<div class="center" style="padding-top:80px;padding-bottom:24px;">'+_msg+'</div>'+_adminBtn;
+        return;
+      }
       app.innerHTML='<div class="center" style="padding-top:80px;padding-bottom:24px;">'
         +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
         +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">このURLからは打刻できません</div>'
         +'<div style="font-size:.85rem;color:#8496a7;">正しい施設URLをご利用ください</div>'
         +'</div>'
-        +(uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'');
+        +_adminBtn;
       return;
     }
     var list=filteredStaff();
@@ -2439,11 +2470,11 @@ function _renderInner(){
     }).join("");
     var staffHTML=list.length?list.map(function(s){
       var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
-      var locLabel=s.location?'<div style="font-size:.72rem;color:#64748b;font-weight:500;margin-top:3px;letter-spacing:.03em;">'+s.location+'</div>':"";
+      var locLabel=s.location?'<div style="font-size:.72rem;color:#64748b;font-weight:500;margin-top:3px;letter-spacing:.03em;">'+esc(s.location)+'</div>':"";
       if(!firebaseReady||firebaseError){
-        return '<button class="btn-staff" disabled style="opacity:0.5;cursor:not-allowed;">'+dispName+locLabel+'</button>';
+        return '<button class="btn-staff" disabled style="opacity:0.5;cursor:not-allowed;">'+esc(dispName)+locLabel+'</button>';
       }
-      return '<button class="btn-staff" onclick="selStaff(\''+s.name+'\')">'+dispName+locLabel+'</button>';
+      return '<button class="btn-staff" onclick="selStaff(&#39;'+escJs(s.name)+'&#39;)">'+esc(dispName)+locLabel+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
     var statusLabel=firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
@@ -2465,7 +2496,7 @@ function _renderInner(){
     var dots=staffPinInput?'●'.repeat(staffPinInput.length):'<span style="color:#c8ccd2">────</span>';
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="padding-top:20px;margin-bottom:24px;">'
-      +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+staffName+'</div>'
+      +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+esc(staffName)+'</div>'
       +'<div style="color:#8496a7;font-size:.9rem;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
@@ -2486,7 +2517,7 @@ function _renderInner(){
     var dots2=cur?'●'.repeat(cur.length):'<span style="color:#c8ccd2">────</span>';
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="padding-top:20px;margin-bottom:24px;">'
-      +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+staffName+'</div>'
+      +'<div style="font-size:2.5rem;font-weight:900;margin-bottom:4px;">'+esc(staffName)+'</div>'
       +'<div style="background:#eff4ff;border:1px solid #93c5fd;border-radius:2px;padding:10px 16px;margin-bottom:8px;font-size:.88rem;color:#1e40af;">🔑 初回ログインです。<br>4桁のPINを設定してください。</div>'
       +'<div style="color:#8496a7;font-size:.88rem;">'+(isConfirm?"もう一度入力してください（確認）":"PINを入力してください（1回目）")+'</div>'
       +'</div>'
@@ -2727,7 +2758,7 @@ function _renderInner(){
     })();
     app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
-      +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+staffName+'</div>'
+      +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+esc(staffName)+'</div>'
       +'<div class="clock" id="clk" style="margin-top:6px;">'+fmtTimeSec(now)+'</div>'
       +'<div class="date-disp">'+fmtDate(now)+'</div>'
       +'</div>'
@@ -2742,8 +2773,8 @@ function _renderInner(){
         :_done
           ?'<div style="text-align:center;padding:20px 16px;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;margin:0 0 12px;">'
             +'<div style="font-size:.95rem;font-weight:900;color:#166534;margin-bottom:12px;">本日の打刻は完了しています</div>'
-            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:4px;">出勤 '+_anyCin.time+'</div>'
-            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:12px;">退勤 '+_anyCout.time+'</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:4px;">出勤 '+esc(_anyCin.time)+'</div>'
+            +'<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-bottom:12px;">退勤 '+esc(_anyCout.time)+'</div>'
             +'<div style="font-size:.75rem;color:#4b5563;">修正が必要な場合は下の申請ボタンから申請できます。</div>'
             +'</div>'
           :(_crossFacilityCin
@@ -2752,7 +2783,7 @@ function _renderInner(){
               ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
                 +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
                 +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
-                +masterLocs.map(function(l){return'<option value="'+l+'"'+(selectedWorkFacility===l?" selected":"")+'>'+l+'</option>';}).join("")
+                +masterLocs.map(function(l){return'<option value="'+esc(l)+'"'+(selectedWorkFacility===l?" selected":"")+'>'+esc(l)+'</option>';}).join("")
                 +'</select></div>'
               :""))
            +'<div class="grid2">'
@@ -2898,7 +2929,7 @@ function _renderInner(){
               +'</div>'
               +calHtml
               +(existingDates&&Object.keys(existingDates).length>0?'<div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">グレーの日付は申請済みです</div>':"")
-              +(function(){var _sid2=resolveStaffId(staffName);if(!_sid2)return'';var _td=todayDateStr();var _allG=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);}).filter(function(b){return b.staffId===_sid2;}).sort(function(a,b2){return(a.grantDate||"").localeCompare(b2.grantDate||"");});var _gno={};_allG.forEach(function(b,i){_gno[b.id]=i+1;});var _vg=_allG.filter(function(b){return(b.expiresAt||"")>=_td&&(b.remainDays||0)>0;}).sort(function(a,b2){return(a.expiresAt||"").localeCompare(b2.expiresAt||"");});if(_vg.length===0)return'';var _rows=_vg.map(function(b){var _dl=Math.max(0,Math.ceil((new Date(b.expiresAt).getTime()-new Date(_td).getTime())/86400000));var _fc,_bg,_bdg;if(_dl<=30){_fc="#991b1b";_bg="#fee2e2";_bdg='<span style="font-size:.68rem;background:#fca5a5;color:#7f1d1d;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;flex-shrink:0;">'+(_dl===0?"本日期限":"あと"+_dl+"日")+'</span>';}else if(_dl<=60){_fc="#92400e";_bg="#fef3c7";_bdg="";}else{_fc="#374151";_bg="#f1f5f9";_bdg="";}var _ep=b.expiresAt.split("-");var _epstr=_ep[0]+"年"+parseInt(_ep[1],10)+"月"+parseInt(_ep[2],10)+"日まで";var _gn=_gno[b.id];var _gl=_gn?(_gn+"回目："):"";return'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;background:'+_bg+';border-radius:4px;margin-bottom:3px;flex-wrap:wrap;"><span style="font-size:.78rem;color:'+_fc+';font-weight:700;min-width:0;">'+_gl+_epstr+'<span style="font-weight:400;font-size:.72rem;margin-left:4px;color:#6b7280;white-space:nowrap;">(残'+b.remainDays+'日)</span></span>'+_bdg+'</div>';}).join("");return'<div style="margin-top:8px;border-top:1px solid #e5e7eb;padding-top:8px;"><div style="font-size:.74rem;font-weight:700;color:#92400e;margin-bottom:4px;">有給の期限</div>'+_rows+'</div>';})()
+              +(function(){var _sid2=resolveStaffId(staffName);if(!_sid2)return'';var _td=todayDateStr();var _allG=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);}).filter(function(b){return b.staffId===_sid2;}).sort(function(a,b2){return(a.grantDate||"").localeCompare(b2.grantDate||"");});var _gno={};_allG.forEach(function(b,i){_gno[b.id]=i+1;});var _vg=_allG.filter(function(b){return(b.expiresAt||"")>=_td&&(b.remainDays||0)>0;}).sort(function(a,b2){return(a.expiresAt||"").localeCompare(b2.expiresAt||"");});if(_vg.length===0)return'';var _rows=_vg.map(function(b){var _dl=Math.max(0,Math.ceil((new Date(b.expiresAt).getTime()-new Date(_td).getTime())/86400000));var _fc,_bg,_bdg;if(_dl<=30){_fc="#991b1b";_bg="#fee2e2";_bdg='<span style="font-size:.68rem;background:#fca5a5;color:#7f1d1d;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;flex-shrink:0;">'+(_dl===0?"本日期限":"あと"+_dl+"日")+'</span>';}else if(_dl<=60){_fc="#92400e";_bg="#fef3c7";_bdg="";}else{_fc="#374151";_bg="#f1f5f9";_bdg="";}var _ep=b.expiresAt.split("-");var _epstr=esc(_ep[0])+"年"+parseInt(_ep[1],10)+"月"+parseInt(_ep[2],10)+"日まで";var _gn=_gno[b.id];var _gl=_gn?(_gn+"回目："):"";return'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;padding:4px 8px;background:'+_bg+';border-radius:4px;margin-bottom:3px;flex-wrap:wrap;"><span style="font-size:.78rem;color:'+_fc+';font-weight:700;min-width:0;">'+_gl+_epstr+'<span style="font-weight:400;font-size:.72rem;margin-left:4px;color:#6b7280;white-space:nowrap;">(残'+esc(b.remainDays)+'日)</span></span>'+_bdg+'</div>';}).join("");return'<div style="margin-top:8px;border-top:1px solid #e5e7eb;padding-top:8px;"><div style="font-size:.74rem;font-weight:700;color:#92400e;margin-bottom:4px;">有給の期限</div>'+_rows+'</div>';})()
               +(function(){var sid=resolveStaffId(staffName);var vr=sid?getValidRemainDays(sid):null;if(vr===null)return'';var c=vr===0?"#dc2626":vr<selCount?"#d97706":"#166534";return'<div style="font-size:.82rem;margin-top:8px;font-weight:700;color:'+c+';">有効残日数：'+vr+'日</div>';})()
               +'<div style="display:flex;gap:8px;margin-top:10px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
@@ -3026,7 +3057,7 @@ function _renderInner(){
     var _nextStaff=(_detailIdx>=0&&_detailIdx<_detailStaffList.length-1)?_detailStaffList[_detailIdx+1]:null;
     var months2=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
-    var monOpts3=months2.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+    var monOpts3=months2.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.date)===selMonth;});
     var year=parseInt(selMonth.split("-")[0]),mon=parseInt(selMonth.split("-")[1])-1;
     var daysInMonth=new Date(year,mon+1,0).getDate();
@@ -3066,12 +3097,12 @@ function _renderInner(){
           ?'<span title="管理者修正済み" style="font-size:.55rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;line-height:1.4;display:inline-block;vertical-align:middle;margin-left:2px;">修正</span>':"";
         var reasonLine=(wasEdited&&rec.adjustReason)
           ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+esc(rec.adjustReasonLabel)+(rec.adjustComment?' / '+esc(rec.adjustComment):'')+'</div>':"";
-        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?time:"−")+'</span>'+badge+reasonLine;
-        return'<span class="time-cell" data-id="'+id+'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?time:"−")+'</span>'+badge+reasonLine;
+        if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?esc(time):"−")+'</span>'+badge+reasonLine;
+        return'<span class="time-cell" data-id="'+esc(id)+'" data-nm="'+esc(nm)+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?esc(time):"−")+'</span>'+badge+reasonLine;
       }
       function brkPairDisp(bsR,beR){
         if(locked2){
-          var t1=bsR?bsR.time:"??:??",t2=beR?beR.time:"未終了";
+          var t1=bsR?esc(bsR.time):"??:??",t2=beR?esc(beR.time):"未終了";
           return'<span style="font-family:monospace;font-size:.85rem;color:'+(bsR?"#4b5563":"#c8ccd2")+'">'+(bsR||beR?t1+"〜"+t2:"−")+'</span>';
         }
         return'<span style="display:inline-flex;align-items:center;gap:1px;">'+tCell(bsR,"breakStart")+'<span style="font-size:.72rem;color:#c8ccd2;">〜</span>'+tCell(beR,"breakEnd")+'</span>';
@@ -3084,8 +3115,8 @@ function _renderInner(){
         +(hasBreak3d?'<div style="font-size:.6rem;color:#dc2626;font-weight:700;">休憩回数超過</div>':"")
         +'</div>';
       var approveBtn=approved2
-        ?'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
-        :(hasData?(!monthValidation.valid?'<div style="color:#dc2626;font-size:.62rem;font-weight:700;white-space:nowrap;margin-bottom:1px;">⚠'+monthValidation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dk+'" '+(monthValidation.valid?'':'disabled ')+'style="background:'+(monthValidation.valid?'#1e40af':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;'+(monthValidation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;">承認</button>':"");
+        ?'<button class="btn-withdraw" data-nm="'+esc(nm)+'" data-dk="'+dk+'" style="background:#dde1e7;color:#5b6b7c;border:1px solid #adb5bd;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;cursor:pointer;font-family:inherit;">引き戻し</button>'
+        :(hasData?(!monthValidation.valid?'<div style="color:#dc2626;font-size:.62rem;font-weight:700;white-space:nowrap;margin-bottom:1px;">⚠'+esc(monthValidation.reason)+'</div>':"")+'<button class="btn-approve" data-nm="'+esc(nm)+'" data-dk="'+dk+'" '+(monthValidation.valid?'':'disabled ')+'style="background:'+(monthValidation.valid?'#1e40af':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:2px 10px;border-radius:2px;'+(monthValidation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;">承認</button>':"");
       return'<tr style="border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
         +'<td style="padding:4px 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:4px 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
@@ -3195,13 +3226,13 @@ function _renderInner(){
   if(screen==="csvPreview"){
     var prevMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
     if(prevMonths.indexOf(selMonth)<0)prevMonths.unshift(selMonth);
-    var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+    var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var mRecsPrev=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
     var activeStaffP=staffList.slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var allLocsP=masterLocs.slice();
     var allTypesP=[...new Set(staffList.map(function(s){return s.employmentType||"";}).filter(Boolean))].sort();
-    var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
-    var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
+    var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+esc(l)+'">'+esc(l)+'</option>';}).join("");
+    var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+esc(t)+'">'+esc(t)+'</option>';}).join("");
     var titleP=csvPreviewType==="monthly"?"月次集計データ":"日次データ";
     var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
     var theadHtmlP,tbodyHtmlP;
@@ -3221,11 +3252,11 @@ function _renderInner(){
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
         var ot=Math.max(0,ms-days.length*8*3600000);
-        return'<tr class="csv-prev-row" data-empid="'+(s.employeeId||"")+'" data-nm="'+nm+'" data-loc="'+(s.location||"")+'" data-etype="'+(s.employmentType||"")+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+(i%2===1?"#f7f8fa":"#fff")+';">'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#8796a7;">'+(s.employeeId||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+nm+'\',\'csvPreview\')" onmouseover="this.style.color=\'#1e40af\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+nm+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+(s.location||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+(s.employmentType||"—")+'</td>'
+        return'<tr class="csv-prev-row" data-empid="'+esc(s.employeeId||"")+'" data-nm="'+esc(nm)+'" data-loc="'+esc(s.location||"")+'" data-etype="'+esc(s.employmentType||"")+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+(i%2===1?"#f7f8fa":"#fff")+';">'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#8796a7;">'+esc(s.employeeId||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(&#39;'+escJs(nm)+'&#39;,&#39;csvPreview&#39;)" onmouseover="this.style.color=\'#1e40af\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+esc(nm)+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+esc(s.location||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#8796a7;">'+esc(s.employmentType||"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;">'+days.length+'日</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:#1e40af;">'+(toHM(ms)||"0:00")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:'+(ot>0?"#dc2626":"#8796a7")+'">'+(ot>0?toHM(ot):"—")+'</td>'
@@ -3260,15 +3291,15 @@ function _renderInner(){
         var isSun=dow===0,isSat=dow===6;
         var rowBg=isSun?"#fff1f2":isSat?"#eff6ff":(i%2===1?"#f7f8fa":"#fff");
         var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
-        return'<tr class="csv-prev-row" data-empid="'+r.empId+'" data-nm="'+r.name+'" data-loc="'+r.loc+'" data-etype="'+r.etype+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+rowBg+';">'
+        return'<tr class="csv-prev-row" data-empid="'+esc(r.empId)+'" data-nm="'+esc(r.name)+'" data-loc="'+esc(r.loc)+'" data-etype="'+esc(r.etype)+'" style="border-bottom:1px solid #adb5bd;height:36px;background:'+rowBg+';">'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;white-space:nowrap;color:'+dayColor+';'+((isSun||isSat)?"font-weight:700;":"")+'">'
-          +r.date+' ('+r.yobi+')</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#475569;">'+(r.empId||"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(\''+r.name+'\',\'csvPreview\')" onmouseover="this.style.color=\'#2563eb\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+r.name+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#1e40af;">'+r.cin+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+r.cout+'</td>'
+          +esc(r.date)+' ('+r.yobi+')</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#475569;">'+esc(r.empId||"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.9rem;font-weight:700;cursor:pointer;" onclick="openStaffDetail(&#39;'+escJs(r.name)+'&#39;,&#39;csvPreview&#39;)" onmouseover="this.style.color=\'#2563eb\';this.style.textDecoration=\'underline\'" onmouseout="this.style.color=\'\';this.style.textDecoration=\'\'">'+esc(r.name)+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#1e40af;">'+esc(r.cin)+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+esc(r.cout)+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:#1e40af;">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
-          +'<td style="padding:8px 12px;font-size:.85rem;color:#475569;">'+r.loc+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;color:#475569;">'+esc(r.loc)+'</td>'
           +'</tr>';
       }).join("");
     }
@@ -3395,7 +3426,7 @@ function _renderInner(){
           +'</tbody></table></div></div>'
         :'';
       if(showUnapprovedOnly){
-        var unapvRows=unapvList.map(function(p){var dt=p.date,nm=p.staff;var sr=records.filter(function(r){return r.date===dt&&r.staff===nm&&!r.deleted;});var cin=sr.find(function(r){return r.type==="clockIn";});var cout=sr.find(function(r){return r.type==="clockOut";});var ms=calcMs(sr);var worked=toHM(ms);var hasPunch=sr.length>0;var validation=validateAttendanceRecord(nm,dt,sr);var dtParts=dt.split('-');var dtDisp=parseInt(dtParts[0])+'年'+parseInt(dtParts[1])+'月'+parseInt(dtParts[2])+'日';var cinEdited=(cin&&cin.editedByAdmin&&cin.editedFields&&cin.editedFields.clockIn);var cinPrev=cinEdited?(cin.editHistory&&cin.editHistory.length?cin.editHistory[0].time:cin.editedFrom)||"":"";var cinHist=cinEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\'clockIn\',\''+(cin?cin.id:"")+'\')">修正前 '+(cinPrev||"?")+'</div>':"";var coutEdited=(cout&&cout.editedByAdmin&&cout.editedFields&&cout.editedFields.clockOut);var coutPrev=coutEdited?(cout.editHistory&&cout.editHistory.length?cout.editHistory[0].time:cout.editedFrom)||"":"";var coutHist=coutEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\'clockOut\',\''+(cout?cout.id:"")+'\')">修正前 '+(coutPrev||"?")+'</div>':"";return'<tr style="border-bottom:1px solid #e9ecef;"><td style="padding:6px 8px;font-size:.88rem;font-weight:700;white-space:nowrap;color:#374151;">'+dtDisp+'</td><td style="padding:6px 4px;font-weight:700;font-size:1.08rem;white-space:nowrap;"><span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\',unapvOrderCache)">'+nm+'</span></td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+(cin?cin.id:"")+'" data-nm="'+nm+'" data-type="clockIn" data-date="'+dt+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cin?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cin?cin.time:"--:--")+'</span>'+cinHist+'</td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+(cout?cout.id:"")+'" data-nm="'+nm+'" data-type="clockOut" data-date="'+dt+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cout?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cout?cout.time:"--:--")+'</span>'+coutHist+'</td><td style="padding:4px 6px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td><td style="padding:6px 4px;text-align:center;white-space:nowrap;">'+(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+validation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+dt+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':"")+'</td></tr>';}).join("");
+        var unapvRows=unapvList.map(function(p){var dt=p.date,nm=p.staff;var sr=records.filter(function(r){return r.date===dt&&r.staff===nm&&!r.deleted;});var cin=sr.find(function(r){return r.type==="clockIn";});var cout=sr.find(function(r){return r.type==="clockOut";});var ms=calcMs(sr);var worked=toHM(ms);var hasPunch=sr.length>0;var validation=validateAttendanceRecord(nm,dt,sr);var dtParts=dt.split('-');var dtDisp=parseInt(dtParts[0])+'年'+parseInt(dtParts[1])+'月'+parseInt(dtParts[2])+'日';var cinEdited=(cin&&cin.editedByAdmin&&cin.editedFields&&cin.editedFields.clockIn);var cinPrev=cinEdited?(cin.editHistory&&cin.editHistory.length?cin.editHistory[0].time:cin.editedFrom)||"":"";var cinHist=cinEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(&#39;'+escJs(nm)+'&#39;,&#39;clockIn&#39;,&#39;'+escJs(cin?cin.id:"")+'&#39;)">修正前 '+esc(cinPrev||"?")+'</div>':"";var coutEdited=(cout&&cout.editedByAdmin&&cout.editedFields&&cout.editedFields.clockOut);var coutPrev=coutEdited?(cout.editHistory&&cout.editHistory.length?cout.editHistory[0].time:cout.editedFrom)||"":"";var coutHist=coutEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(&#39;'+escJs(nm)+'&#39;,&#39;clockOut&#39;,&#39;'+escJs(cout?cout.id:"")+'&#39;)">修正前 '+esc(coutPrev||"?")+'</div>':"";return'<tr style="border-bottom:1px solid #e9ecef;"><td style="padding:6px 8px;font-size:.88rem;font-weight:700;white-space:nowrap;color:#374151;">'+dtDisp+'</td><td style="padding:6px 4px;font-weight:700;font-size:1.08rem;white-space:nowrap;"><span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(&#39;'+escJs(nm)+'&#39;,&#39;admin&#39;,unapvOrderCache)">'+esc(nm)+'</span></td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+esc(cin?cin.id:"")+'" data-nm="'+esc(nm)+'" data-type="clockIn" data-date="'+esc(dt)+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cin?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cin?esc(cin.time):"--:--")+'</span>'+cinHist+'</td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+esc(cout?cout.id:"")+'" data-nm="'+esc(nm)+'" data-type="clockOut" data-date="'+esc(dt)+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cout?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cout?esc(cout.time):"--:--")+'</span>'+coutHist+'</td><td style="padding:4px 6px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(worked?"#1e40af":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td><td style="padding:6px 4px;text-align:center;white-space:nowrap;">'+(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+esc(validation.reason)+'</div>':"")+'<button class="btn-approve" data-nm="'+esc(nm)+'" data-dk="'+esc(dt)+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':"")+'</td></tr>';}).join("");
         tc=_pendingCrqHTML+'<div class="admin-card admin-wrap">'
           +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
           +'<span style="color:#c62828;font-size:.88rem;font-weight:700;">未承認一覧 '+unapvList.length+'件</span>'
@@ -3437,19 +3468,19 @@ function _renderInner(){
         var locked=approved;
         var validation=hasPunch&&!approved?validateAttendanceRecord(nm,selDate,sr):{valid:true};
         function tCell(rec,type,label,color){
-          var t=rec?rec.time:"--:--";
+          var t=rec?esc(rec.time):"--:--";
           var wasEdited=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type]);
           var prevTime=wasEdited?(rec.editHistory&&rec.editHistory.length?rec.editHistory[0].time:rec.editedFrom)||"":"";
           var histLine=wasEdited
-            ?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(\''+nm+'\',\''+type+'\',\''+(rec?rec.id:"")+'\')">修正前 '+(prevTime||"?")+'</div>'
+            ?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(&#39;'+escJs(nm)+'&#39;,&#39;'+escJs(type)+'&#39;,&#39;'+escJs(rec?rec.id:"")+'&#39;)">修正前 '+esc(prevTime||"?")+'</div>'
             :"";
           var reasonLine=(wasEdited&&rec.adjustReason)
             ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+esc(rec.adjustReasonLabel)+(rec.adjustComment?' / '+esc(rec.adjustComment):'')+'</div>'
             :"";
           if(locked)return'<td style="padding:6px 8px;font-family:monospace;font-size:1.18rem;font-weight:700;text-align:center;color:'+(rec?"#0f172a":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+t+histLine+reasonLine+'</td>';
           return'<td style="padding:6px 8px;text-align:center;">'
-            +'<span class="time-cell" data-id="'+(rec?rec.id:"")
-            +'" data-nm="'+nm+'" data-type="'+type+'" data-date="'+selDate
+            +'<span class="time-cell" data-id="'+esc(rec?rec.id:"")
+            +'" data-nm="'+esc(nm)+'" data-type="'+esc(type)+'" data-date="'+selDate
             +'" style="font-family:monospace;font-size:1.18rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
             +histLine+reasonLine+'</td>';
         }
@@ -3459,24 +3490,24 @@ function _renderInner(){
           var bsPrev=bsEdited?(bsRec.editHistory&&bsRec.editHistory.length?bsRec.editHistory[0].time:bsRec.editedFrom)||"":"";
           var bePrev=beEdited?(beRec.editHistory&&beRec.editHistory.length?beRec.editHistory[0].time:beRec.editedFrom)||"":"";
           var editLine=(bsEdited||beEdited)
-            ?'<div class="break-edited">修正前 '+(bsPrev||"?")+'→'+(bePrev||"?")+'</div>'
+            ?'<div class="break-edited">修正前 '+esc(bsPrev||"?")+'→'+esc(bePrev||"?")+'</div>'
             :"";
           if(locked2){
             return'<div class="break-item">'
-              +'<div class="break-time" style="color:'+(bsRec?"#0f172a":"#d1d5db")+'">'+(bsRec?bsRec.time:"--:--")+' → <span style="color:'+(beRec?"#0f172a":"#d1d5db")+'">'+(beRec?beRec.time:"--:--")+'</span></div>'
+              +'<div class="break-time" style="color:'+(bsRec?"#0f172a":"#d1d5db")+'">'+(bsRec?esc(bsRec.time):"--:--")+' → <span style="color:'+(beRec?"#0f172a":"#d1d5db")+'">'+(beRec?esc(beRec.time):"--:--")+'</span></div>'
               +editLine+'</div>';
           }
           return'<div class="break-item">'
             +'<div class="break-time">'
-            +'<span class="time-cell" data-id="'+(bsRec?bsRec.id:"")+'" data-nm="'+nm+'" data-type="breakStart" data-date="'+selDate+'" style="color:'+(bsRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bsRec?bsRec.time:"--:--")+'</span>'
+            +'<span class="time-cell" data-id="'+esc(bsRec?bsRec.id:"")+'" data-nm="'+esc(nm)+'" data-type="breakStart" data-date="'+selDate+'" style="color:'+(bsRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(bsRec?esc(bsRec.time):"--:--")+'</span>'
             +' → '
-            +'<span class="time-cell" data-id="'+(beRec?beRec.id:"")+'" data-nm="'+nm+'" data-type="breakEnd" data-date="'+selDate+'" style="color:'+(beRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?beRec.time:"--:--")+'</span>'
+            +'<span class="time-cell" data-id="'+esc(beRec?beRec.id:"")+'" data-nm="'+esc(nm)+'" data-type="breakEnd" data-date="'+selDate+'" style="color:'+(beRec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;">'+(beRec?esc(beRec.time):"--:--")+'</span>'
             +'</div>'
             +editLine+'</div>';
         }
         return '<tr style="border-bottom:1px solid #e9ecef;'+(approved?"background:#f0fdf4;":(hasPunch&&!validation.valid?"background:#fff5f5;":""))+'">'
           +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"#fff"))+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
-          +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(\''+nm+'\',\'admin\')">'+nm+'</span>'
+          +'<span style="color:#1e40af;cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(&#39;'+escJs(nm)+'&#39;,&#39;admin&#39;)">'+esc(nm)+'</span>'
           +(cin
             ?'<div style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;white-space:normal;max-width:200px;">'
               +(cin.isSupportWork
@@ -3503,8 +3534,8 @@ function _renderInner(){
             ?'<div style="background:#d1fae5;color:#166534;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #6ee7b7;text-align:center;">有給</div>'
             :approved
               ?'<div class="approved-badge" style="background:#dcfce7;color:#16a34a;font-size:.68rem;font-weight:700;padding:2px 5px;border-radius:2px;white-space:nowrap;border:1px solid #86efac;">✓承認</div>'
-               +'<button class="btn-withdraw" data-nm="'+nm+'" data-dk="'+selDate+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
-              :(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+validation.reason+'</div>':"")+'<button class="btn-approve" data-nm="'+nm+'" data-dk="'+selDate+'" '+(validation.valid?'':'disabled ')+'style="background:'+(validation.valid?'#16a34a':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;'+(validation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;white-space:nowrap;">承認</button>':""))
+               +'<button class="btn-withdraw" data-nm="'+esc(nm)+'" data-dk="'+selDate+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;font-size:.65rem;font-weight:700;padding:2px 5px;border-radius:2px;cursor:pointer;font-family:inherit;margin-top:2px;white-space:nowrap;">引戻</button>'
+              :(hasPunch?(!validation.valid?'<div style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">⚠'+esc(validation.reason)+'</div>':"")+'<button class="btn-approve" data-nm="'+esc(nm)+'" data-dk="'+selDate+'" '+(validation.valid?'':'disabled ')+'style="background:'+(validation.valid?'#16a34a':'#9ca3af')+';color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;'+(validation.valid?'cursor:pointer;':'cursor:not-allowed;')+'font-family:inherit;white-space:nowrap;">承認</button>':""))
           +'</td></tr>';
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
@@ -3558,9 +3589,9 @@ function _renderInner(){
         var sr=mRecsClean.filter(function(r){return r.staff===nm;});
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
         var ms=days.reduce(function(acc,dk){return acc+calcMs(sr.filter(function(r){return r.date===dk;}));},0);
-        return'<div class="sum-row"><span style="font-weight:700;flex:1;">'+nm+'</span><span style="color:#8796a7;font-size:.78rem;width:48px;text-align:center;">'+days.length+'日</span><span style="color:#1e40af;font-family:monospace;width:60px;text-align:right;">'+(toHM(ms)||"0:00")+'</span></div>';
+        return'<div class="sum-row"><span style="font-weight:700;flex:1;">'+esc(nm)+'</span><span style="color:#8796a7;font-size:.78rem;width:48px;text-align:center;">'+days.length+'日</span><span style="color:#1e40af;font-family:monospace;width:60px;text-align:right;">'+(toHM(ms)||"0:00")+'</span></div>';
       }).join(""):'<div class="empty">データがありません</div>';
-      var monOpts=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var monOpts=months.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
       var sumHeader='<div style="display:flex;justify-content:space-between;padding:6px 4px;border-bottom:2px solid #adb5bd;margin-bottom:4px;">'
         +'<span style="font-size:.72rem;font-weight:700;color:#8796a7;flex:1;">名簿</span>'
         +'<span style="font-size:.72rem;font-weight:700;color:#475569;width:48px;text-align:center;">勤務日数</span>'
@@ -3574,7 +3605,7 @@ function _renderInner(){
       // JST基準で当日が月末日のときのみ当月を選択肢の先頭に追加（月末前は従来どおり前月まで）。既定選択は reviewMonth のまま。
       var _revCurYm=reviewCurrentMonthIfMonthEnd();
       if(_revCurYm&&revMonList.indexOf(_revCurYm)<0)revMonList.unshift(_revCurYm);
-      var revMonOpts=revMonList.map(function(m){return'<option value="'+m+'"'+(m===reviewMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var revMonOpts=revMonList.map(function(m){return'<option value="'+esc(m)+'"'+(m===reviewMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
       var reviewCardHTML='<div class="admin-card">'
         +'<div class="admin-title">勤怠精査ステータス（精査対象月: '+reviewMonth+'）</div>'
         +'<div style="margin-bottom:10px;"><label style="font-size:.78rem;font-weight:700;color:#475569;margin-right:6px;">締め対象月</label><select id="sel-review-month" style="padding:5px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+revMonOpts+'</select></div>'
@@ -3604,28 +3635,28 @@ function _renderInner(){
     if(adminTab==="edit"){
       var editRecs=mRecs.filter(function(r){return !r.deleted;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
       var allNames=[...new Set(records.map(function(r){return r.staff;}))].sort();
-      var monOpts2=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var monOpts2=months.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
       var editRows=editRecs.map(function(r){
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:10px;margin-bottom:8px;background:'+(r.editedFrom?"#fef9c3":"#fff")+'">'
           +'<div style="display:flex;justify-content:space-between;margin-bottom:6px;">'
-          +'<span style="font-weight:700;">'+r.staff+'</span>'
-          +'<span style="font-size:.75rem;color:#8496a7;">'+r.date+'</span>'
+          +'<span style="font-weight:700;">'+esc(r.staff)+'</span>'
+          +'<span style="font-size:.75rem;color:#8496a7;">'+esc(r.date)+'</span>'
           +'</div>'
           +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
           +'<span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":r.type==="facilityChange"?"c-fc":"c-brk")+'" style="font-size:.85rem;font-weight:700;">'+esc(TYPE_LABEL[r.type]||r.type)+(r.type==="facilityChange"&&r.workFacility?'→'+esc(r.workFacility):"")+'</span>'
-          +'<input type="time" class="edit-time" data-id="'+r.id+'" value="'+r.time+'" style="width:100px;">'
-          +(r.editedFrom?'<span style="color:#8496a7;font-size:.7rem;">元:'+r.editedFrom+'</span>':"")
+          +'<input type="time" class="edit-time" data-id="'+esc(r.id)+'" value="'+esc(r.time)+'" style="width:100px;">'
+          +(r.editedFrom?'<span style="color:#8496a7;font-size:.7rem;">元:'+esc(r.editedFrom)+'</span>':"")
           +'</div>'
           +'<div style="display:flex;gap:6px;margin-top:8px;">'
-          +'<button class="btn-save" data-id="'+r.id+'" style="background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
-          +'<button class="btn-del-rec" data-id="'+r.id+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+          +'<button class="btn-save" data-id="'+esc(r.id)+'" style="background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+          +'<button class="btn-del-rec" data-id="'+esc(r.id)+'" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div></div>';
       }).join("");
       tc='<div class="admin-card">'
         +'<div class="admin-title">➕ 打刻を追加</div>'
         +'<div style="display:flex;flex-direction:column;gap:8px;">'
         +'<select id="add-staff" style="width:100%;"><option value="">スタッフを選択</option>'
-        +allNames.map(function(n){return'<option value="'+n+'">'+n+'</option>';}).join("")
+        +allNames.map(function(n){return'<option value="'+esc(n)+'">'+esc(n)+'</option>';}).join("")
         +'</select>'
         +'<input type="date" id="add-date" value="'+fmtDateKey(new Date())+'" style="width:100%;">'
         +'<select id="add-type" style="width:100%;"><option value="clockIn">出勤</option><option value="clockOut">退勤</option><option value="breakStart">休憩開始</option><option value="breakEnd">休憩終了</option></select>'
@@ -3656,7 +3687,7 @@ function _renderInner(){
         var dispName=(s.lastName&&s.firstName)?s.lastName+"　"+s.firstName:s.name;
         var dispYomi=(s.yomiLast&&s.yomiFirst)?s.yomiLast+"　"+s.yomiFirst:(s.yomi||"");
         var _sp=getStoredPin(s.name);
-        var _nmEsc=s.name.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        var _nmEsc=esc(s.name);
         var pinTd;
         if(!_sp.hash){
           pinTd='<td style="padding:0 14px;white-space:nowrap;">'
@@ -3674,17 +3705,17 @@ function _renderInner(){
             +'<button class="btn-pin-reset" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
             +'</td>';
         }
-        return '<tr class="hrm-row" data-nm="'+_nmEsc+'" data-empid="'+(s.employeeId||"")+'" data-loc="'+(s.location||"")+'" data-emptype="'+(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
-          +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId||'<span style="color:#e5e7eb;">−</span>')+'</td>'
+        return '<tr class="hrm-row" data-nm="'+_nmEsc+'" data-empid="'+esc(s.employeeId||"")+'" data-loc="'+esc(s.location||"")+'" data-emptype="'+esc(s.employmentType||"")+'" style="height:48px;border-bottom:1px solid #f3f4f6;background:'+(i%2===1?"#f9fafb":"#fff")+';">'
+          +'<td style="padding:0 14px;font-size:13px;color:#8496a7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+(s.employeeId?esc(s.employeeId):'<span style="color:#e5e7eb;">−</span>')+'</td>'
           +'<td style="padding:0 14px;overflow:hidden;">'
-          +'<div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispName+'</div>'
-          +'<div style="font-size:11px;color:#8496a7;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+dispYomi+'</div>'
+          +'<div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(dispName)+'</div>'
+          +'<div style="font-size:11px;color:#8496a7;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(dispYomi)+'</div>'
           +'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location||'<span style="color:#c8ccd2;">−</span>')+'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType||'<span style="color:#c8ccd2;">−</span>')+'</td>'
+          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location?esc(s.location):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType?esc(s.employmentType):'<span style="color:#c8ccd2;">−</span>')+'</td>'
           +'<td style="padding:0 14px;font-size:13px;">'
-          +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+sl+'</span>'
-          +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">退職日: '+s.retireDate+'</div>':(s.hireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">'+calcTenure(s.hireDate)+'</div>':""))
+          +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+esc(sl)+'</span>'
+          +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">退職日: '+esc(s.retireDate)+'</div>':(s.hireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">'+esc(calcTenure(s.hireDate))+'</div>':""))
           +'</td>'
           +pinTd
           +'<td style="padding:0 14px;white-space:nowrap;">'
@@ -3693,7 +3724,7 @@ function _renderInner(){
           +'</td>'
           +'</tr>';
       }).join("");
-      var locOpts='<option value="">拠点（すべて）</option>'+allLocations.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("");
+      var locOpts='<option value="">拠点（すべて）</option>'+allLocations.map(function(l){return'<option value="'+esc(l)+'">'+esc(l)+'</option>';}).join("");
       var typeOpts='<option value="">雇用形態（すべて）</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("");
       var modalHtml='<div id="hrm-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;">'
         +'<div style="background:#fff;width:100%;max-width:520px;border-radius:2px;border:1px solid #adb5bd;">'
@@ -3709,8 +3740,8 @@ function _renderInner(){
         +mf("名よみ","modal-fname-yomi","text","たろう")
         +mf("社員番号","modal-empid","text","001")
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">入社日</label><input type="date" id="modal-hiredate" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+l+'">'+l+'</option>';}).join("")+'</select></div>'
-        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+d+'">'+d+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">拠点</label><select id="modal-location" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterLocs.map(function(l){return'<option value="'+esc(l)+'">'+esc(l)+'</option>';}).join("")+'</select></div>'
+        +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">部門</label><select id="modal-dept" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;"><option value="">未設定</option>'+masterDepts.map(function(d){return'<option value="'+esc(d)+'">'+esc(d)+'</option>';}).join("")+'</select></div>'
         +'<div><label style="display:block;font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">雇用形態</label>'
         +'<select id="modal-emptype" style="width:100%;font-size:13px;padding:8px 10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;">'
         +'<option value="">未設定</option>'+["正社員","パート","アルバイト","契約社員"].map(function(t){return'<option value="'+t+'">'+t+'</option>';}).join("")+'</select></div>'
@@ -3771,7 +3802,7 @@ function _renderInner(){
     if(adminTab==="master"){
       var deptItems=masterDepts.map(function(d,i){
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f3f4f6;">'
-          +'<span style="font-size:.9rem;color:#0f172a;">'+d+'</span>'
+          +'<span style="font-size:.9rem;color:#0f172a;">'+esc(d)+'</span>'
           +'<button class="btn-del-dept" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div>';
       }).join("");
@@ -3803,8 +3834,8 @@ function _renderInner(){
         +(locItems||'<div class="empty">未登録</div>')
         +'<div style="margin-top:14px;">'
         +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
-        +'<input id="new-loc-name" type="text" placeholder="拠点名（例: ナナイロ）" style="flex:1;">'
-        +'<input id="new-loc-token" type="text" placeholder="トークン（例: nanairo1214）" style="flex:1;">'
+        +'<input id="new-loc-name" type="text" placeholder="拠点名（例: 第一事業所）" style="flex:1;">'
+        +'<input id="new-loc-token" type="text" placeholder="トークン（32文字以上のランダム文字列）" style="flex:1;">'
         +'</div>'
         +'<button id="btn-add-loc" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;width:100%;">＋ 拠点追加</button>'
         +'</div></div>'
@@ -3820,7 +3851,7 @@ function _renderInner(){
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
         +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_HASH?"#1e40af":(ADMIN_TOKEN?"#475569":"#b91c1c"))+';font-family:monospace;">'+(ADMIN_TOKEN_HASH?"設定済み（ハッシュ化済み）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+ADMIN_TOKEN+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
+        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+esc(maskToken(ADMIN_TOKEN))+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
@@ -3855,7 +3886,7 @@ function _renderInner(){
         +'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
         +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規トークン発行</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
-        +'<input id="vt-new-name" type="text" placeholder="名称（例: 田中税理士事務所）" style="flex:1;">'
+        +'<input id="vt-new-name" type="text" placeholder="名称（例: 〇〇税理士事務所）" style="flex:1;">'
         +'<input id="vt-new-expires" type="date" style="width:160px;">'
         +'</div>'
         +'<input id="vt-new-memo" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
@@ -3889,7 +3920,7 @@ function _renderInner(){
         +'<div style="margin-top:14px;border-top:1px solid #e5e7eb;padding-top:14px;">'
         +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;">新規発行（有効期限必須）</div>'
         +'<div style="display:flex;gap:8px;margin-bottom:6px;">'
-        +'<input id="dvt-new-name" data-demo-allow="1" type="text" placeholder="名称（例: 田中税理士事務所）" style="flex:1;">'
+        +'<input id="dvt-new-name" data-demo-allow="1" type="text" placeholder="名称（例: 〇〇税理士事務所）" style="flex:1;">'
         +'<input id="dvt-new-expires" data-demo-allow="1" type="date"'+(demoTokenExpiresAt?' max="'+esc(demoTokenExpiresAt)+'"':'')+' style="width:160px;">'
         +'</div>'
         +'<input id="dvt-new-memo" data-demo-allow="1" type="text" placeholder="メモ（省略可）" style="width:100%;margin-bottom:8px;box-sizing:border-box;">'
@@ -3991,29 +4022,29 @@ function _renderInner(){
         var date=d.uploadedAt?new Date(d.uploadedAt).toLocaleDateString('ja-JP',{year:'numeric',month:'2-digit',day:'2-digit'}):'';
         var ft=(d.fileType||'').toLowerCase();
         var canPreview=['pdf','png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
-        var safeUrl=(d.downloadURL||'').replace(/'/g,'%27');
+        var safeUrl=escJs(d.downloadURL||'');
         var displayName=getDisplayFileName(d.fileName,d.uploadedAt);
-        var safeDisplayName=displayName.replace(/'/g,'&#39;');
+        var safeDisplayName=escJs(displayName);
         var displayTitle=showUploader?getDisplayFileName(d.title,d.uploadedAt):d.title;
         var chkHtml=showUploader
-          ?'<input type="checkbox" class="staff-doc-checkbox" data-docid="'+d.id+'"'+(selectedStaffDocIds.has(d.id)?' checked':'')+' style="width:16px;height:16px;cursor:pointer;accent-color:#1e40af;flex-shrink:0;margin-top:6px;">'
+          ?'<input type="checkbox" class="staff-doc-checkbox" data-docid="'+esc(d.id)+'"'+(selectedStaffDocIds.has(d.id)?' checked':'')+' style="width:16px;height:16px;cursor:pointer;accent-color:#1e40af;flex-shrink:0;margin-top:6px;">'
           :'';
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:12px;margin-bottom:8px;background:#f1f3f5;">'
           +'<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">'
           +chkHtml
           +'<span style="font-size:1.5rem;flex-shrink:0;margin-top:2px;">'+icon+'</span>'
           +'<div style="flex:1;min-width:0;">'
-          +'<div style="font-weight:700;font-size:.92rem;">'+displayTitle+'</div>'
+          +'<div style="font-weight:700;font-size:.92rem;">'+esc(displayTitle)+'</div>'
           +'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;word-break:break-all;">'
-          +(showUploader?'提出者: <b style="color:#0f172a;">'+d.uploadedBy+'</b> &nbsp;':'')
-          +displayName+' ('+sizeStr+') &nbsp;'+date+'</div>'
-          +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#475569;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+d.memo+'</div>':"")
+          +(showUploader?'提出者: <b style="color:#0f172a;">'+esc(d.uploadedBy)+'</b> &nbsp;':'')
+          +esc(displayName)+' ('+sizeStr+') &nbsp;'+date+'</div>'
+          +(d.memo&&!showUploader?'<div style="font-size:.78rem;color:#475569;margin-top:4px;border-left:3px solid #e5e7eb;padding-left:6px;">'+esc(d.memo)+'</div>':"")
           +'</div>'
           +'</div>'
           +'<div style="display:flex;gap:8px;flex-wrap:wrap;">'
-          +(canPreview?'<button onclick="previewFile(\''+safeUrl+'\',\''+ft+'\',\''+safeDisplayName+'\')" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="downloadFile(\''+safeUrl+'\',\''+safeDisplayName+'\')" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
-          +'<button data-docid="'+d.id+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
+          +(canPreview?'<button onclick="previewFile(&#39;'+safeUrl+'&#39;,&#39;'+escJs(ft)+'&#39;,&#39;'+safeDisplayName+'&#39;)" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
+          +'<button onclick="downloadFile(&#39;'+safeUrl+'&#39;,&#39;'+safeDisplayName+'&#39;)" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 ダウンロード</button>'
+          +'<button data-docid="'+esc(d.id)+'" class="btn-doc-delete" style="background:#fee2e2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:2px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">🗑 削除</button>'
           +'</div>'
           +'</div>';
       }
@@ -4090,7 +4121,7 @@ function _renderInner(){
       // 施設変更を境界に分割した施設別勤務時間を使用（施設変更が無い日は従来と同一結果）
       var supDetails=buildFacilityWorkDetails(supRecs);
       var supSummary=buildFacilityWorkSummary(supDetails);
-      var monOptsSup=months.map(function(m){return'<option value="'+m+'"'+(m===selMonth?" selected":"")+'>'+m+'</option>';}).join("");
+      var monOptsSup=months.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
       var _th='padding:6px 8px;font-weight:700;white-space:nowrap;text-align:';
       var _td='padding:6px 8px;text-align:';
       var supSumHtml=supSummary.length
@@ -4107,8 +4138,8 @@ function _renderInner(){
               +'<td style="'+_td+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 4px;font-weight:700;">'+esc(s.work||"")+'</span></td>'
               +'<td style="'+_td+'right;font-family:monospace;font-weight:700;">'+s.days+'日</td>'
               +'<td style="'+_td+'right;font-family:monospace;color:#1e40af;">'+(s.ms>0?toHM(s.ms):"0:00")+'</td>'
-              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+s.firstDate+'</td>'
-              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+s.lastDate+'</td>'
+              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+esc(s.firstDate)+'</td>'
+              +'<td style="'+_td+'center;font-family:monospace;font-size:.78rem;color:#475569;">'+esc(s.lastDate)+'</td>'
               +'</tr>';
           }).join("")+'</tbody></table></div>'
         :'<div class="empty" style="padding:20px 0;">この月の応援勤務はありません</div>';
@@ -4124,13 +4155,13 @@ function _renderInner(){
           +'</tr></thead><tbody>'
           +supDetails.map(function(d){
             return'<tr style="border-bottom:1px solid #f3f4f6;">'
-              +'<td style="'+_td2+'left;font-family:monospace;">'+d.date+'</td>'
+              +'<td style="'+_td2+'left;font-family:monospace;">'+esc(d.date)+'</td>'
               +'<td style="'+_td2+'left;font-weight:700;">'+esc(d.staff||"")+'</td>'
               +'<td style="'+_td2+'left;color:#6b7280;">'+esc(d.home||"")+'</td>'
               +'<td style="'+_td2+'left;"><span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:0 3px;font-weight:700;">'+esc(d.work||"")+'</span>'
                 +(d.changed?'<span title="この日は施設変更があり、出勤/退勤時刻はこの施設の在籍区間ではありません" style="margin-left:3px;color:#0369a1;font-weight:700;">🔄</span>':"")+'</td>'
-              +'<td style="'+_td2+'center;font-family:monospace;color:#1e40af;">'+d.inTime+'</td>'
-              +'<td style="'+_td2+'center;font-family:monospace;font-size:.75rem;color:'+(d.outTime==="未退勤"?"#dc2626":"#0f172a")+';">'+d.outTime+'</td>'
+              +'<td style="'+_td2+'center;font-family:monospace;color:#1e40af;">'+esc(d.inTime)+'</td>'
+              +'<td style="'+_td2+'center;font-family:monospace;font-size:.75rem;color:'+(d.outTime==="未退勤"?"#dc2626":"#0f172a")+';">'+esc(d.outTime)+'</td>'
               +'<td style="'+_td2+'right;font-family:monospace;">'+(d.ms>0?toHM(d.ms):"—")+'</td>'
               +'<td style="'+_td2+'center;font-size:.7rem;color:#6b7280;">'+esc(d.wageType||"通常")+'</td>'
               +'</tr>';
@@ -4199,11 +4230,11 @@ function _renderInner(){
             ?'<span style="background:#dcfce7;color:#15803d;border:1px solid #bbf7d0;border-radius:4px;padding:1px 8px;font-weight:700;font-size:.78rem;">✅ OK</span>'
             :'<span style="background:#fff1f2;color:#be123c;border:1px solid #fecdd3;border-radius:4px;padding:1px 8px;font-weight:700;font-size:.78rem;">⚠ 未確認</span>';
           return'<tr style="border-bottom:1px solid '+bdColor+';background:'+bg+';">'
-            +'<td style="padding:8px 8px;font-weight:700;">'+f.name+'</td>'
+            +'<td style="padding:8px 8px;font-weight:700;">'+esc(f.name)+'</td>'
             +'<td style="padding:8px 8px;text-align:center;">'+badge+'</td>'
             +'<td style="padding:8px 8px;text-align:right;font-family:monospace;font-weight:700;color:'+(f.ok?"#0f172a":"#c8ccd2")+'">'+(f.ok?f.count+'人':"—")+'</td>'
-            +'<td style="padding:8px 8px;text-align:center;font-family:monospace;color:#1e40af;">'+(f.firstTime||"—")+'</td>'
-            +'<td style="padding:8px 8px;font-size:.78rem;color:#475569;">'+(f.names||"—")+'</td>'
+            +'<td style="padding:8px 8px;text-align:center;font-family:monospace;color:#1e40af;">'+esc(f.firstTime||"—")+'</td>'
+            +'<td style="padding:8px 8px;font-size:.78rem;color:#475569;">'+esc(f.names||"—")+'</td>'
             +'</tr>';
         }).join("")
         +'</tbody></table></div>';
@@ -4221,9 +4252,9 @@ function _renderInner(){
       var _nc=counts;
       var _missingRows=_nc._missingList.length
         ?_nc._missingList.sort(function(a,b){return b.date.localeCompare(a.date);}).map(function(item){
-            return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+item.date+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+item.staff+'</td>'
-              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#dc2626;font-weight:700;">'+item.reason+'</td></tr>';
+            return '<tr><td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+esc(item.date)+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;">'+esc(item.staff)+'</td>'
+              +'<td style="padding:6px 10px;border-bottom:1px solid #e9ecef;color:#dc2626;font-weight:700;">'+esc(item.reason)+'</td></tr>';
           }).join("")
         :'<tr><td colspan="3" style="padding:12px 10px;color:#8496a7;text-align:center;">対象なし</td></tr>';
       // ── 有給申請の未対応通知（正本 tc5_paid_leave_requests の pending のみ。取消・却下・承認済は自動的に対象外） ──
@@ -4327,20 +4358,20 @@ function _renderInner(){
             // 管理者代理申請の識別バッジ（通常申請と見た目を大きく変えない控えめな表示）
             var isProxy=(r.adminProxy===true)||(r.requestSource==="admin_proxy");
             var proxyBadge=isProxy?'<span title="管理者による代理申請" style="margin-left:5px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;white-space:nowrap;">管理者代理</span>':"";
-            var noteDisp=(isProxy&&r.note)?'<span title="'+String(r.note).replace(/"/g,"&quot;")+'" style="margin-left:4px;color:#8496a7;font-size:.62rem;cursor:help;">📝</span>':"";
+            var noteDisp=(isProxy&&r.note)?'<span title="'+esc(r.note)+'" style="margin-left:4px;color:#8496a7;font-size:.62rem;cursor:help;">📝</span>':"";
             var _plRowId=plSafeId(r.id); // 通知からのスクロール先アンカー（不正IDなら付与しない）
             return '<tr'+(_plRowId?' id="plrow_'+_plRowId+'"':'')+' style="border-bottom:1px solid #e9ecef;'+(isHist?"opacity:.6;background:#fafafa;":"")+'">'
-              +'<td style="'+_plTd+'white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';'+_plBadge+'white-space:nowrap;">'+sl+'</span></td>'
-              +'<td style="'+_plName+'">'+r.staffName+proxyBadge+noteDisp+'</td>'
-              +'<td style="'+_plTd+'font-family:monospace;">'+dateDisp+dayCountDisp+'</td>'
-              +'<td style="'+_plTd+'color:#8496a7;white-space:nowrap;">'+createdStr+'</td>'
+              +'<td style="'+_plTd+'white-space:nowrap;"><span style="background:'+sbg+';color:'+sc+';'+_plBadge+'white-space:nowrap;">'+esc(sl)+'</span></td>'
+              +'<td style="'+_plName+'">'+esc(r.staffName)+proxyBadge+noteDisp+'</td>'
+              +'<td style="'+_plTd+'font-family:monospace;">'+esc(dateDisp)+dayCountDisp+'</td>'
+              +'<td style="'+_plTd+'color:#8496a7;white-space:nowrap;">'+esc(createdStr)+'</td>'
               +'<td style="padding:11px 5px;white-space:nowrap;">'
               +(r.status==="pending"
-                ?'<button class="btn-pl-approve" data-plid="'+r.id+'" style="background:#16a34a;color:#fff;border:none;'+_plBtn+'margin-right:4px;">承認</button>'
-                 +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'">却下</button>'
+                ?'<button class="btn-pl-approve" data-plid="'+esc(r.id)+'" style="background:#16a34a;color:#fff;border:none;'+_plBtn+'margin-right:4px;">承認</button>'
+                 +'<button class="btn-pl-reject" data-plid="'+esc(r.id)+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'">却下</button>'
                 :r.status==="approved"
-                  ?'<button class="btn-pl-withdraw" data-plid="'+r.id+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;'+_plBtn+'">引戻</button>'
-                   +'<button class="btn-pl-reject" data-plid="'+r.id+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'margin-left:4px;">却下</button>'
+                  ?'<button class="btn-pl-withdraw" data-plid="'+esc(r.id)+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;'+_plBtn+'">引戻</button>'
+                   +'<button class="btn-pl-reject" data-plid="'+esc(r.id)+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'margin-left:4px;">却下</button>'
                   :""
               )
               +'</td></tr>';
@@ -4389,7 +4420,7 @@ function _renderInner(){
           var tot=staffTotals[nm]||{granted:0,used:0,remain:0};
           // スタッフ小計行
           plBalRows+='<tr style="background:#f0f4fa;border-top:2px solid #adb5bd;">'
-            +'<td colspan="6" style="'+_plName+'color:#1e3a5f;">'+nm+'</td>'
+            +'<td colspan="6" style="'+_plName+'color:#1e3a5f;">'+esc(nm)+'</td>'
             +'</tr>';
           rows.forEach(function(b){
             var expired=(b.expiresAt&&b.expiresAt<today_pl);
@@ -4414,14 +4445,14 @@ function _renderInner(){
               )
               +'</td>'
               +'<td style="'+_plTd+'color:'+textColor+';white-space:nowrap;">第'+b._grantNo+'回</td>'
-              +'<td style="'+_plTd+'font-family:monospace;color:'+textColor+';white-space:nowrap;">'+(b.grantDate||"")+'</td>'
-              +'<td style="'+_plTd+'font-family:monospace;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+(b.expiresAt||"")+'</td>'
-              +'<td style="'+_plTd+'text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#166534")+';">'+(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
+              +'<td style="'+_plTd+'font-family:monospace;color:'+textColor+';white-space:nowrap;">'+esc(b.grantDate||"")+'</td>'
+              +'<td style="'+_plTd+'font-family:monospace;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+esc(b.expiresAt||"")+'</td>'
+              +'<td style="'+_plTd+'text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#166534")+';">'+esc(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
               +'<td style="padding:10px 4px;white-space:nowrap;">'
               +(expired?""
-                :'<button class="btn-pl-bal-row-save" data-balid="'+b.id+'" style="background:#1e40af;color:#fff;border:none;'+_plBtn+'margin-right:3px;">保存</button>'
+                :'<button class="btn-pl-bal-row-save" data-balid="'+esc(b.id)+'" style="background:#1e40af;color:#fff;border:none;'+_plBtn+'margin-right:3px;">保存</button>'
               )
-              +'<button class="btn-pl-bal-row-delete" data-balid="'+b.id+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;'+_plBtn+'">削除</button>'
+              +'<button class="btn-pl-bal-row-delete" data-balid="'+esc(b.id)+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;'+_plBtn+'">削除</button>'
               +'</td></tr>';
           });
         });
@@ -4430,7 +4461,7 @@ function _renderInner(){
       // スタッフ選択肢（新規付与フォーム用）
       var plStaffOpts='<option value="">スタッフを選択</option>'
         +staffList.filter(function(s){return !s.status||s.status==="在籍";}).map(function(s){
-          return '<option value="'+s.name+'">'+s.name+'</option>';
+          return '<option value="'+esc(s.name)+'">'+esc(s.name)+'</option>';
         }).join("");
 
       // ===== 付与予定通知セクション =====
@@ -4599,7 +4630,7 @@ function _renderInner(){
       if(adjMonthList.indexOf(adjLogMonth)<0)adjMonthList.push(adjLogMonth);
       var adjMonthOpts=adjMonthList.map(function(m){
         var p=m.split("-");
-        return'<option value="'+m+'"'+(m===adjLogMonth?" selected":"")+'>'+p[0]+'年'+parseInt(p[1],10)+'月</option>';
+        return'<option value="'+esc(m)+'"'+(m===adjLogMonth?" selected":"")+'>'+esc(p[0])+'年'+parseInt(p[1],10)+'月</option>';
       }).join("");
       var adjY=parseInt(adjLogMonth.split("-")[0],10),adjM=parseInt(adjLogMonth.split("-")[1],10);
       var adjIsCur=(adjLogMonth>=adjCurMonth);
@@ -4898,7 +4929,7 @@ function _renderInner(){
         var expCell;
         if(d.nextExp){
           var urgent=(lpExpToIdx(d.nextExp)-lpCurIdx)<=2; // 3ヶ月以内の失効は強調
-          expCell='<span style="'+(urgent?'color:#b91c1c;font-weight:800;':'color:#0f172a;')+'">'+d.nextExp+'</span>'
+          expCell='<span style="'+(urgent?'color:#b91c1c;font-weight:800;':'color:#0f172a;')+'">'+esc(d.nextExp)+'</span>'
             +'<span style="font-size:.72rem;color:#64748b;"> ('+lpFmtDays(lpRound(d.nextExpDays))+'日)</span>';
         }else{
           expCell='<span style="color:#94a3b8;">—</span>';
@@ -4965,7 +4996,7 @@ function _renderInner(){
       var _meCur=getTodayJSTStr().substring(0,7); // JST基準（端末TZに依存しない）
       _meSet[_meCur]=true;_meSet[mealAdminMonth]=true;
       var meMonths=Object.keys(_meSet).filter(Boolean).sort().reverse();
-      var meMonthOpts=meMonths.map(function(m){var p=m.split("-");return '<option value="'+m+'"'+(m===mealAdminMonth?" selected":"")+'>'+p[0]+'年'+parseInt(p[1],10)+'月</option>';}).join("");
+      var meMonthOpts=meMonths.map(function(m){var p=m.split("-");return '<option value="'+esc(m)+'"'+(m===mealAdminMonth?" selected":"")+'>'+esc(p[0])+'年'+parseInt(p[1],10)+'月</option>';}).join("");
       var meY=parseInt(mealAdminMonth.split("-")[0],10);
       var meM=parseInt(mealAdminMonth.split("-")[1],10);
       var meLastDay=new Date(meY,meM,0).getDate();
@@ -5068,7 +5099,7 @@ function _renderInner(){
     var _unapvHTML=_unapv.total>0
       ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
         +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）</div>'
-        +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return k+"："+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
+        +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return esc(k)+"："+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
         +'</div>'
       :"";
     var _installHTML=_deferredInstallPrompt
@@ -6846,6 +6877,13 @@ async function pinOk(){
 
 function saveFacilities(){
   if(demoWriteBlocked())return;
+  // ★ RTDB から施設マスタを取得できていない状態では上書きしない。
+  //   fetchJson は通信失敗も null を返すため、取得失敗時は施設一覧が「空」に見える。
+  //   そこで管理者が施設を登録すると、その1件で本番の施設マスタ全件を消してしまう。
+  if(!facilitiesLoaded){
+    showAlert("施設マスタを取得できていないため保存できません。再読み込みしてからお試しください。");
+    return;
+  }
   _lsSet("tc_master_facilities",JSON.stringify(masterFacilities));
   masterLocs=masterFacilities.map(function(f){return f.name;});
   VALID_TOKENS=buildValidTokens();
@@ -6885,6 +6923,8 @@ function viewerDownloadAndDelete(url,fileName,docId){
   },1000);
 }
 function downloadFile(url,fileName){
+  url=escUrl(url);
+  if(!url){showAlert('ダウンロードに失敗しました');return;}
   var isIOS=/iPad|iPhone|iPod/.test(navigator.userAgent)&&!window.MSStream;
   if(isIOS){
     // iOS Safariは a.download 非対応のため新しいタブで開く
@@ -6905,6 +6945,8 @@ function downloadFile(url,fileName){
     .catch(function(){showAlert('ダウンロードに失敗しました');});
 }
 function previewFile(url,fileType,fileName){
+  url=escUrl(url);
+  if(!url){showAlert('ダウンロードに失敗しました');return;}
   var ft=(fileType||'').toLowerCase();
   var isImage=['png','jpg','jpeg','gif','webp'].indexOf(ft)>=0;
   var isPDF=ft==='pdf';
@@ -6962,10 +7004,13 @@ function bulkDownloadDocuments(){
       +'<div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
     document.body.appendChild(ov);
     var zip=new JSZip();
+    var _skip=0;
     Promise.all(docList.map(function(d){
-      return fetch(d.downloadURL)
+      var _u=escUrl(d.downloadURL);
+      if(!_u){_skip++;return Promise.resolve();} // 不正URLは取得しない
+      return fetch(_u)
         .then(function(res){return res.blob();})
-        .then(function(blob){zip.file(d.fileName,blob);})
+        .then(function(blob){zip.file(zipEntryName(d.fileName),blob);})
         .catch(function(){});
     }))
     .then(function(){return zip.generateAsync({type:'blob'});})
@@ -6978,6 +7023,7 @@ function bulkDownloadDocuments(){
       a.download=fname;
       a.click();
       URL.revokeObjectURL(a.href);
+      if(_skip)showAlert(_skip+'件はURLが不正なためスキップしました');
     })
     .catch(function(){
       if(ov.parentNode)document.body.removeChild(ov);
@@ -7260,11 +7306,14 @@ function bulkDownloadStaffDocs(ids){
     ov.innerHTML='<div style="background:#fff;border-radius:2px;padding:24px 32px;text-align:center;"><div style="font-size:1rem;font-weight:700;margin-bottom:8px;">ZIP作成中...</div><div style="font-size:.85rem;color:#475569;">しばらくお待ちください</div></div>';
     document.body.appendChild(ov);
     var zip=new JSZip();
+    var _skipS=0;
     Promise.all(docs.map(function(d){
       var dlName=getDisplayFileName(d.fileName,d.uploadedAt);
-      return fetch(d.downloadURL)
+      var _uS=escUrl(d.downloadURL);
+      if(!_uS){_skipS++;return Promise.resolve();} // 不正URLは取得しない
+      return fetch(_uS)
         .then(function(res){return res.blob();})
-        .then(function(blob){zip.file(dlName,blob);})
+        .then(function(blob){zip.file(zipEntryName(dlName),blob);})
         .catch(function(){});
     }))
     .then(function(){return zip.generateAsync({type:'blob'});})
@@ -7273,6 +7322,7 @@ function bulkDownloadStaffDocs(ids){
       var now=new Date();
       var fname='スタッフ書類_'+now.getFullYear()+pad(now.getMonth()+1)+pad(now.getDate())+'.zip';
       var a=document.createElement('a');a.href=URL.createObjectURL(content);a.download=fname;a.click();URL.revokeObjectURL(a.href);
+      if(_skipS)showAlert(_skipS+'件はURLが不正なためスキップしました');
     })
     .catch(function(){
       if(ov.parentNode)document.body.removeChild(ov);
@@ -7879,7 +7929,14 @@ async function initFirebase() {
       fetchJson(FB_URL+"/tc5_approvals.json"),
       fetchJson(FB_URL+"/tc5_pins.json"),
       fetchJson(FB_URL+"/tc_master_depts.json"),
-      fetchJson(FB_URL+"/master/locations.json"),
+      // 施設マスタだけは「取得に成功したか」を別途記録する。
+      // fetchJson は通信失敗も null を返すため、null だけでは「ノード不在」と区別できず、
+      // 取得失敗時に管理者が施設を登録すると本番の施設マスタを全件消してしまう（saveFacilities 参照）。
+      // r.ok を必ず確認する。401/403 は JSON ボディ（{"error":"Permission denied"}）を返すため、
+      // これを検査しないと取得成功とみなしてしまい、その値が施設マスタとして扱われる。
+      authFetch(FB_URL+"/master/locations.json")
+        .then(function(r){if(!r.ok)throw new Error("locations HTTP "+r.status);return r.json();})
+        .then(function(j){facilitiesLoaded=true;return j;}).catch(function(){return null;}),
       fetchJson(FB_URL+"/config/adminPinHash.json"),
       fetchJson(FB_URL+"/config/adminPin.json"),
       fetchJson(FB_URL+"/config/adminTokenHash.json"),
@@ -7921,8 +7978,11 @@ async function initFirebase() {
       tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
-    } else if(writePolicy==="full"){
+    } else if(writePolicy==="full"&&masterFacilities.length){
       // 既定値の自動書き込みは通常モードのみ（デモ／テスト画面で起動直後に遮断通知が出るのを防ぐ）
+      // ★ masterFacilities が空のときは絶対に書き込まない。
+      //   fetchJson は通信失敗も null を返すため（"ノード不在" と区別できない）、
+      //   空配列を PUT すると RTDB 上で null 扱いとなり本番の施設マスタを削除してしまう。
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
     // 管理者PIN: ハッシュ優先、旧平文フォールバック（文字列チェックでPermission deniedオブジェクトを除外）
@@ -8216,8 +8276,8 @@ function openProxyLeaveModal(){
         if(!resolveStaffId(s.name))return false; // 氏名重複等で一意解決不可
         return true;
       }).map(function(s){
-        var nm=String(s.name).replace(/"/g,"&quot;");
-        return '<option value="'+nm+'">'+s.name+'（'+(s.employeeId||"").trim()+'）</option>';
+        var nm=esc(s.name);
+        return '<option value="'+nm+'">'+esc(s.name)+'（'+esc((s.employeeId||"").trim())+'）</option>';
       }).join("");
   var sel=document.getElementById("pl-proxy-staff");if(sel)sel.innerHTML=opts;
   var dt=document.getElementById("pl-proxy-date");if(dt)dt.value="";
