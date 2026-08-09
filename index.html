@@ -46,25 +46,108 @@ var FCM_VAPID_KEY="BFMW2J95vc3NZcS_7Y8biP9ysFhi3s5gOpeQOZQAIj3ZHd3xIOWhjKeqeeh42
 var _fbIdToken="";
 var _fbRefreshToken="";
 var _fbTokenExpiry=0;
+// 現在のセッションの役割。"anon"=起動時の匿名セッション（現行どおり）
+// / "s"=staff / "a"=admin / "v"=viewer / "d"=demo / "x"=staffDemo
+//
+// ★ 起動経路ではサーバ認証APIを一切呼ばない。
+//   起動時の認証は現行と同じ「Google への匿名サインイン1本」だけで、施設URL・QRコード・
+//   端末設定は一切変わらない。体感速度も現行と同一（single-flight 化で通信本数はむしろ減る）。
+//   役割つきセッションへの昇格は、PIN入力・共有URL認証など
+//   「元々待ちが発生する場面」でだけ、画面遷移をブロックせずに行う。
+var _authRole="anon";
+var _authClaims=null;
+// ★ セッションの世代。役割トークンを確立するたびに進める。
+//   進行中の匿名サインインが後から解決したとき、確立済みの役割トークンを
+//   上書きして anon へ降格させないための番兵。
+var _authEpoch=0;      // セッション世代（役割トークン確立ごとに進む）
 
-async function getAuthToken(){
-  if(_fbIdToken&&Date.now()<_fbTokenExpiry-60000)return _fbIdToken;
-  if(_fbRefreshToken){
+function loadRaw(k,d){try{var v=localStorage.getItem(k);return v==null?d:v;}catch(e){return d;}}
+function saveRaw(k,v){try{localStorage.setItem(k,v);}catch(e){}}
+
+// 端末識別子。異常な大量PIN試行を検知するためだけの裏側の値。
+// ★ 利用者には表示せず、設定もさせない。無ければ自動生成して保存するだけなので、
+//   既存端末に再登録・再設定の作業は一切発生しない。
+var _authDeviceId=(function(){
+  var v=loadRaw("tc_device_id","");
+  if(v)return v;
+  try{
+    if(window.crypto&&crypto.randomUUID){v=crypto.randomUUID().replace(/-/g,"");}
+    else{var a=new Uint8Array(16);crypto.getRandomValues(a);
+         v=Array.prototype.map.call(a,function(b){return b.toString(16).padStart(2,"0");}).join("");}
+  }catch(e){v="d"+Date.now().toString(36)+Math.random().toString(36).slice(2,10);}
+  saveRaw("tc_device_id",v);
+  return v;
+})();
+
+// 認証APIのベースURL。Vercel の Functions を使う（GitHub Pages からはクロスオリジンPOST）。
+var AUTH_API_BASE="https://timecard-rho.vercel.app/api/auth";
+
+/**
+ * サーバ認証API を呼ぶ。失敗時も例外を投げず {ok:false} を返す。
+ * ★ 起動経路からは呼ばない。呼ぶのは PIN 入力後・共有URL認証など、
+ *   もともと待ちが発生する場面だけ。
+ */
+async function callAuthApi(path,payload,timeoutMs){
+  // ★ 必ずタイムアウトを付ける。認証APIの応答遅延で操作が固まってはならない。
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort();},timeoutMs||5000):null;
+  try{
+    var r=await fetch(AUTH_API_BASE+"/"+path,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload||{}),
+      signal:ctl?ctl.signal:undefined
+    });
+    var d=null;
+    try{d=await r.json();}catch(e){d=null;}
+    if(!r.ok)return {ok:false,status:r.status,data:d};
+    return {ok:true,status:r.status,data:d||{}};
+  }catch(e){return {ok:false,status:0,data:null};}
+  finally{if(timer)clearTimeout(timer);}
+}
+
+/** Custom Token を IDトークンへ交換する。 */
+async function exchangeCustomToken(customToken,timeoutMs){
+  // ★ 進行中の匿名サインインがあれば先に決着させる。
+  //   待たないと、後から解決した匿名トークンが役割トークンを上書きし、
+  //   _authRole だけ "s"/"a" のまま _fbIdToken が匿名に戻る不整合が起きる。
+  // ★ 待ち時間に上限を設ける。_authInFlight はタイムアウトを持たないため、
+  //   回線ハング時にここで無限に待つと PIN 画面が無反応のまま固まる。
+  if(_authInFlight){
     try{
-      var r=await fetch("https://securetoken.googleapis.com/v1/token?key="+FB_API_KEY,{
-        method:"POST",
-        headers:{"Content-Type":"application/x-www-form-urlencoded"},
-        body:"grant_type=refresh_token&refresh_token="+_fbRefreshToken
-      });
-      var d=await r.json();
-      if(d.id_token){
-        _fbIdToken=d.id_token;
-        _fbRefreshToken=d.refresh_token;
-        _fbTokenExpiry=Date.now()+parseInt(d.expires_in)*1000;
-        return _fbIdToken;
-      }
-    }catch(e){console.warn("token refresh failed, re-signing in",e);}
+      await Promise.race([_authInFlight,new Promise(function(r){setTimeout(r,3000);})]);
+    }catch(e){}
   }
+  // ★ タイムアウトを付ける（callAuthApi と同じ考え方。ハングで永久 pending にしない）
+  // ★ clearTimeout は本文読み取り(json)の後で行う。fetch だけを包むと、
+  //   ヘッダだけ返して本文を止める上流に当たったとき永久 pending になる。
+  // ★ 既定は 5000ms。3000ms に縮めると、唯一のブロッキング経路（管理者PIN認証）が
+  //   低速回線で「正しいPINなのに接続できません」になる確率が上がる。
+  //   呼び出し側が残り時間を渡せるようにして、総待ち時間は呼び出し側の予算で抑える。
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort();},timeoutMs||5000):null;
+  var d;
+  try{
+    var r=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key="+FB_API_KEY,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:customToken,returnSecureToken:true}),
+      signal:ctl?ctl.signal:undefined
+    });
+    d=await r.json();
+  }finally{if(timer)clearTimeout(timer);}
+  if(!d||!d.idToken)throw new Error("custom token exchange failed");
+  _fbIdToken=d.idToken;
+  _fbRefreshToken=d.refreshToken;
+  _fbTokenExpiry=Date.now()+parseInt(d.expiresIn)*1000;
+  // ★ 世代を進める。3秒のレースを超えて後から解決した匿名サインインが
+  //   この役割トークンを上書きして anon へ降格させるのを防ぐ。
+  _authEpoch++;
+  return _fbIdToken;
+}
+
+/** 匿名サインイン。起動時の唯一の認証経路（現行と同一。Vercel は経由しない）。 */
+async function anonymousSignIn(){
   var r2=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signUp?key="+FB_API_KEY,{
     method:"POST",
     headers:{"Content-Type":"application/json"},
@@ -72,10 +155,159 @@ async function getAuthToken(){
   });
   var d2=await r2.json();
   if(!d2.idToken)throw new Error("Anonymous sign-in failed: "+(d2.error&&d2.error.message||"unknown"));
-  _fbIdToken=d2.idToken;
-  _fbRefreshToken=d2.refreshToken;
-  _fbTokenExpiry=Date.now()+parseInt(d2.expiresIn)*1000;
-  return _fbIdToken;
+  // ★ ここでは代入しない。呼び出し側（getAuthToken）が世代を確認してから反映する。
+  return {idToken:d2.idToken,refreshToken:d2.refreshToken,expiresIn:parseInt(d2.expiresIn)};
+}
+
+var _ROLE_OF_KIND={staff:"s",admin:"a",share:"v"};
+
+/**
+ * 役割つきセッションへ昇格する。成功で true。
+ * ★ 失敗しても既存セッションをそのまま残す。認証APIが落ちていても
+ *   打刻・画面表示は現行どおり動き続ける（可用性を落とさない）。
+ */
+async function establishSession(kind,payload,timeoutMs){
+  var r=await establishSessionEx(kind,payload,timeoutMs);
+  return r.ok;
+}
+
+/** establishSession の詳細版。HTTPステータスまで返す（認証失敗と通信障害を区別するため）。 */
+async function establishSessionEx(kind,payload,timeoutMs){
+  // ★ API 呼び出しに予算を割り当て、交換側には残り時間（最低 5000ms）を渡す。
+  //   最低値の床があるため、総待ち時間は最悪 budget + 5000ms（さらに
+  //   exchangeCustomToken 冒頭の _authInFlight レース最大 3000ms が加わり得る）。
+  //   低速回線での取りこぼしを避けることを優先した意図的な設計。
+  var budget=timeoutMs||5000,t0=Date.now();
+  var res=await callAuthApi(kind,payload,budget);
+  if(!res.ok||!res.data||!res.data.customToken)return {ok:false,status:res.status};
+  var pT=_fbIdToken,pR=_fbRefreshToken,pE=_fbTokenExpiry;
+  try{
+    await exchangeCustomToken(res.data.customToken,Math.max(5000,budget-(Date.now()-t0)));
+  }catch(e){_fbIdToken=pT;_fbRefreshToken=pR;_fbTokenExpiry=pE;return {ok:false,status:0};}
+  _authRole=res.data.role||_ROLE_OF_KIND[kind]||_authRole;
+  // ★ customToken（ベアラ資格情報）は保持しない。必要な表示用の値だけ残す。
+  _authClaims={role:_authRole,expiresAt:res.data.expiresAt||null,sessionExpiresAt:res.data.sessionExpiresAt||null};
+  return {ok:true,status:res.status};
+}
+
+/**
+ * スタッフ役割へ昇格する。★ 画面遷移をブロックしない。
+ * PIN照合そのものは現行どおりローカルで即時に判定して画面を切り替え、
+ * サーバ側の役割トークン取得だけを裏で並行実行する。よって体感速度は現行と同一。
+ * 実際の書き込み（打刻）は利用者が出勤/退勤を押した後なので、通常はそれまでに完了する。
+ */
+var _elevatePromise=null;
+function elevateStaffSession(name,pin){
+  _elevatePromise=(async function(){
+    var tok=await getAuthToken().catch(function(){return "";});
+    // 背景処理なので長めに待ってよい（サーバ側のスロットル上限4秒を吸収する）
+    var ok=await establishSession("staff",{idToken:tok,staffName:name,pin:pin,deviceId:_authDeviceId},12000);
+    if(!ok)console.warn("[TC] staff role token unavailable（現行セッションを継続）");
+    return ok;
+  })().catch(function(){return false;}); // 未処理のPromise拒否を出さない
+  return _elevatePromise;
+}
+
+/**
+ * 新認証側（/authz）へPINを反映する。
+ * ★ 現行の tc5_pins 保存は従来どおり行ったうえで即時同期するため、
+ *   PIN変更・新規登録の直後から新PINで打刻できる。
+ *   失敗しても現行の動作・画面は一切変わらない（裏側だけの同期）。
+ */
+function syncPinToAuthz(name,pin,currentPin){
+  return (async function(){
+    var tok=await getAuthToken().catch(function(){return "";});
+    var res=await callAuthApi("pin-set",{
+      idToken:tok,staffName:name,pin:pin,
+      currentPin:currentPin||"",deviceId:_authDeviceId
+    });
+    if(!res.ok)console.warn("[TC] pin sync failed",res.status);
+    return res.ok;
+  })().catch(function(){return false;});
+}
+
+/**
+ * 改名時に新認証側の登録名を付け替える（現行の tc5_pins キー付け替えと同じ挙動）。
+ * ★ 削除ではなくレコードの移送。削除だけだと、平文を保持していないスタッフの
+ *   PINが新名で作り直されず /authz から消えてしまう。
+ */
+function renamePinInAuthz(oldName,newName){
+  return (async function(){
+    // 管理者ロールの確立を待つ（改名は管理者のみ許可されるため）。
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    var tok=await getAuthToken().catch(function(){return "";});
+    var res=await callAuthApi("pin-set",{idToken:tok,staffName:oldName,renameTo:newName,deviceId:_authDeviceId});
+    if(!res.ok)console.warn("[TC] pin rename failed",res.status);
+    return res.ok;
+  })().catch(function(){return false;});
+}
+
+/**
+ * 管理者役割へ昇格する。★ 画面遷移をブロックしない（現行どおり即座に管理画面を表示する）。
+ * 管理者PIN／管理者URLトークンは現行のものをそのまま使う。
+ */
+var _adminElevatePromise=null;
+function elevateAdminSession(payload){
+  _adminElevatePromise=(async function(){
+    var ok=await establishSession("admin",payload,12000);
+    if(!ok)console.warn("[TC] admin role token unavailable（現行セッションを継続）");
+    return ok;
+  })().catch(function(){return false;});
+  return _adminElevatePromise;
+}
+
+/**
+ * 共有URL（閲覧用 / 管理者デモ / スタッフテスト）の役割へ昇格する。
+ * ★ 有効・期限の判定と画面表示は現行のクライアント側ロジックのまま。
+ *   ここでは同じ結果になる役割トークンを裏で取得するだけで、
+ *   期限を12時間・24時間などに固定し直すことはしない。
+ */
+function elevateShareSession(kind,token){
+  (async function(){
+    var ok=await establishSession("share",{kind:kind,token:token||""});
+    if(!ok)console.warn("[TC] share role token unavailable（現行セッションを継続）");
+  })().catch(function(){});
+}
+
+// ★ single-flight。起動時の一括読込は authFetch を20本以上同時に呼ぶため、
+//   従来は「同じサインイン」が20本以上並列発射されていた（＝毎ロード20個以上の匿名ユーザー生成）。
+//   進行中の取得を共有して1本に集約する。通信本数が減るので現行より速くなる方向にしか働かない。
+var _authInFlight=null;
+async function getAuthToken(){
+  if(_fbIdToken&&Date.now()<_fbTokenExpiry-60000)return _fbIdToken;
+  if(_authInFlight)return _authInFlight;
+  var _epoch=_authEpoch;
+  _authInFlight=(async function(){
+    try{
+      if(_fbRefreshToken){
+        try{
+          var r=await fetch("https://securetoken.googleapis.com/v1/token?key="+FB_API_KEY,{
+            method:"POST",
+            headers:{"Content-Type":"application/x-www-form-urlencoded"},
+            body:"grant_type=refresh_token&refresh_token="+_fbRefreshToken
+          });
+          var d=await r.json();
+          if(d.id_token){
+            // ★ 待っている間に役割トークンが確立していたら上書きしない（降格を防ぐ）
+            if(_epoch!==_authEpoch)return _fbIdToken;
+            _fbIdToken=d.id_token;
+            _fbRefreshToken=d.refresh_token;
+            _fbTokenExpiry=Date.now()+parseInt(d.expires_in)*1000;
+            return _fbIdToken;
+          }
+        }catch(e){console.warn("token refresh failed, re-signing in",e);}
+      }
+      var a=await anonymousSignIn();
+      // ★ 同上。後着の匿名トークンで役割トークンを潰さない。
+      if(_epoch!==_authEpoch)return _fbIdToken;
+      _fbIdToken=a.idToken;
+      _fbRefreshToken=a.refreshToken;
+      _fbTokenExpiry=Date.now()+a.expiresIn*1000;
+      _authRole="anon";
+      return _fbIdToken;
+    }finally{_authInFlight=null;}
+  })();
+  return _authInFlight;
 }
 
 // ===== 画面モードと書き込みポリシー（フェイルクローズ）=====
@@ -551,8 +783,15 @@ function patchCorrectionRequestFb(id,partial){
 }
 
 // 個別パス取得ヘルパー（root bulk read 廃止 - Phase 2-A）
+// ★ r.ok を必ず検査する。RTDB REST は 401/403 のとき {"error":"Permission denied"} を
+//   HTTP エラーステータス＋JSONボディで返すため、r.ok を見ないと拒否応答が「データ」として
+//   下流へ流れ、Object.values() により ["Permission denied"] などへ化ける。
+//   その値は localStorage のキャッシュを破壊し、以後の saveData() で本番へ書き戻されうる。
+//   取得できなかった場合は必ず null を返し、呼び出し側の if(fbXxx) ガードでフェイルクローズさせる。
 function fetchJson(url) {
-  return authFetch(url).then(function(r){return r.json();}).catch(function(){return null;});
+  return authFetch(url)
+    .then(function(r){ if(!r.ok){throw new Error("HTTP "+r.status);} return r.json(); })
+    .catch(function(){return null;});
 }
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
@@ -1033,8 +1272,12 @@ function showCorrectionRequestModal(staffNm,opts){
 
 // ===== 定数 =====
 const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",breakEnd:"休憩終了",facilityChange:"施設変更"};
-var ADMIN_PIN=""; // メモリのみ保持（localStorageには保存しない）
-var ADMIN_PIN_HASH=""; // SHA-256ハッシュ（Firebase config/adminPinHashから）
+// ★ 管理者PINはクライアントに一切持たない。照合はサーバ（/api/auth/admin）のみ。
+//   公開領域から読める config/adminPinHash（非ソルトSHA-256・8桁固定）を
+//   認証判定に使うと、オフライン全数探索で管理者権限を突破されるため。
+var pinChecking=false;   // 管理者PIN照合中
+var _adminPinSaving=false; // 管理者PIN変更の送信中（DOM 再生成に耐える二重送信ガード）
+var pinErrorMsg="";      // 認証失敗と通信障害を区別して表示する
 // 施設マスタの正本は Firebase の master/locations。
 // 実施設名・施設トークンをクライアント配布物へ埋め込まないため、既定値は空とする。
 // 初回ロード時は RTDB 読込完了後に initFirebase 内で VALID_TOKENS / tokenValid が再計算され、
@@ -3030,14 +3273,14 @@ function _renderInner(){
       +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +'</div>'
       +'<div class="pin-display">'+dots+'</div>'
-      +(!adminPinReady()&&!firebaseReady?'<div style="color:#4b5563;text-align:center;font-size:.85rem;margin-bottom:10px;">PIN読込中… しばらくお待ちください</div>':!adminPinReady()&&firebaseReady?'<div style="color:#b45309;text-align:center;font-size:.85rem;margin-bottom:10px;">管理者PINが未設定です。Firebaseで設定してください</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">PINが違います</div>':"")
+      +(pinChecking?'<div style="color:#4b5563;text-align:center;font-size:.85rem;margin-bottom:10px;">確認中…</div>':pinError?'<div style="color:#dc2626;text-align:center;font-size:.85rem;margin-bottom:10px;">'+esc(pinErrorMsg||"PINが違います")+'</div>':"")
       +'<div class="pin-grid">'
       +[1,2,3,4,5,6,7,8,9].map(function(n){return'<button class="btn-pin" onclick="pinTap('+n+')">'+n+'</button>';}).join("")
       +'<button class="btn-pin-clear" onclick="pinTap(\'C\')">⌫</button>'
       +'<button class="btn-pin" onclick="pinTap(0)">0</button>'
       +'<button class="btn-pin-enter" onclick="pinOk()">→</button>'
       +'</div>'
-      +'<button class="btn-admin" style="margin-top:8px;" onclick="screen=\'home\';pinInput=\'\';render();">キャンセル</button>';
+      +'<button class="btn-admin" style="margin-top:8px;" onclick="cancelPin()">キャンセル</button>';
     return;
   }
 
@@ -3843,7 +4086,7 @@ function _renderInner(){
         +(demoMode?'':''
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者PIN設定</div>'
-        +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">状態: <strong style="color:'+(adminPinReady()?"#1e40af":"#b91c1c")+';">'+(adminPinReady()?"設定済み（ハッシュ化済み）":"未設定（ログイン不可）")+'</strong></div>'
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">状態: <strong style="color:#1e40af;">サーバ側で保管（照合はサーバのみ）</strong></div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
         +'<button id="btn-change-pin" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
@@ -5812,7 +6055,11 @@ function _renderInner(){
               else{console.log("[approvals rename] PATCH OK");}
             }).catch(function(e){savingCount--;console.error("[approvals rename] network error:",e);showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");});
           }
-          if(staffPins[orig]){staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);}
+          if(staffPins[orig]){
+            staffPins[newN]=staffPins[orig];delete staffPins[orig];saveData("tc5_pins",staffPins);
+            // 改名時は新認証側の登録名も付け替える（現行の tc5_pins 付け替えと同じ扱い）
+            renamePinInAuthz(orig,newN);
+          }
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
         s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
@@ -5896,15 +6143,33 @@ function _renderInner(){
     if(changePinBtn)changePinBtn.onclick=function(){
       var v=(document.getElementById("new-admin-pin")?.value||"").trim();
       if(!/^\d{8}$/.test(v)){showAlert("PINは数字8桁で入力してください");return;}
-      hashPin(v).then(function(h){
-        ADMIN_PIN_HASH=h;ADMIN_PIN="";
-        authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
-          .then(function(){return authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"});})
-          .then(function(){showAlert("PINを変更しました（ハッシュ化済み）");})
-          .catch(function(){showAlert("Firebase保存に失敗しました");});
-        document.getElementById("new-admin-pin").value="";
+      // ★ 保存先は新認証基盤（/authz/adminPin）のみ。公開領域へは書かない。
+      // ★ DOM の disabled だけに頼らない。10秒ポーリングの render() でボタンが
+      //   再生成されると解除されてしまうため、フラグで守る。
+      if(_adminPinSaving)return;
+      _adminPinSaving=true;changePinBtn.disabled=true;
+      (async function(){
+        // ?admin= で入った直後は管理者ロールの確立が未完了のことがある。
+        // 待たないと anon トークンで送信して 403 になり、
+        // 「管理者PINで入り直してください」という実行不可能な指示が出る。
+        if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+        var tok=await getAuthToken().catch(function(){return "";});
+        // pinOk と同じ理由で余裕を持たせる（サーバ側は完了しているのに
+        // クライアントだけ失敗表示になるのを避ける）。
+        var r=await callAuthApi("admin-pin-set",{idToken:tok,pin:v},12000);
+        if(r.ok){
+          var el=document.getElementById("new-admin-pin");if(el)el.value="";
+          showAlert("PINを変更しました");
+        } else if(r.status===403){
+          showAlert("管理者として認証されていないため変更できません。\n管理者PINで入り直してから操作してください");
+        } else if(r.status===503){
+          showAlert("認証の準備が完了していないため変更できません");
+        } else {
+          showAlert("PINの変更に失敗しました。通信状態を確認して再度お試しください");
+        }
+        _adminPinSaving=false;changePinBtn.disabled=false;
         render();
-      });
+      })().catch(function(){_adminPinSaving=false;changePinBtn.disabled=false;});
     };
     // 管理者トークン変更
     var changeTokenBtn=document.getElementById("btn-change-token");
@@ -6327,6 +6592,13 @@ function goHome(){
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
   staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();
 }
+function cancelPin(){
+  // ★ 照合中はキャンセルさせない。ここで screen を変えると、
+  //   後から成功応答が届いたときに画面を管理画面へ奪われる。
+  if(pinChecking)return;
+  if(pinTimer){clearTimeout(pinTimer);pinTimer=null;}
+  screen="home";pinInput="";pinError=false;pinErrorMsg="";render();
+}
 function goPin(){
   // デモ／スタッフテスト画面からは管理者PIN画面へ遷移させない（直接呼ばれても遷移しない）
   if(uiMode==="adminDemo"||uiMode==="staffDemo"){console.warn("[goPin] blocked (uiMode="+uiMode+")");return;}
@@ -6725,7 +6997,7 @@ async function hashPin(pin){
   return Array.from(new Uint8Array(buf)).map(function(b){return b.toString(16).padStart(2,'0');}).join('');
 }
 function isLegacyPin(val){return /^\d{4}$/.test(val);}
-function adminPinReady(){return !!(ADMIN_PIN_HASH||ADMIN_PIN);}
+// adminPinReady は廃止。PINの有無はクライアントから判定しない（サーバが判定する）。
 // staffPins の値は string（hash or legacy 4桁）または {hash,plain} オブジェクトの混在を吸収
 function getStoredPin(name){
   var v=staffPins[name];
@@ -6785,9 +7057,15 @@ function showAdminPinSetModal(nm,onSave){
   setTimeout(function(){inp1.focus();},50);
 }
 async function adminSavePin(nm,pin){
+  var _prevPin=getStoredPin(nm).plain||""; // 上書き前に控える（新認証側の経路(b)用）
   var h=await hashPin(pin);
   staffPins[nm]={hash:h,plain:pin};
   saveData("tc5_pins",staffPins);
+  // 変更を新認証側へ即時反映（現行の保存動作・画面はそのまま。await しない）。
+  // 管理者ロールの確立を待ってから送る。取れていなくても _prevPin で通る。
+  (function(_n,_p,_c){
+    (_adminElevatePromise||Promise.resolve()).then(function(){return syncPinToAuthz(_n,_p,_c);}).catch(function(){});
+  })(nm,pin,_prevPin);
   render();
   showAlert(nm+"のPINを設定しました");
 }
@@ -6811,7 +7089,8 @@ async function sOk(){
   } else {
     match=((await hashPin(inputStr))===sp.hash);
   }
-  if(match){staffPinError=false;screen="punch";render();}
+  // ★ 画面遷移は現行どおり即時。サーバ側の役割トークン取得は裏で並行実行する。
+  if(match){staffPinError=false;screen="punch";render();elevateStaffSession(staffName,inputStr);}
   else{staffPinError=true;staffPinInput="";render();}
 }
 
@@ -6839,40 +7118,73 @@ async function sNewOk(){
       staffPins[staffName]={hash:h,plain:staffPinInput};
       saveData("tc5_pins",staffPins);
       staffPinError=false;screen="punch";render();
+      // ★ 画面遷移後のバックグラウンド処理。/authz への反映を待ってから昇格する
+      //   （待たないと staff 認証がレコード未作成を読んで必ず失敗する）。
+      var _nm=staffName,_np=staffPinInput;
+      syncPinToAuthz(_nm,_np).then(function(){elevateStaffSession(_nm,_np);}).catch(function(){});
     } else {
       staffPinError=true;staffPinStep=1;staffPinInput="";staffPinConfirm="";render();
     }
   }
 }
 function pinTap(v){
+  if(pinChecking)return; // 照合中の二重送信を防ぐ
   if(v==="C"){pinInput=pinInput.slice(0,-1);}
   else if(pinInput.length<8){pinInput+=String(v);}
   render();
   if(pinInput.length===8){setTimeout(pinOk,150);}
 }
+/**
+ * 管理者PIN認証。★ 照合はサーバ（/api/auth/admin）だけで行う。
+ *   公開領域の config/adminPinHash（非ソルトSHA-256・8桁固定）は一切参照しない。
+ *   認証成功と同時に admin ロールのセッションが確立する（別途の昇格呼び出しは不要）。
+ * UI は従来どおり8桁入力→自動判定。応答待ちの間だけ既存のメッセージ行に「確認中…」を出す。
+ */
 async function pinOk(){
-  if(!adminPinReady()){
-    pinInput="";
-    if(firebaseReady){showAlert("管理者PINが未設定です。Firebase で config/adminPinHash を設定してください");}
-    render();
+  if(pinChecking)return;
+  // ★ 桁数でクライアントが弾いてよいのは「サーバが構造的に受理しない」範囲だけ。
+  //   8桁で弾くと、サーバが受理する4〜7桁のPIN（--allow-short-admin-pin 経由で
+  //   /authz に載りうる）を UI から一度も送信できなくなり、
+  //   さらに「→」ボタンと Enter が無反応になって現行の操作感が変わる。
+  //   4桁未満だけは admin.js の形式ゲートで確実に落ちるので、
+  //   従来と同じ表示をローカルで返し、無駄な往復とレート枠の消費を避ける。
+  if(pinInput.length<4){
+    pinInput="";pinError=true;pinErrorMsg="";render();
+    if(pinTimer)clearTimeout(pinTimer);
+    pinTimer=setTimeout(function(){pinError=false;pinErrorMsg="";render();},1800);
     return;
   }
   var inputStr=pinInput;
-  var match=false;
-  if(ADMIN_PIN_HASH){
-    match=((await hashPin(inputStr))===ADMIN_PIN_HASH);
-  } else if(ADMIN_PIN){
-    // 旧形式（平文）: 照合後にハッシュへ自動移行
-    match=(inputStr===ADMIN_PIN);
-    if(match){
-      var h=await hashPin(inputStr);
-      ADMIN_PIN_HASH=h;ADMIN_PIN="";
-      authFetch(FB_URL+"/config/adminPinHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)}).catch(function(e){console.error("[pinOk] PIN hash migration save error:", e);});
-      authFetch(FB_URL+"/config/adminPin.json",{method:"DELETE"}).catch(function(e){console.error("[pinOk] old PIN delete error:", e);});
-    }
+  // ★ render() も try の内側に入れる。ここで例外が出ると pinChecking が true のまま残り、
+  //   pinTap も pinOk も即 return するため PIN 画面がリロードまで無反応になる。
+  // ★ 管理者PIN照合はサーバ応答を待つ唯一の経路。
+  //   コールドスタート＋レート遅延で既定5秒を超え得るため、この経路だけ余裕を持たせる。
+  var res;
+  try{
+    pinChecking=true;pinError=false;pinErrorMsg="";
+    if(pinTimer)clearTimeout(pinTimer);
+    render();
+    res=await establishSessionEx("admin",{pin:inputStr},12000);
+  }finally{
+    // ★ 例外時も必ず解除する。true のまま残ると pinTap も pinOk も即 return し、
+    //   PIN画面がリロードするまで無反応になる。
+    pinChecking=false;
   }
-  if(match){isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;render();initFcmForAdmin();}
-  else{pinError=true;pinInput="";render();if(pinTimer)clearTimeout(pinTimer);pinTimer=setTimeout(function(){pinError=false;render();},1800);}
+  if(res&&res.ok){
+    isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;pinErrorMsg="";
+    render();initFcmForAdmin();
+    return;
+  }
+  pinInput="";pinError=true;
+  // 「PINが違う」と「サーバへ届かない」を区別する。同じ文言にすると復旧手段を誤る。
+  var hold=1800;
+  var st=res&&res.status;
+  if(st===401||st===403){pinErrorMsg="PINが違います";}
+  else if(st===429){pinErrorMsg="試行が多すぎます。しばらく待って再度お試しください";hold=3000;}
+  else if(st===503){pinErrorMsg="認証の準備が完了していません。管理者にお問い合わせください";hold=3000;}
+  else{pinErrorMsg="認証サーバに接続できません。通信状態を確認してください";hold=3000;}
+  render();
+  pinTimer=setTimeout(function(){pinError=false;pinErrorMsg="";render();},hold);
 }
 
 function saveFacilities(){
@@ -7887,7 +8199,7 @@ setInterval(function(){
 // ===== Firebase 起動時データ取得（個別パス・root bulk read 廃止 - Phase 2-A）=====
 async function initFirebase() {
   try {
-    // 認証トークンを1回取得してキャッシュ（Promise.all内の14並列fetchが個別にsignInして
+    // 認証トークンを1回取得してキャッシュ（Promise.all内の19並列fetchが個別にsignInして
     // Firebase匿名authレート制限に当たるのを防ぐ）
     await getAuthToken();
 
@@ -7915,6 +8227,7 @@ async function initFirebase() {
           VALID_TOKENS=buildValidTokens();
           masterLocs=masterFacilities.map(function(f){return f.name;});
         }
+        elevateShareSession("sandbox",staffDemoParam);
         screen="staffDemoPick";
       }
       staffDemoPending=false;
@@ -7937,8 +8250,10 @@ async function initFirebase() {
       authFetch(FB_URL+"/master/locations.json")
         .then(function(r){if(!r.ok)throw new Error("locations HTTP "+r.status);return r.json();})
         .then(function(j){facilitiesLoaded=true;return j;}).catch(function(){return null;}),
-      fetchJson(FB_URL+"/config/adminPinHash.json"),
-      fetchJson(FB_URL+"/config/adminPin.json"),
+      // ★ 管理者PINは読み込まない。照合はサーバのみで、クライアントは判定材料を持たない。
+      //   （Promise.all の添字を保つためプレースホルダを置く）
+      Promise.resolve(null),
+      Promise.resolve(null),
       fetchJson(FB_URL+"/config/adminTokenHash.json"),
       fetchJson(FB_URL+"/config/adminToken.json"),
       (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
@@ -7954,7 +8269,7 @@ async function initFirebase() {
     ]);
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
-    var fbAdminPinHash=results[6],fbAdminPin=results[7];
+    // results[6] / results[7] は管理者PIN用の未使用プレースホルダ（読み込みを廃止）
     var fbAdminTokenHash=results[8],fbAdminToken=results[9];
     var fbViewerTokenData=results[10],fbDemoTokenRec=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
@@ -7978,18 +8293,17 @@ async function initFirebase() {
       tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
       facilityName=VALID_TOKENS[effectiveToken]||"";
       if(urlToken&&tokenValid&&!isAllToken){localStorage.setItem("facilityToken",urlToken);}
-    } else if(writePolicy==="full"&&masterFacilities.length){
+    } else if(writePolicy==="full"&&facilitiesLoaded&&masterFacilities.length){
+      // ★ facilitiesLoaded を条件に含める。取得が「成功して不在」だったときだけ書き戻す。
+      //   取得が拒否（403）や通信失敗で null になった場合に書き戻すと、
+      //   ローカルキャッシュの古い施設マスタで本番を上書きしてしまう。
       // 既定値の自動書き込みは通常モードのみ（デモ／テスト画面で起動直後に遮断通知が出るのを防ぐ）
       // ★ masterFacilities が空のときは絶対に書き込まない。
       //   fetchJson は通信失敗も null を返すため（"ノード不在" と区別できない）、
       //   空配列を PUT すると RTDB 上で null 扱いとなり本番の施設マスタを削除してしまう。
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
-    // 管理者PIN: ハッシュ優先、旧平文フォールバック（文字列チェックでPermission deniedオブジェクトを除外）
-    if(typeof fbAdminPinHash==="string"&&fbAdminPinHash){ADMIN_PIN_HASH=fbAdminPinHash;ADMIN_PIN="";}
-    else if(typeof fbAdminPin==="string"&&fbAdminPin){ADMIN_PIN=fbAdminPin;}
-    if(!ADMIN_PIN_HASH&&!ADMIN_PIN){console.warn("[initFirebase] admin PIN not loaded. hash=",(fbAdminPinHash?"(set)":"(none)"),"legacy=",(fbAdminPin?"(set)":"(none)"));}
-    else{console.log("[initFirebase] admin PIN loaded OK (hash="+(!!ADMIN_PIN_HASH)+")");}
+    // 管理者PINはクライアントへ読み込まない（照合はサーバのみ）。
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
@@ -8020,7 +8334,7 @@ async function initFirebase() {
       var authOk=false;
       if(ADMIN_TOKEN_HASH){authOk=((await hashPin(adminParam||""))===ADMIN_TOKEN_HASH);}
       else if(ADMIN_TOKEN){authOk=(adminParam===ADMIN_TOKEN);}
-      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();}
+      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();elevateAdminSession({adminToken:adminParam||""});}
       else{adminTokenValid=false;adminTokenInvalid=true;}
     }
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
@@ -8045,7 +8359,7 @@ async function initFirebase() {
           writePolicy="readonlyWithAllowList";
         }
       }
-      if(viewerMode)uiMode="viewer";
+      if(viewerMode){uiMode="viewer";elevateShareSession("viewer",viewerParam);}
       viewerPending=false;
     }
     // 管理者デモ認証（demoTokens/{token} 方式）。
@@ -8060,6 +8374,7 @@ async function initFirebase() {
         else{
           demoTokenRec=dRec;demoTokenKey=demoParam;demoTokenExpiresAt=String(dRec.expiresAt);
           demoMode=true;screen="admin";adminTab="records";
+          elevateShareSession("demo",demoParam);
         }
       } else {
         // 移行期間フォールバック：旧 config/demoAccess（デモURLでアクセスされた場合のみ読む）
@@ -8377,7 +8692,7 @@ document.addEventListener("keydown",function(e){
   if(k>="0"&&k<="9"){e.preventDefault();pinTap(parseInt(k,10));}        // 数字キー（テンキー含む）→入力
   else if(k==="Backspace"){e.preventDefault();pinTap("C");}             // 1文字削除
   else if(k==="Enter"){e.preventDefault();pinOk();}                     // ログイン実行
-  else if(k==="Escape"){e.preventDefault();pinInput="";pinError=false;render();} // 入力クリア
+  else if(k==="Escape"){e.preventDefault();if(pinChecking)return;pinInput="";pinError=false;pinErrorMsg="";render();} // 入力クリア
 });
 
 // まず即座にレンダリング（Firebaseを待たない）
