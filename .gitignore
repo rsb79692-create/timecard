@@ -20,5 +20,17 @@
 .env
 .env.*
 
+# --- サービスアカウント秘密鍵（絶対に commit しない）---
+# Firebase の RTDB Rules を全面迂回する最上位資格情報。リポジトリ内に置かないこと。
+*firebase-adminsdk*.json
+*-adminsdk-*.json
+serviceAccount*.json
+service-account*.json
+*.pem
+*.p12
+*.key
+
 # --- 依存パッケージ（Vercel に package.json を導入する場合に備える）---
 /node_modules/
+
+.vercel

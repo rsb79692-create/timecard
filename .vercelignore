@@ -1,0 +1,33 @@
+# Vercel へアップロードしないもの
+#
+# ★ ローカルから `vercel --prod` を実行した場合、既定ではカレントディレクトリ配下が
+#   まるごとアップロードされる。git 管理外のファイルも対象になるため、
+#   秘密鍵は .gitignore とは別にここでも必ず除外する（多層防御）。
+#   通常は GitHub 連携の自動デプロイなので git 管理下のみが対象になる。
+#
+# ⚠ 本番の配信は GitHub Pages のまま。ここで除外しても打刻URL・QRコードには影響しない。
+#   将来 Vercel へ配信を寄せる場合に備え、manual.html / docs/ は除外しない
+#   （QR コードのリンク先のため）。
+
+# --- サービスアカウント秘密鍵（絶対にアップロードしない）---
+*firebase-adminsdk*.json
+*-adminsdk-*.json
+serviceAccount*.json
+service-account*.json
+*.pem
+*.p12
+*.key
+
+# --- 環境変数 ---
+.env
+.env.*
+
+# --- 個人情報を含む業務データ（配信不要かつ機微）---
+勤務日数管理.xlsx
+打刻修正申請マニュアル_スタッフ向け.pdf
+
+# --- 配信に不要な開発用ファイル ---
+.git
+.github
+.claude
+scripts
