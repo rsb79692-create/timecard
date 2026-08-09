@@ -209,6 +209,29 @@ function elevateStaffSession(name,pin){
 }
 
 /**
+ * 管理系の同期APIが「セッション失効」で失敗したことを利用者へ知らせる。
+ *
+ * ★ 無言で握り潰してはならない。管理者PIN・管理者URLを変更すると、別端末や
+ *   別タブで開いたままの管理画面は失効する。しかし RTDB Rules は /honomi を
+ *   匿名に開放しているため、その画面は今までどおり操作でき、失効の手がかりが無い。
+ *   そこでスタッフPINを変更すると、tc5_pins（従来側）だけが更新され
+ *   /authz 側は 403 で更新されず、当該スタッフがサーバ認証を通らなくなる。
+ *   ＝この一連の修正が排除しようとしている「片方だけ更新される」状態そのもの。
+ */
+var _sessionRevokedNotified=false;
+function notifyIfSessionRevoked(res,what){
+  if(!(res&&res.status===403&&res.data&&res.data.error==="session_revoked"))return false;
+  // 連続操作で何度も出さない（1回の失効につき1回だけ知らせる）
+  if(_sessionRevokedNotified)return true;
+  _sessionRevokedNotified=true;
+  showAlert("この管理画面のセッションは無効化されています。\n"
+    +"（管理者PINまたは管理者URLが変更されたため）\n\n"
+    +what+"は保存されていません。\n"
+    +"新しい管理者PIN、または新しい管理者URLで入り直してから、もう一度操作してください。");
+  return true;
+}
+
+/**
  * 新認証側（/authz）へPINを反映する。
  * ★ 現行の tc5_pins 保存は従来どおり行ったうえで即時同期するため、
  *   PIN変更・新規登録の直後から新PINで打刻できる。
@@ -221,7 +244,7 @@ function syncPinToAuthz(name,pin,currentPin){
       idToken:tok,staffName:name,pin:pin,
       currentPin:currentPin||"",deviceId:_authDeviceId
     });
-    if(!res.ok)console.warn("[TC] pin sync failed",res.status);
+    if(!res.ok){console.warn("[TC] pin sync failed",res.status);notifyIfSessionRevoked(res,"PINの同期");}
     return res.ok;
   })().catch(function(){return false;});
 }
@@ -237,7 +260,7 @@ function renamePinInAuthz(oldName,newName){
     if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
     var tok=await getAuthToken().catch(function(){return "";});
     var res=await callAuthApi("pin-set",{idToken:tok,staffName:oldName,renameTo:newName,deviceId:_authDeviceId});
-    if(!res.ok)console.warn("[TC] pin rename failed",res.status);
+    if(!res.ok){console.warn("[TC] pin rename failed",res.status);notifyIfSessionRevoked(res,"登録名の付け替え");}
     return res.ok;
   })().catch(function(){return false;});
 }
@@ -1277,6 +1300,7 @@ const TYPE_LABEL={clockIn:"出勤",clockOut:"退勤",breakStart:"休憩開始",b
 //   認証判定に使うと、オフライン全数探索で管理者権限を突破されるため。
 var pinChecking=false;   // 管理者PIN照合中
 var _adminPinSaving=false; // 管理者PIN変更の送信中（DOM 再生成に耐える二重送信ガード）
+var _adminTokenSaving=false; // 管理者URLトークン変更の送信中（同上）
 var pinErrorMsg="";      // 認証失敗と通信障害を区別して表示する
 // 施設マスタの正本は Firebase の master/locations。
 // 実施設名・施設トークンをクライアント配布物へ埋め込まないため、既定値は空とする。
@@ -1314,12 +1338,18 @@ var viewerExpired=false;
 var viewerIsDemoIssued=false; // デモ画面から発行された閲覧用URLか（true なら完全読み取り専用）
 var viewerTokensList=null; // 管理者用トークン一覧（null=未ロード）
 var viewerTokensLoading=false;
-var ADMIN_TOKEN=""; // Firebase config/adminToken（旧形式・移行用フォールバック）
-var ADMIN_TOKEN_HASH=""; // Firebase config/adminTokenHash（SHA-256ハッシュ、推奨）
+var ADMIN_TOKEN=""; // Firebase config/adminToken（旧形式・移行用フォールバック。表示のみ）
+// ★ 管理者URLトークンの「設定済み表示」用のフラグ。認証には一切使わない。
+//   以前は公開領域の config/adminTokenHash とクライアント側で突き合わせていたが、
+//   あれは非ソルトSHA-256で誰でも読めるため、総当たりで平文トークンへ戻せてしまう。
+//   （復元されたトークンはサーバの /api/auth/admin にもそのまま通る。）
+//   判定はサーバだけが行い、クライアントは判定材料を一切持たない。
+var ADMIN_TOKEN_SET=false;
 var adminParam=new URLSearchParams(location.search).get("admin");
 var adminUrlUsed=adminParam!==null;
 var adminTokenValid=false;
 var adminTokenInvalid=false;
+var adminTokenErrMsg=""; // 管理者URL認証の失敗理由（トークン不正／サーバ到達不可 等）
 var isAdminAuthenticated=false; // 管理者認証済みフラグ
 var demoParam=new URLSearchParams(location.search).get("demo");
 var demoUrlUsed=demoParam!==null;
@@ -2270,12 +2300,15 @@ function _renderInner(){
       +'</div>';
     return;
   }
-  // ── 管理者トークン不正 ──
+  // ── 管理者トークン不正 / 認証サーバへ到達できない ──
+  // ★ 「トークンが違う」と「サーバへ届かない」を必ず区別する。
+  //   一律に「トークンが正しくありません」と出すと、管理者は自分のURLが
+  //   壊れたと誤解し、正しい復旧手段（管理者PINでの入場）に辿り着けない。
   if(adminTokenInvalid){
     app.innerHTML='<div class="center" style="padding-top:80px;">'
       +'<div style="font-size:3.5rem;margin-bottom:16px;">🔒</div>'
       +'<div style="font-size:1.2rem;font-weight:900;color:#dc2626;margin-bottom:10px;">アクセスできません</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">管理者トークンが正しくありません</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">'+esc(adminTokenErrMsg||"管理者トークンが正しくありません")+'</div>'
       +'</div>';
     return;
   }
@@ -4093,10 +4126,10 @@ function _renderInner(){
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
-        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_HASH?"#1e40af":(ADMIN_TOKEN?"#475569":"#b91c1c"))+';font-family:monospace;">'+(ADMIN_TOKEN_HASH?"設定済み（ハッシュ化済み）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_HASH?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+esc(maskToken(ADMIN_TOKEN))+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_SET?"#1e40af":(ADMIN_TOKEN?"#475569":"#b91c1c"))+';font-family:monospace;">'+(ADMIN_TOKEN_SET?"設定済み（サーバ保管）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_SET?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+esc(maskToken(ADMIN_TOKEN))+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
         +'<div style="display:flex;gap:8px;">'
-        +'<input id="new-admin-token" type="text" placeholder="新しいトークン（4文字以上）" style="flex:1;">'
+        +'<input id="new-admin-token" type="text" maxlength="128" placeholder="新しいトークン（英数字・_・- で4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
         +'</div></div>'
         )
@@ -6159,9 +6192,15 @@ function _renderInner(){
         var r=await callAuthApi("admin-pin-set",{idToken:tok,pin:v},12000);
         if(r.ok){
           var el=document.getElementById("new-admin-pin");if(el)el.value="";
-          showAlert("PINを変更しました");
+          // ★ サーバは変更時刻より前の管理者セッションを失効させる（旧PINで入った
+          //   第三者を締め出すため）。自分自身も対象になるので新PINで張り直す。
+          var _re=await establishSession("admin",{pin:v},12000);
+          showAlert(_re?"PINを変更しました\n以前のPINで開いていた管理画面は無効になります。"
+                       :"PINを変更しました\n新しいPINで入り直してください。");
         } else if(r.status===403){
-          showAlert("管理者として認証されていないため変更できません。\n管理者PINで入り直してから操作してください");
+          showAlert(r.data&&r.data.error==="session_revoked"
+            ?"この管理画面のセッションは無効化されています。\n新しい管理者URLまたは管理者PINで入り直してください"
+            :"管理者として認証されていないため変更できません。\n管理者PINで入り直してから操作してください");
         } else if(r.status===503){
           showAlert("認証の準備が完了していないため変更できません");
         } else {
@@ -6172,19 +6211,54 @@ function _renderInner(){
       })().catch(function(){_adminPinSaving=false;changePinBtn.disabled=false;});
     };
     // 管理者トークン変更
+    // ★ 保存はサーバ（/api/auth/admin-token-set）が行う。クライアントから
+    //   config/adminTokenHash へ直接書いてはならない。直接書くと /authz/adminTokens が
+    //   更新されず、変更後の管理者URLがサーバ認証（/api/auth/admin）を通らなくなり、
+    //   旧トークンも /authz 側に有効なまま残る。
+    //   サーバは両方を1回のマルチパス更新で書き換えるため、片方だけ変わることがない。
     var changeTokenBtn=document.getElementById("btn-change-token");
     if(changeTokenBtn)changeTokenBtn.onclick=function(){
       var v=(document.getElementById("new-admin-token")?.value||"").trim();
-      if(v.length<4){showAlert("トークンは4文字以上で入力してください");return;}
-      hashPin(v).then(function(h){
-        ADMIN_TOKEN="";ADMIN_TOKEN_HASH=h;
-        authFetch(FB_URL+"/config/adminTokenHash.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(h)})
-          .then(function(){return authFetch(FB_URL+"/config/adminToken.json",{method:"DELETE"});})
-          .then(function(){showAlert("管理者トークンを更新しました（ハッシュ化済み）");})
-          .catch(function(){showAlert("Firebase保存に失敗しました");});
-        document.getElementById("new-admin-token").value="";
+      // ★ URLセーフな文字に限る。"+" や "&" "#" "%" を含むトークンは ?admin= の
+      //   復号時に別の文字列になり、保存直後から一致しなくなる（自己ロックアウト）。
+      //   サーバ側 admin-token-set.js の SAFE_TOKEN と同じ条件。
+      if(!/^[A-Za-z0-9_-]{4,128}$/.test(v)){
+        showAlert("トークンは英数字と _ - のみ、4〜128文字で入力してください");return;
+      }
+      // 管理者PIN変更と同じ二重送信ガード（10秒ポーリングの render() で
+      // ボタンが再生成されると disabled が解除されるため、フラグで守る）。
+      if(_adminTokenSaving)return;
+      _adminTokenSaving=true;changeTokenBtn.disabled=true;
+      (async function(){
+        // ?admin= で入った直後は管理者ロールの確立が未完了のことがある。
+        if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+        var tok=await getAuthToken().catch(function(){return "";});
+        var r=await callAuthApi("admin-token-set",{idToken:tok,adminToken:v},12000);
+        if(r.ok){
+          // ★ 成功したときだけローカル状態を更新する。先に更新すると、保存失敗時に
+          //   画面上は「変更済み」に見えて実際は旧トークンのまま、という誤解が起きる。
+          ADMIN_TOKEN="";ADMIN_TOKEN_SET=true;
+          var el=document.getElementById("new-admin-token");if(el)el.value="";
+          // ★ サーバは変更時刻より前の管理者セッションを失効させる（漏えいした旧URLで
+          //   入った第三者を締め出すため）。いま操作している自分自身も対象になるので、
+          //   新トークンで即座に張り直して自己ロックアウトを避ける。
+          var _re2=await establishSession("admin",{adminToken:v},12000);
+          showAlert(_re2?"管理者トークンを更新しました（サーバ保管）\n以前のトークンのURLは使えなくなります。"
+                        :"管理者トークンを更新しました（サーバ保管）\n新しいURLまたは管理者PINで入り直してください。");
+        } else if(r.status===403){
+          showAlert(r.data&&r.data.error==="session_revoked"
+            ?"この管理画面のセッションは無効化されています。\n新しい管理者URLまたは管理者PINで入り直してください"
+            :"管理者として認証されていないため変更できません。\n管理者PINで入り直してから操作してください");
+        } else if(r.status===503){
+          showAlert("認証の準備が完了していないため変更できません");
+        } else if(r.status===400){
+          showAlert("トークンの形式が正しくありません（英数字と _ - のみ、4〜128文字）");
+        } else {
+          showAlert("トークンの変更に失敗しました。通信状態を確認して再度お試しください");
+        }
+        _adminTokenSaving=false;changeTokenBtn.disabled=false;
         render();
-      });
+      })().catch(function(){_adminTokenSaving=false;changeTokenBtn.disabled=false;});
     };
     // 閲覧用トークン CRUD
     var issueVtBtn=document.getElementById("btn-vt-issue");
@@ -8254,7 +8328,9 @@ async function initFirebase() {
       //   （Promise.all の添字を保つためプレースホルダを置く）
       Promise.resolve(null),
       Promise.resolve(null),
-      fetchJson(FB_URL+"/config/adminTokenHash.json"),
+      // ★ adminTokenHash は「設定済みか」の表示にしか使わない（認証には使わない）。
+      //   移行期は削除前後どちらの状態でも正しく表示できるよう、真偽値フラグと併読する。
+      Promise.all([fetchJson(FB_URL+"/config/adminTokenSet.json"),fetchJson(FB_URL+"/config/adminTokenHash.json")]),
       fetchJson(FB_URL+"/config/adminToken.json"),
       (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
       // デモトークンは「トークンをキーに単一ノードを引く」方式。デモURL以外では取得しない。
@@ -8270,7 +8346,7 @@ async function initFirebase() {
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
     // results[6] / results[7] は管理者PIN用の未使用プレースホルダ（読み込みを廃止）
-    var fbAdminTokenHash=results[8],fbAdminToken=results[9];
+    var _fbAdminTokenState=results[8]||[],fbAdminToken=results[9];
     var fbViewerTokenData=results[10],fbDemoTokenRec=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
     var fbMonthlyImport=results[14];
@@ -8305,7 +8381,8 @@ async function initFirebase() {
     }
     // 管理者PINはクライアントへ読み込まない（照合はサーバのみ）。
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
-    if(fbAdminTokenHash){ADMIN_TOKEN_HASH=fbAdminTokenHash;ADMIN_TOKEN="";}
+    // 表示専用。config/adminTokenSet が真、または旧 config/adminTokenHash が残っていれば「設定済み」。
+    if(_fbAdminTokenState[0]===true||_fbAdminTokenState[1]){ADMIN_TOKEN_SET=true;ADMIN_TOKEN="";}
     else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
     // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
     if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
@@ -8329,13 +8406,30 @@ async function initFirebase() {
         ?Object.values(fbPaidLeaveBalances):fbPaidLeaveBalances;
       paidLeaveBalances=(_plbArr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
     }
-    // 管理者URLトークン認証（hash比較優先、旧平文フォールバック）
+    // 管理者URLトークン認証。
+    // ★ 照合はサーバ（/api/auth/admin）だけで行う。
+    //   以前は公開領域の config/adminTokenHash とクライアント側で突き合わせていたが、
+    //   あのハッシュは非ソルトSHA-256で誰でも読めるため、総当たりで平文へ戻せる。
+    //   復元されたトークンはサーバ認証にもそのまま通るため、公開領域に照合材料を置かない。
+    // ★ 管理者PIN認証と同じく、この経路だけはサーバ応答を待つ（打刻経路は従来どおり非ブロッキング）。
     if(adminUrlUsed){
-      var authOk=false;
-      if(ADMIN_TOKEN_HASH){authOk=((await hashPin(adminParam||""))===ADMIN_TOKEN_HASH);}
-      else if(ADMIN_TOKEN){authOk=(adminParam===ADMIN_TOKEN);}
-      if(authOk){adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;screen="admin";adminTab="records";initFcmForAdmin();elevateAdminSession({adminToken:adminParam||""});}
-      else{adminTokenValid=false;adminTokenInvalid=true;}
+      var _ar=await establishSessionEx("admin",{adminToken:adminParam||""},12000);
+      if(_ar&&_ar.ok){
+        adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;
+        screen="admin";adminTab="records";initFcmForAdmin();
+        // establishSessionEx が既に admin ロールを確立済み。
+        // 後続の管理系API（PIN変更・トークン変更）が待てるようにしておく。
+        _adminElevatePromise=Promise.resolve(true);
+      } else {
+        adminTokenValid=false;adminTokenInvalid=true;
+        // ★ 失敗理由を区別する。通信障害・準備中・過負荷を「トークンが違う」と
+        //   表示すると、管理者が復旧不能と誤認して不要な再設定を始めてしまう。
+        var _as=_ar&&_ar.status;
+        adminTokenErrMsg=(_as===401||_as===403)?"管理者トークンが正しくありません"
+          :(_as===429)?"試行が多すぎます。しばらく待ってから再度お試しください"
+          :(_as===503)?"認証の準備が完了していません。管理者にお問い合わせください"
+          :"認証サーバに接続できません。通信状態を確認して再読み込みするか、管理者PINでお入りください";
+      }
     }
     // 閲覧専用トークン認証（viewerTokens/{token} 方式）
     if(viewerPending){

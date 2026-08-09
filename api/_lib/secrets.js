@@ -168,6 +168,41 @@ async function staffNameExists(name) {
   return set.has(key);
 }
 
+// ===== 管理者セッションの失効 =====
+
+/**
+ * 管理者URLトークンを変更しても、それ以前に発行された admin セッションは
+ * Firebase の refresh token を持っている限り admin ロールのIDトークンを取り直せる。
+ * ＝「資格情報を変えたのにアクセスを止められない」状態になる。
+ *
+ * そこで rotate 時刻（/authz/adminMinAt, UNIX秒）を置き、
+ * それより前に発行された Custom Token（claims.at）を管理系APIから締め出す。
+ *
+ * ★ RTDB Rules は /honomi に auth != null しか課しておらず、匿名でも業務データを
+ *   読み書きできる。したがって失効させる実益があるのは
+ *   「管理者ロールでしかできない操作」＝以下のすべてである。
+ *     - 管理者PIN変更     （admin-pin-set）
+ *     - 管理者トークン変更 （admin-token-set）
+ *     - 任意スタッフのPIN上書き・改名（pin-set の isAdmin 経路。
+ *       現PIN照合もレート制限も通らないため、被害はむしろこちらが大きい）
+ *   ★ r:"a" を特権として扱うエンドポイントを新設したら、必ずここを通すこと。
+ *
+ * ★ adminMinAt が未設定なら「まだ一度も rotate していない」＝失効対象なし。
+ *   欠落をフェイルクローズにすると全管理者が即座に操作不能になるため、0 として扱う。
+ *   （dbGet 自体が失敗した場合は throw し、呼び出し元で 500 になる＝フェイルクローズ）
+ */
+// サーバインスタンス間の時計ずれの許容。rotate 直後に張り直した自分自身の
+// セッションが、数秒の逆行で弾かれるのを防ぐ。攻撃者の旧セッションは通常
+// 数時間〜数日前に発行されているため、この程度の許容で防御力は落ちない。
+const ADMIN_AT_SKEW_SEC = 30;
+
+async function adminSessionValid(claims) {
+  const min = await dbGet(AUTHZ + "/adminMinAt");
+  if (typeof min !== "number" || !(min > 0)) return true;
+  const at = claims && typeof claims.at === "number" ? claims.at : 0;
+  return at + ADMIN_AT_SKEW_SEC >= min;
+}
+
 // ===== plain の暗号化（管理者のPIN確認機能を維持するため） =====
 
 function encKey() {
@@ -325,4 +360,5 @@ module.exports = {
   subjectKey,
   authzReady,
   staffNameExists,
+  adminSessionValid,
 };

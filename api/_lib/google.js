@@ -216,6 +216,73 @@ const dbGet = (path) => dbRequest(path, "GET");
 const dbPut = (path, value) => dbRequest(path, "PUT", value);
 const dbPatch = (path, value) => dbRequest(path, "PATCH", value);
 
+/**
+ * FIREBASE_DATABASE_URL のパス部分（例 "honomi"）を、前後のスラッシュ無しで返す。
+ * ★ "honomi" をコードへ直書きしない。環境変数を正とする。
+ *   dbUrlBase() 経由なので、パスを含まない誤設定はここでも throw する。
+ */
+function dataPathPrefix() {
+  return new URL(dbUrlBase()).pathname.replace(/^\/+|\/+$/g, "");
+}
+
+// ルート直下へのマルチパス更新で許可するキーの形。
+// ★ 空文字・先頭スラッシュ・".." などを弾く。ルートへの PATCH は
+//   キーが "" だとデータベース全体を置換しうるため、ここは必ず閉じておく。
+// ★ さらに「2セグメント以上」を必須にする。1セグメント（"authz" / "honomi"）を許すと、
+//   マルチパス更新は各パスを置換するため、サブツリー全体（全スタッフPIN・全打刻データ）を
+//   1回の呼び出しで消せてしまう。現在の呼び出し元は固定キーしか渡さないが、
+//   将来の呼び出し追加でこの足元の穴を踏まないよう、関数側で閉じておく。
+const ROOT_PATH_KEY = /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)+$/;
+
+/**
+ * マルチパス更新で書き込んでよいトップレベル。
+ * ★ dbPatchRoot は dbRequest のルーティング（authz/ratelimit はルート、他は /honomi 配下）を
+ *   通らないため、呼び出し側が "tc5_records" のつもりで渡すと、ルート直下という
+ *   まったく別の場所（Rules 未定義領域）へ静かに書かれる。許可リストで防ぐ。
+ */
+function allowedRootTops() {
+  return ["authz", "ratelimit", dataPathPrefix()];
+}
+
+/**
+ * ルート直下での原子的なマルチパス更新。キーは「ルートからの相対パス」。
+ *
+ * ★ /authz（認証マテリアル）と /honomi（業務データ）は兄弟なので、
+ *   両方を書き換える操作を2回のリクエストに分けると、片方だけ成功した時点で
+ *   「config と /authz が食い違う」状態が残る（管理者URLがどちらか一方でしか通らなくなる）。
+ *   RTDB のマルチパス更新は全パスが一括で適用されるため、その不整合が原理的に起きない。
+ *
+ * 各パスの値は「マージではなく置換」。値 null はそのパスの削除。
+ */
+async function dbPatchRoot(map) {
+  const keys = Object.keys(map || {});
+  if (!keys.length) throw new Error("empty multi-path update");
+  const tops = allowedRootTops();
+  for (const k of keys) {
+    if (!ROOT_PATH_KEY.test(k)) throw new Error("unsafe multi-path key");
+    if (tops.indexOf(k.split("/")[0]) < 0) throw new Error("multi-path key outside allowed roots");
+  }
+  const token = await getDbAccessToken();
+  const bodyStr = JSON.stringify(map);
+  const res = await httpRequest(
+    dbRootBase() + "/.json",
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Content-Type": "application/json",
+        "Content-Length": Buffer.byteLength(bodyStr),
+      },
+    },
+    bodyStr
+  );
+  if (res.status < 200 || res.status >= 300) {
+    // 値は残さない（パス種別のみ）
+    throw new Error("rtdb multi-path update failed: HTTP " + res.status);
+  }
+  return res.body;
+}
+
 /** RTDB のサーバー値インクリメント。同時実行でも失われない原子的カウンタ。 */
 async function dbIncrement(path, delta) {
   return dbPatch(path.replace(/\/[^/]+$/, ""), {
@@ -311,5 +378,7 @@ module.exports = {
   dbPut,
   dbPatch,
   dbIncrement,
+  dbPatchRoot,
+  dataPathPrefix,
   httpRequest,
 };

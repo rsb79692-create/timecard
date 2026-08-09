@@ -76,6 +76,16 @@ module.exports = async function handler(req, res) {
     }
     const isAdmin = claims.r === "a";
 
+    // ★ 管理者ロールを特権として使う経路は、すべて失効検証を通す。
+    //   この API の管理者経路は「任意スタッフのPIN上書き」と「改名」を
+    //   現PIN照合なし・レート制限なしで行えるため、失効済みセッションに残すと
+    //   管理者URL/PIN を変更しても全スタッフのPINを奪える。
+    //   非管理者経路（現PIN照合＋レート制限）はここでは止めない。
+    if (isAdmin && !(await S.adminSessionValid(claims))) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "session_revoked");
+    }
+
     // bootstrap 未完了なら一切書かない（/authz を汚さない・占有もさせない）
     if (!(await S.authzReady())) {
       await H.withMinDuration(startedAt, MIN_MS);

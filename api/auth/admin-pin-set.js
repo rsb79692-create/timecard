@@ -55,7 +55,25 @@ module.exports = async function handler(req, res) {
       return H.fail(res, 503, "not_ready");
     }
 
-    await G.dbPut(S.AUTHZ + "/adminPin", S.makePinRecord(pin));
+    // ★ 管理者トークンの rotate より前に発行されたセッションを締め出す。
+    //   これが無いと、漏えいした旧管理者URLで入った第三者が、URL変更後も
+    //   管理者PINを書き換えて正規管理者を締め出せる。
+    if (!(await S.adminSessionValid(claims))) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "session_revoked");
+    }
+
+    // ★ PIN変更も rotate イベントとして扱い、これ以前に発行された管理者セッションを失効させる。
+    //   これが無いと、旧PINで入った第三者のセッションが生き残り、
+    //   変更した直後にPINを奪い返せる（＝漏えい時にPIN変更が対策にならない）。
+    //   /authz/adminPin と /authz/adminMinAt を1回のマルチパス更新で書き、
+    //   「PINは変わったが失効していない」中間状態を作らない。
+    //   ★ 操作中の管理者自身も失効対象になるため、クライアントは成功後に
+    //     新しいPINでセッションを張り直す（自己ロックアウト回避）。
+    await G.dbPatchRoot({
+      "authz/adminPin": S.makePinRecord(pin),
+      "authz/adminMinAt": Math.floor(Date.now() / 1000),
+    });
     await H.withMinDuration(startedAt, MIN_MS);
     return res.status(200).json({ ok: true });
   } catch (e) {
