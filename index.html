@@ -1037,10 +1037,19 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
   td.sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
   th.sticky-name-col{left:auto!important;border-right:none!important;}
   /* スタッフ一覧：スマホでは 拠点／雇用形態／権限・状態 の3列を隠して横スクロール量を減らす。
-     絞り込みは tr の data-loc / data-emptype を見るため、列を隠しても影響しない（表示のみの制御）。
-     残る列は 社員番号90+氏名200+PIN100+操作100=490px のため min-width も合わせて下げる。 */
+     絞り込みは tr の data-loc / data-emptype を見るため、列を隠しても影響しない（表示のみの制御）。 */
   .hrm-col-opt{display:none!important;}
-  .hrm-table{min-width:490px!important;}
+  /* 残る4列を実測した必要幅まで詰める（375px幅で計測。文字サイズは変更しない）。
+     左右paddingを14px→8pxにし、幅は 社員番号72（見出し"社員番号"52px＋16）/
+     氏名120（7文字の氏名98pxが切れない下限116pxに余裕4px。超過分は既存の省略記号で処理）/
+     PIN143（2ボタン127px＋16）/ 操作112（2ボタン96px＋16）＝計447px。
+     ※PIN・操作は元の100px指定では中身がはみ出して重なっていたため、切れない幅へ広げている。 */
+  .hrm-table th,.hrm-table td{padding-left:8px!important;padding-right:8px!important;}
+  .hrm-table{min-width:447px!important;}
+  th.hrm-c-id{width:72px!important;}
+  th.hrm-c-name{width:120px!important;}
+  th.hrm-c-pin{width:143px!important;min-width:143px!important;}
+  th.hrm-c-ops{width:112px!important;}
 }
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
 /* デモ／スタッフテスト画面の固定バナー */
@@ -4088,13 +4097,13 @@ function _renderInner(){
         +'<div style="overflow-x:auto;">'
         +'<table class="hrm-table" style="width:100%;border-collapse:collapse;min-width:960px;table-layout:fixed;">'
         +'<thead><tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;white-space:nowrap;width:90px;">社員番号</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:200px;">氏名</th>'
+        +'<th class="hrm-c-id" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;white-space:nowrap;width:90px;">社員番号</th>'
+        +'<th class="hrm-c-name" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:200px;">氏名</th>'
         +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:160px;">拠点</th>'
         +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:130px;">雇用形態</th>'
         +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:180px;">権限 / 状態</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;min-width:100px;width:100px;">PIN</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:100px;">操作</th>'
+        +'<th class="hrm-c-pin" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;min-width:100px;width:100px;">PIN</th>'
+        +'<th class="hrm-c-ops" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:100px;">操作</th>'
         +'</tr></thead>'
         +'<tbody id="hrm-tbody">'+hrmRows+'</tbody>'
         +'</table></div></div>'
