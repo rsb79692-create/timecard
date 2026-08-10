@@ -5326,10 +5326,10 @@ function _renderInner(){
         });
         d.plan=plan;
       });
-      // スタイル（月別出勤日数タブと同系統）
-      var _lpTh='padding:13px 12px;font-weight:700;font-size:15px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
-      var _lpTd='padding:13px 12px;font-size:16px;';
-      var _lpName='padding:13px 16px;font-size:16px;font-weight:600;white-space:nowrap;min-width:170px;';
+      // スタイル（有給申請一覧と同一値に統一：th padding 7px 8px / td padding 8px 8px / font-size .82rem）
+      var _lpTh='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _lpTd='padding:8px 8px;font-size:.82rem;';
+      var _lpName='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;'; // 氏名は太字にしない（有給申請一覧の _plName と同じ）
       var lpSticky='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
       var lpStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
       var lpMonthTotals={};
@@ -5352,8 +5352,8 @@ function _renderInner(){
           var took=(d.sid&&lpTaken[d.sid]&&lpTaken[d.sid][mo.key])?lpTaken[d.sid][mo.key]:0;
           var disp='';
           if(rec>0)disp='<span style="font-weight:700;color:#0f172a;">'+lpFmtDays(rec)+'</span>';
-          if(took>0)disp+='<div style="font-size:.66rem;color:#16a34a;">済'+took+'</div>';
-          tds+='<td style="'+_lpTd+'text-align:right;min-width:70px;">'+(disp||'')+'</td>';
+          if(took>0)disp+='<div style="font-size:.66rem;line-height:1.25;color:#16a34a;">済'+took+'</div>';
+          tds+='<td style="'+_lpTd+'text-align:right;min-width:56px;">'+(disp||'')+'</td>';
         });
         return '<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
           +'<td style="'+_lpName+lpSticky+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+noIdTag+'</td>'
@@ -5364,9 +5364,9 @@ function _renderInner(){
           +tds
           +'</tr>';
       }).join(""):'';
-      var lpMonthHead=lpMonths.map(function(mo){return '<th style="'+_lpTh+'text-align:right;min-width:70px;">'+mo.label+'</th>';}).join("");
+      var lpMonthHead=lpMonths.map(function(mo){return '<th style="'+_lpTh+'text-align:right;min-width:56px;">'+mo.label+'</th>';}).join("");
       var lpFootCells=lpMonths.map(function(mo){var t=lpRound(lpMonthTotals[mo.idx]||0);return '<td style="'+_lpTd+'text-align:right;font-weight:700;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(t>0?lpFmtDays(t):'')+'</td>';}).join("");
-      var lpMinW=470+lpSpan*74;
+      var lpMinW=330+lpSpan*62; // 文字サイズ縮小に合わせて下限も縮小（実内容がこれより広ければ自然幅で横スクロールする）
       var lpTableHtml=lpData.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:'+lpMinW+'px;">'
@@ -5387,14 +5387,17 @@ function _renderInner(){
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象の社員（正社員・在籍）がいません</div>';
       tc='<div class="admin-card admin-wrap">'
         +'<div class="admin-title">🌴 有給取得計画（社員）</div>'
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:12px;line-height:1.7;">'
-        +'対象は<b>正社員（在籍）</b>のみ。失効予定の有給を期限月までに使い切れるよう、現在の残日数を当月から失効月まで均等配分した<b>取得推奨日数の目安</b>です（0.5日単位）。'
-        +'<br><b>現在の残日数</b>は<b>今日（JST）以前の取得日だけを消化済み</b>として算出しています。承認済みでも取得日が明日以降の分は差し引かず、続く<span style="color:#92400e;font-weight:700;">（数字）</span>に内数として表示します。'
-        +'<br>推奨日数は<b>取得予定を除いた残数</b>（＝これから計画できる日数）から算出しています。各月セル下の <span style="color:#16a34a;font-weight:700;">済N</span> はその月の承認済み取得日数（未来月は取得予定を含む・参考）。'
-        +'<br>3ヶ月以内に失効する有給は<span style="color:#b91c1c;font-weight:800;">赤字</span>で表示します。'
-        +'<br>⚠ これは管理者向けの目安表示のみで、有給申請データの新規作成・スタッフへの通知は行いません。'
-        +(lpUnsetCount>0?'<br><span style="display:inline-block;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:3px;padding:1px 7px;font-weight:700;">注意</span> 雇用形態が未設定の在籍スタッフ '+lpUnsetCount+'名を対象外（非表示）にしています。スタッフ管理で雇用形態を設定すると対象になります。':'')
-        +(lpTruncated?'<br><span style="color:#92400e;">※失効が13ヶ月以上先の付与があるため、表示は当月から12ヶ月分に省略しています（残日数列には全期間分を反映）。</span>':'')
+        // 文字色・サイズは可読性（白背景でのコントラスト）を優先して従来値を維持し、余白と文言だけ詰める
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;">'
+        +'<b>正社員（在籍）</b>のみ。各月の数字は失効月までに使い切るための<b>取得推奨日数の目安</b>（0.5日単位・表示のみ／申請作成・通知なし）。'
+        +'<br>残日数＝<b>今日（JST）以前の取得のみ消化済み</b>。月別推奨は（n）を除いた残数から算出。'
+        // 凡例は項目単位で折り返す（スマホで項目の途中改行が起きると区切りが読めなくなるため）
+        +'<br><span style="display:inline-block;white-space:nowrap;margin-right:12px;"><span style="color:#92400e;font-weight:700;">（n）</span>取得予定（残日数の内数）</span>'
+        // この項目だけ長いため、狭い端末では括弧の前で折り返せるように内側でnowrapを分ける
+        +'<span style="display:inline-block;margin-right:12px;"><span style="white-space:nowrap;"><span style="color:#16a34a;font-weight:700;">済n</span> 承認済みの取得</span><span style="white-space:nowrap;">（当月以降は予定を含む）</span></span>'
+        +'<span style="display:inline-block;white-space:nowrap;"><span style="color:#b91c1c;font-weight:700;">赤字</span> 3ヶ月以内に失効</span>'
+        +(lpUnsetCount>0?'<br><span style="display:inline-block;background:#fff7ed;color:#9a3412;border:1px solid #fed7aa;border-radius:3px;padding:0 6px;font-weight:700;">注意</span> 雇用形態が未設定の在籍スタッフ '+lpUnsetCount+'名は対象外です（スタッフ管理で設定すると対象になります）。':'')
+        +(lpTruncated?'<br><span style="color:#92400e;">※表示は当月から12ヶ月分（残日数列は全期間分）。</span>':'')
         +'</div>'
         +lpTableHtml
         +'</div>';
