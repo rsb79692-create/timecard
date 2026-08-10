@@ -1818,6 +1818,7 @@ var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日
 var plFormMonth=""; // 有給申請フォームで表示中の年月（YYYY-MM、render()またぎ保持）
 var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
 var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
+var plHistMonth=""; // 履歴表示中の対象月（YYYY-MM。取得日基準。初期値は当月=JST）
 var plBalDetailOpen={}; // 有給残日数管理: スタッフ別の付与明細展開状態（表示のみ・Firebase保存なし）
 // 付与明細の開閉トグル（有給管理タブ表示中は _paidLeaveRenderGuard を一時解除して再描画）
 // 同一カード内の「新規付与を追加」フォームが再描画で消えないよう、入力値を退避・復元する
@@ -4622,22 +4623,61 @@ function _renderInner(){
       var plStatusBg={pending:"#fef3c7",approved:"#dcfce7",rejected:"#fee2e2",withdrawn:"#f3f4f6",canceled:"#f3f4f6"};
       // 履歴扱いのステータス（通常一覧では非表示）
       var PL_HIST_ST=["rejected","withdrawn","canceled"];
-      // 通常一覧（申請中・承認済）: pending優先、同区分内は日付降順
-      var plActiveRequests=paidLeaveRequests.filter(function(r){return PL_HIST_ST.indexOf(r.status)<0;}).slice().sort(function(a,b){
+      var plTodayJst=getTodayJSTStr(); // 今日の判定はJST固定（端末TZに依存させない）
+      var plCurMonth=plTodayJst.substring(0,7);
+      // 取得日がすべて過ぎたか（当日はまだ過ぎていない扱い。取得日が無い異常データは判定しない）
+      function plIsAllPast(r){
+        var ds=getLeaveDates(r).filter(function(d){return typeof d==="string"&&d;});
+        if(!ds.length)return false;
+        return ds.every(function(d){return d<plTodayJst;});
+      }
+      // 履歴（通常一覧では非表示）の判定。
+      // ・却下/引戻済/取消済は従来どおり常に履歴
+      // ・処理済み（承認済）は取得日がすべて過ぎたら履歴へ回す
+      // ・pending は取得日を過ぎても通常一覧に残す（対応漏れを隠さない）
+      // ※未知のstatusは通常一覧に残す（データ異常を隠さない）ため approved のみを対象にする
+      function plIsHistory(r){
+        if(PL_HIST_ST.indexOf(r.status)>=0)return true;
+        return r.status==="approved"&&plIsAllPast(r);
+      }
+      function plByDateDesc(a,b){
+        var da=getLeaveDates(a)[0]||a.date||"";
+        var db=getLeaveDates(b)[0]||b.date||"";
+        return db.localeCompare(da);
+      }
+      // 通常一覧（申請中・取得日が残っている承認済）: pending優先、同区分内は日付降順
+      var plActiveRequests=paidLeaveRequests.filter(function(r){return r&&!plIsHistory(r);}).slice().sort(function(a,b){
         if(a.status==="pending"&&b.status!=="pending")return -1;
         if(a.status!=="pending"&&b.status==="pending")return 1;
-        var da=getLeaveDates(a)[0]||a.date||"";
-        var db=getLeaveDates(b)[0]||b.date||"";
-        return db.localeCompare(da);
+        return plByDateDesc(a,b);
       });
-      // 履歴（却下・引戻済・取消済）: 日付降順
-      var plHistoryRequests=paidLeaveRequests.filter(function(r){return PL_HIST_ST.indexOf(r.status)>=0;}).slice().sort(function(a,b){
-        var da=getLeaveDates(a)[0]||a.date||"";
-        var db=getLeaveDates(b)[0]||b.date||"";
-        return db.localeCompare(da);
+      // 履歴（却下・引戻済・取消済 ＋ 取得日がすべて過ぎた処理済）: 日付降順
+      var plHistoryRequests=paidLeaveRequests.filter(function(r){return r&&plIsHistory(r);}).slice().sort(plByDateDesc);
+      // 履歴の対象月候補（取得日基準。申請日・承認日は使わない）。当月は常に候補へ入れる
+      var _plHmSet={};
+      plHistoryRequests.forEach(function(r){
+        getLeaveDates(r).forEach(function(d){
+          if(typeof d!=="string")return;
+          var mk=monthKey(d);
+          if(/^\d{4}-\d{2}$/.test(mk))_plHmSet[mk]=true;
+        });
       });
-      // 表示対象: 通常 + (履歴ON時のみ履歴を末尾追加)
-      var plSortedRequests=showPaidLeaveHistory?plActiveRequests.concat(plHistoryRequests):plActiveRequests;
+      _plHmSet[plCurMonth]=true;
+      if(!plHistMonth||!/^\d{4}-\d{2}$/.test(plHistMonth))plHistMonth=plCurMonth;
+      _plHmSet[plHistMonth]=true; // 選択中の月は候補から消えても選択肢に残す
+      var plHistMonths=Object.keys(_plHmSet).sort().reverse();
+      var plHistMonthOpts=plHistMonths.map(function(m){
+        var p=m.split("-");
+        return '<option value="'+esc(m)+'"'+(m===plHistMonth?" selected":"")+'>'+esc(p[0])+'年'+parseInt(p[1],10)+'月</option>';
+      }).join("");
+      // 選択月に該当する取得日を1日でも含む申請だけを履歴として表示する
+      var plHistShown=showPaidLeaveHistory
+        ?plHistoryRequests.filter(function(r){
+            return getLeaveDates(r).some(function(d){return typeof d==="string"&&monthKey(d)===plHistMonth;});
+          })
+        :[];
+      // 表示対象: 通常 + (履歴ON時のみ選択月の履歴を末尾追加)
+      var plSortedRequests=showPaidLeaveHistory?plActiveRequests.concat(plHistShown):plActiveRequests;
       var plRows=plSortedRequests.length
         ?plSortedRequests.map(function(r){
             var sl=plStatusLabel[r.status]||r.status;
@@ -4650,7 +4690,7 @@ function _renderInner(){
             var dateDisp=lds.length===0?esc(r.date||""):formatLeaveDatesHtml(lds,3);
             // 4日以上は「他N日」で省略するため、全取得日は title で参照できるようにする
             var dateTitle=lds.length>3?' title="'+esc(lds.join(" / "))+'"':"";
-            var isHist=PL_HIST_ST.indexOf(r.status)>=0;
+            var isHist=plIsHistory(r);
             // 管理者代理申請の識別バッジ（通常申請と見た目を大きく変えない控えめな表示）
             var isProxy=(r.adminProxy===true)||(r.requestSource==="admin_proxy");
             var proxyBadge=isProxy?'<span title="管理者による代理申請" style="margin-left:5px;background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;vertical-align:middle;white-space:nowrap;">管理者代理</span>':"";
@@ -4672,7 +4712,11 @@ function _renderInner(){
               )
               +'</td></tr>';
           }).join("")
-        :'<tr><td colspan="5" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">'+(showPaidLeaveHistory?"有給申請はありません":"申請中・承認済の有給申請はありません")+'</td></tr>';
+        :'<tr><td colspan="5" style="text-align:center;padding:24px;color:#8496a7;font-size:.88rem;">'
+          +(showPaidLeaveHistory
+            ?"選択した月に取得日のある有給申請はありません"
+            :"申請中・取得日が残っている有給申請はありません")
+          +'</td></tr>';
 
       // 付与行単位の残日数管理テーブル
       var normBalances=paidLeaveBalances.map(function(b){return normalizePaidLeaveBalance(b);});
@@ -4891,11 +4935,24 @@ function _renderInner(){
         +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<div class="admin-title" style="margin-bottom:0;">有給申請一覧</div>'
         +'<span style="font-size:.78rem;color:#8496a7;margin-left:4px;">申請中: '+paidLeaveRequests.filter(function(r){return r.status==="pending";}).length+'件</span>'
-        +(plHistoryRequests.length>0?'<span style="font-size:.78rem;color:#9ca3af;">｜ 履歴: '+plHistoryRequests.length+'件</span>':"")
+        +(plHistoryRequests.length>0?'<span style="font-size:.78rem;color:#9ca3af;">｜ 履歴: 全'+plHistoryRequests.length+'件</span>':"")
         +(paidLeaveBalanceSaving?'<span style="font-size:.75rem;color:#b45309;font-weight:700;margin-left:8px;">処理中...</span>':"")
         +'<button onclick="openProxyLeaveModal()" style="margin-left:auto;background:#1e40af;color:#fff;border:none;border-radius:2px;font-size:.72rem;font-weight:700;padding:5px 11px;cursor:pointer;font-family:inherit;white-space:nowrap;">有給代理申請</button>'
-        +(plHistoryRequests.length>0?'<button onclick="showPaidLeaveHistory=!showPaidLeaveHistory;_paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;" style="margin-left:auto;background:'+(showPaidLeaveHistory?"#e0e7ff":"#f3f4f6")+';color:'+(showPaidLeaveHistory?"#1e40af":"#6b7280")+';border:1px solid '+(showPaidLeaveHistory?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:4px 10px;cursor:pointer;font-family:inherit;">'+(showPaidLeaveHistory?"履歴を隠す":"履歴を表示")+'</button>':"")
+        // 履歴表示中は、引戻等で履歴が0件になってもボタンを残す（開いたまま閉じられなくなるのを防ぐ）
+        +(plHistoryRequests.length>0||showPaidLeaveHistory?'<button onclick="showPaidLeaveHistory=!showPaidLeaveHistory;_paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;" style="margin-left:auto;background:'+(showPaidLeaveHistory?"#e0e7ff":"#f3f4f6")+';color:'+(showPaidLeaveHistory?"#1e40af":"#6b7280")+';border:1px solid '+(showPaidLeaveHistory?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:4px 10px;cursor:pointer;font-family:inherit;">'+(showPaidLeaveHistory?"履歴を隠す":"履歴を表示")+'</button>':"")
         +'</div>'
+        // 履歴の対象月セレクタ（取得日基準・初期値は当月）。スマホでは折り返して縦積みになる
+        +(showPaidLeaveHistory
+          ?'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;margin-bottom:10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;">'
+           +'<label for="sel-pl-hist-month" style="font-size:.76rem;font-weight:700;color:#475569;white-space:nowrap;">履歴の対象月</label>'
+           // 高さ・文字サイズは既存の月セレクタ（修正履歴・賄い）と揃える（スマホでも押しやすい44px）
+           +'<select id="sel-pl-hist-month" style="flex:1 1 140px;min-width:132px;max-width:220px;min-height:44px;padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:15px;font-family:inherit;background:#fff;box-sizing:border-box;">'+plHistMonthOpts+'</select>'
+           +'<span style="font-size:.72rem;color:#8496a7;flex:1 1 100%;">申請日ではなく<b>取得日</b>で判定します。この月に取得日を含む履歴は<b>'+plHistShown.length+'件</b>です（通常一覧の申請中・取得日が残っている分は月に関係なく常に表示されます）。'
+           // 選択月が0件でも他の月にある場合は、月を変えれば見られることを示す
+           +(plHistShown.length===0&&plHistoryRequests.length>0?'<br><span style="color:#92400e;font-weight:700;">他の月に'+plHistoryRequests.length+'件の履歴があります。対象月を切り替えてください。</span>':'')
+           +'</span>'
+           +'</div>'
+          :'')
         +(paidLeaveLoading
           ?'<div class="empty">読み込み中...</div>'
           :'<div style="overflow-x:auto;">'
@@ -5966,6 +6023,15 @@ function _renderInner(){
       var nx=shiftMonthKey(adjLogMonth||adjCurM,1);
       if(nx>adjCurM)return; // 未来月へは進めない
       adjLogMonth=nx;render();
+    };
+
+    // 有給申請一覧・履歴の対象月切替（plHistMonth のみ変更。selMonth・他タブへは影響させない）
+    var plHistSel=document.getElementById("sel-pl-hist-month");
+    if(plHistSel)plHistSel.onchange=function(){
+      var v=plHistSel.value;
+      if(!/^\d{4}-\d{2}$/.test(v))return;
+      plHistMonth=v;
+      _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
     };
 
     // 賄い一覧
