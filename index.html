@@ -4719,14 +4719,16 @@ function _renderInner(){
             .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");});
           var tot=staffTotals[nm]||{granted:0,used:0,remain:0,expired:0,sid:""};
           // ── スタッフ小計行（常時表示のコンパクトサマリー）──
-          // 「第N回 x日」＝期限内の付与行ごとの残日数（正本）。
-          // 「残」＝表示用残日数（正本合計＋未来日の承認済み分）。JST基準で今日以前の取得日だけを消化済みとする。
-          var _sidNm=tot.sid||resolveStaffId(nm)||"";
-          var _future=_sidNm?(_plFutureMap[_sidNm]||0):0;
+          // 「第N回 x日」＝付与行ごとの表示日数。正本 remainDays は承認時に未来日ぶんまで
+          // 引かれているため、その付与行から引かれた未来分を戻す（＝取得予定を差し引かない）。
+          // 「残 N日（M）」＝表示用残日数（＝第N回の合計）。M は承認済みかつ明日以降の取得予定日数で、
+          // 残の内数として情報表示するだけ。第N回の日数からは引かない。
+          var _valid=rows.filter(function(b){return !(b.expiresAt&&b.expiresAt<today_pl);});
+          var _future=_valid.reduce(function(s,b){return Math.round((s+(_plFutureMap.byLot[b.id]||0))*10)/10;},0);
           var _remainDisp=Math.round((tot.remain+_future)*10)/10;
-          var _chips=rows.filter(function(b){return !(b.expiresAt&&b.expiresAt<today_pl);})
-            .map(function(b){
+          var _chips=_valid.map(function(b){
               var rd=(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)));
+              rd=Math.round((rd+(_plFutureMap.byLot[b.id]||0))*10)/10;
               return '<span style="white-space:nowrap;color:#334155;">第'+b._grantNo+'回 <b style="color:#166534;">'+esc(rd)+'</b>日</span>';
             }).join('<span style="color:#94a3b8;">｜</span>');
           if(!_chips)_chips='<span style="color:#94a3b8;white-space:nowrap;">期限内の付与なし</span>';
@@ -4738,8 +4740,8 @@ function _renderInner(){
             +'<div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;">'
             +'<span style="font-size:.9rem;font-weight:700;color:#1e3a5f;white-space:nowrap;">'+esc(nm)+'</span>'
             +'<span style="background:'+(_isOpen?"#e0e7ff":"#fff")+';color:'+(_isOpen?"#1e40af":"#475569")+';border:1px solid '+(_isOpen?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:3px 9px;white-space:nowrap;">'+(_isOpen?"▲ 詳細を隠す":"▼ 詳細表示")+'</span>'
-            +'<span style="font-size:.86rem;font-weight:800;color:#1e40af;white-space:nowrap;">残 '+_remainDisp+'日</span>'
-            +(_future>0?'<span title="承認済みだが取得日がまだ来ていない日数。今日以前の取得日のみ消化済みとして残日数に反映しています。" style="font-size:.7rem;color:#92400e;background:#fef3c7;border-radius:8px;padding:1px 7px;white-space:nowrap;">取得予定 '+_future+'日</span>':"")
+            +'<span'+(_future>0?' title="括弧内は承認済みかつ明日以降の取得予定日数（残日数の内数）。第N回の日数からは引いていません。"':'')+' style="font-size:.86rem;font-weight:800;color:#1e40af;white-space:nowrap;">残 '+_remainDisp+'日'
+            +(_future>0?'<span style="color:#92400e;">（'+_future+'）</span>':"")+'</span>'
             +'<span style="color:#94a3b8;">｜</span>'
             +'<span style="font-size:.8rem;display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;">'+_chips+'</span>'
             +(tot.expired>0?'<span style="font-size:.7rem;color:#9ca3af;white-space:nowrap;">期限切れ '+tot.expired+'件</span>':"")
@@ -4912,9 +4914,10 @@ function _renderInner(){
         +'<div class="admin-card">'
         +'<div class="admin-title">有給残日数管理（付与行単位）</div>'
         +'<div style="font-size:.72rem;color:#64748b;margin-bottom:8px;line-height:1.6;">'
-        +'行をタップすると付与回ごとの明細を開閉できます。<b>第N回</b>＝付与回ごとの残日数。'
-        +'<b>残</b>＝<b>今日（JST）以前の取得日だけを消化済み</b>とした残日数で、'
-        +'承認済みでも取得日が明日以降の分は<span style="color:#92400e;font-weight:700;">取得予定</span>として内数表示します（＝第N回の合計＋取得予定）。'
+        +'行をタップすると付与回ごとの明細を開閉できます。<b>残 N日</b>＝<b>今日（JST）以前の取得日だけを消化済み</b>とした残日数。'
+        +'<b>第N回</b>＝付与回ごとの残日数で、<b>合計は「残 N日」と一致します</b>。'
+        +'続く<span style="color:#92400e;font-weight:700;">（数字）</span>は承認済みかつ明日以降の取得予定日数で、'
+        +'<b>残日数の内数を示す情報表示のみ</b>です（第N回の日数からは引いていません）。'
         +'</div>'
         +'<div style="overflow-x:auto;">'
         // 明細を1件も開いていない間は min-width と見出しを外す（スマホで横スクロールせず全項目が見える）
@@ -5233,10 +5236,12 @@ function _renderInner(){
         bals.forEach(function(b){var ei=lpExpToIdx(b.expiresAt);if(ei>lpMaxExpIdx)lpMaxExpIdx=ei;});
         // 月別推奨は remain（正本＝承認済みを全て差し引いた値）のままで算出する。
         // 表示する「現在の残日数」だけ、JST基準で明日以降の承認済み取得日を戻した値にする。
-        var fut=sid?(lpFutureMap[sid]||0):0;
+        var fut=sid?(lpFutureMap.bySid[sid]||0):0;
+        // 直近失効分の日数も、有給管理タブの「第N回」と同じく取得予定を差し引かない値で出す
+        var nextDays=bals.length?Math.round((bals[0].remainDays+(lpFutureMap.byLot[bals[0].id]||0))*10)/10:0;
         return{s:s,sid:sid,bals:bals,remain:remain,future:fut,
           remainDisp:Math.round((remain+fut)*10)/10,noId:!sid,
-          nextExp:bals.length?bals[0].expiresAt:"",nextExpDays:bals.length?bals[0].remainDays:0};
+          nextExp:bals.length?bals[0].expiresAt:"",nextExpDays:nextDays};
       });
       // 表示月の範囲: 当月 ～ 対象社員の最遅失効月（最大12ヶ月）。超過分は省略注記。
       var lpFullSpan=lpMaxExpIdx-lpCurIdx+1;
@@ -5286,8 +5291,8 @@ function _renderInner(){
         });
         return '<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
           +'<td style="'+_lpName+lpSticky+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+noIdTag+'</td>'
-          +'<td style="'+_lpTd+'text-align:right;font-weight:800;color:#1e3a8a;white-space:nowrap;">'+lpFmtDays(lpRound(d.remainDisp))+'日'
-            +(d.future>0?'<div title="承認済みだが取得日がまだ来ていない日数。今日以前の取得日のみ消化済みとして残日数に反映しています。" style="font-size:.66rem;font-weight:700;color:#92400e;">取得予定 '+lpFmtDays(lpRound(d.future))+'日</div>':'')
+          +'<td'+(d.future>0?' title="括弧内は承認済みかつ明日以降の取得予定日数（残日数の内数）。"':'')+' style="'+_lpTd+'text-align:right;font-weight:800;color:#1e3a8a;white-space:nowrap;">'+lpFmtDays(lpRound(d.remainDisp))+'日'
+            +(d.future>0?'<span style="color:#92400e;">（'+lpFmtDays(lpRound(d.future))+'）</span>':'')
             +'</td>'
           +'<td style="'+_lpTd+'white-space:nowrap;">'+expCell+'</td>'
           +tds
@@ -5318,7 +5323,7 @@ function _renderInner(){
         +'<div class="admin-title">🌴 有給取得計画（社員）</div>'
         +'<div style="font-size:.82rem;color:#64748b;margin-bottom:12px;line-height:1.7;">'
         +'対象は<b>正社員（在籍）</b>のみ。失効予定の有給を期限月までに使い切れるよう、現在の残日数を当月から失効月まで均等配分した<b>取得推奨日数の目安</b>です（0.5日単位）。'
-        +'<br><b>現在の残日数</b>は<b>今日（JST）以前の取得日だけを消化済み</b>として算出しています。承認済みでも取得日が明日以降の分は差し引かず、<span style="color:#92400e;font-weight:700;">取得予定</span>として内数表示します。'
+        +'<br><b>現在の残日数</b>は<b>今日（JST）以前の取得日だけを消化済み</b>として算出しています。承認済みでも取得日が明日以降の分は差し引かず、続く<span style="color:#92400e;font-weight:700;">（数字）</span>に内数として表示します。'
         +'<br>推奨日数は<b>取得予定を除いた残数</b>（＝これから計画できる日数）から算出しています。各月セル下の <span style="color:#16a34a;font-weight:700;">済N</span> はその月の承認済み取得日数（未来月は取得予定を含む・参考）。'
         +'<br>3ヶ月以内に失効する有給は<span style="color:#b91c1c;font-weight:800;">赤字</span>で表示します。'
         +'<br>⚠ これは管理者向けの目安表示のみで、有給申請データの新規作成・スタッフへの通知は行いません。'
@@ -8254,10 +8259,32 @@ function getValidRemainDays(staffId){
 // 未来日の取得予定まで消化済みとして引かれている。表示上は「今日以前の取得日だけを消化済み」
 // とするため、承認済みのうちJSTで明日以降の取得日分を加算して戻す（表示のみ・PATCHしない）。
 // 申請時の残数チェック・FIFO消化は従来どおり getValidRemainDays（＝申請可能残）を使う。
+//
+// 戻り値: {byLot:{付与行id:戻す日数}, bySid:{社員番号:戻す日数}}
+// 「第N回」の表示にも使うため、どの付与行から引かれた分かを consumedSnapshot で特定して
+// 付与行単位に割り当てる。これにより 各付与行の表示日数の合計 = 表示用残日数 が常に成立する。
 function buildFutureApprovedLeaveMap(){
   var jstToday=getTodayJSTStr();  // 取得日の過去/未来判定はJST固定（端末TZに依存させない）
   var today=todayDateStr();       // 有効期限の判定は getValidRemainDays と同じ基準を使う
-  var map={};
+  // 期限内の付与行だけを戻し先にする。used が実際に引かれている量＝戻せる上限。
+  var lots={},lotOrder={};
+  (paidLeaveBalances||[]).map(function(b){return normalizePaidLeaveBalance(b);})
+    .filter(function(b){return b.staffId&&b.id&&b.expiresAt>=today;})
+    .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");})
+    .forEach(function(b){
+      lots[b.id]={sid:b.staffId,used:b.usedDays||0,back:0};
+      (lotOrder[b.staffId]=lotOrder[b.staffId]||[]).push(b.id);
+    });
+  // 付与行へ戻す。その付与行から実際に引かれている量（usedDays）を超えては戻さない。
+  // 申請者本人の付与行以外へは戻さない（consumedSnapshot に他人の付与行idが入っていても混ざらない）。
+  function give(sid,lotId,amt){
+    var L=lots[lotId];
+    if(!L||L.sid!==sid||!(amt>0))return 0;
+    var v=Math.min(amt,Math.max(0,Math.round((L.used-L.back)*10)/10));
+    if(v>0)L.back=Math.round((L.back+v)*10)/10;
+    return v;
+  }
+  var entries=[];
   (paidLeaveRequests||[]).forEach(function(r){
     if(!r||r.status!=="approved")return;
     var sid=getReqStaffId(r);
@@ -8266,37 +8293,50 @@ function buildFutureApprovedLeaveMap(){
     // 取得日ごとに個別判定。今日は消化済み扱い、明日以降のみ戻す
     var future=dates.filter(function(d){return typeof d==="string"&&d>jstToday;}).length;
     if(future<=0)return;
-    var past=dates.length-future;
-    // 承認時に実際に消化できた日数（consumedSnapshot）を上限にする。
-    // ※空配列・欠落（RTDBは空配列を保存しないため承認後リロードで消える）の場合は
-    //   上限不明として null にし、後段の usedDays クリップで担保する。
-    var cap=null;
-    var snap=(r.consumedSnapshot&&Array.isArray(r.consumedSnapshot))?r.consumedSnapshot:null;
-    if(snap&&snap.length){
-      var c=0;
+    entries.push({sid:sid,future:future,past:dates.length-future,
+      snap:(r.consumedSnapshot&&Array.isArray(r.consumedSnapshot)&&r.consumedSnapshot.length)?r.consumedSnapshot:null});
+  });
+  function assign(e){
+    var snap=e.snap;
+    if(snap){
+      // 承認時に実際に消化できた日数を上限にする。
+      // 部分消化だった場合は過去日から先に消化されたものとみなし、未来分に残る量だけを戻す。
+      var cap=0;
       snap.forEach(function(x){
         if(!x)return;
         var d=(Number(x.usedAfter)||0)-(Number(x.usedBefore)||0);
-        if(d>0)c+=d;
+        if(d>0)cap+=d;
       });
-      cap=c;
+      var rest=Math.max(0,Math.min(e.future,Math.round((cap-e.past)*10)/10));
+      // 消化は付与日昇順（FIFO）で進むため、未来分は snapshot の末尾側に対応する
+      for(var i=snap.length-1;i>=0&&rest>0;i--){
+        if(!snap[i]||!snap[i].id)continue;
+        var taken=(Number(snap[i].usedAfter)||0)-(Number(snap[i].usedBefore)||0);
+        if(taken<=0)continue;
+        rest=Math.round((rest-give(e.sid,snap[i].id,Math.min(rest,taken)))*10)/10;
+      }
+      // 戻しきれなかった分は付与行が失効・削除済み＝戻さない
+    }else{
+      // consumedSnapshot が空/欠落（RTDBは空配列を保存しないため承認後リロードで消える）。
+      // どの付与行から引かれたか特定できないので、新しい付与行から順に usedDays の範囲で戻す。
+      var ids=lotOrder[e.sid]||[],restF=e.future;
+      for(var j=ids.length-1;j>=0&&restF>0;j--){
+        restF=Math.round((restF-give(e.sid,ids[j],restF))*10)/10;
+      }
     }
-    // 部分消化だった場合は過去日から先に消化されたものとみなし、未来分に残る消化量だけを戻す
-    var add=(cap==null)?future:Math.max(0,Math.min(future,cap-past));
-    if(add>0)map[sid]=Math.round(((map[sid]||0)+add)*10)/10;
+  }
+  // consumedSnapshot がある申請を先に割り当てる。戻し先が確実なものを先に確定させ、
+  // 推定で配る欠落分が本来の付与行の枠を先取りしないようにする（走査順への依存を排除）。
+  entries.forEach(function(e){if(e.snap)assign(e);});
+  entries.forEach(function(e){if(!e.snap)assign(e);});
+  var byLot={},bySid={};
+  Object.keys(lots).forEach(function(id){
+    var L=lots[id];
+    if(!(L.back>0))return;
+    byLot[id]=L.back;
+    bySid[L.sid]=Math.round(((bySid[L.sid]||0)+L.back)*10)/10;
   });
-  // 実際に付与行から差し引かれている量（期限内の usedDays 合計）を超えて戻さない。
-  // consumedSnapshot が空/欠落の申請や、承認後に付与行が失効・削除された場合の水増しを防ぐ。
-  var usedBySid={};
-  (paidLeaveBalances||[]).map(function(b){return normalizePaidLeaveBalance(b);}).forEach(function(b){
-    if(!b.staffId||!(b.expiresAt>=today))return;
-    usedBySid[b.staffId]=Math.round(((usedBySid[b.staffId]||0)+(b.usedDays||0))*10)/10;
-  });
-  Object.keys(map).forEach(function(sid){
-    var v=Math.round(Math.min(map[sid],usedBySid[sid]||0)*10)/10;
-    if(v>0)map[sid]=v;else delete map[sid];
-  });
-  return map;
+  return{byLot:byLot,bySid:bySid};
 }
 
 // 取得日の表示用フォーマット（表示のみ。leaveDates の保存形式・CSVは変更しない）
