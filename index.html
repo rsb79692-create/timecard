@@ -1036,6 +1036,11 @@ select:focus,input:focus{border-color:#1e40af;box-shadow:0 0 0 2px rgba(30,64,17
   .admin-mode{max-width:none!important;min-width:0;width:100%;padding-left:8px;padding-right:8px;}
   td.sticky-name-col{position:static!important;box-shadow:none!important;border-right:none!important;}
   th.sticky-name-col{left:auto!important;border-right:none!important;}
+  /* スタッフ一覧：スマホでは 拠点／雇用形態／権限・状態 の3列を隠して横スクロール量を減らす。
+     絞り込みは tr の data-loc / data-emptype を見るため、列を隠しても影響しない（表示のみの制御）。
+     残る列は 社員番号90+氏名200+PIN100+操作100=490px のため min-width も合わせて下げる。 */
+  .hrm-col-opt{display:none!important;}
+  .hrm-table{min-width:490px!important;}
 }
 .admin-sticky-bar{position:sticky;top:0;z-index:20;background:#eaecef;padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
 /* デモ／スタッフテスト画面の固定バナー */
@@ -4008,9 +4013,9 @@ function _renderInner(){
           +'<div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(dispName)+'</div>'
           +'<div style="font-size:11px;color:#8496a7;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">'+esc(dispYomi)+'</div>'
           +'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location?esc(s.location):'<span style="color:#c8ccd2;">−</span>')+'</td>'
-          +'<td style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType?esc(s.employmentType):'<span style="color:#c8ccd2;">−</span>')+'</td>'
-          +'<td style="padding:0 14px;font-size:13px;">'
+          +'<td class="hrm-col-opt" style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.location?esc(s.location):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+          +'<td class="hrm-col-opt" style="padding:0 14px;font-size:13px;color:#0f172a;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+(s.employmentType?esc(s.employmentType):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+          +'<td class="hrm-col-opt" style="padding:0 14px;font-size:13px;">'
           +'<span style="background:'+sc+'15;color:'+sc+';font-size:11px;font-weight:700;padding:2px 10px;border-radius:20px;">'+esc(sl)+'</span>'
           +(s.status==="退職"&&s.retireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">退職日: '+esc(s.retireDate)+'</div>':(s.hireDate?'<div style="font-size:11px;color:#8496a7;margin-top:2px;">'+esc(calcTenure(s.hireDate))+'</div>':""))
           +'</td>'
@@ -4081,13 +4086,13 @@ function _renderInner(){
         +'<span style="margin-left:auto;font-size:12px;color:#475569;">全<strong id="hrm-count">'+tabFiltered.length+'</strong>件</span>'
         +'</div>'
         +'<div style="overflow-x:auto;">'
-        +'<table style="width:100%;border-collapse:collapse;min-width:960px;table-layout:fixed;">'
+        +'<table class="hrm-table" style="width:100%;border-collapse:collapse;min-width:960px;table-layout:fixed;">'
         +'<thead><tr style="background:#f9fafb;border-bottom:2px solid #e5e7eb;">'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;white-space:nowrap;width:90px;">社員番号</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:200px;">氏名</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:160px;">拠点</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:130px;">雇用形態</th>'
-        +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:180px;">権限 / 状態</th>'
+        +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:160px;">拠点</th>'
+        +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:130px;">雇用形態</th>'
+        +'<th class="hrm-col-opt" style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:180px;">権限 / 状態</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;min-width:100px;width:100px;">PIN</th>'
         +'<th style="padding:11px 14px;text-align:left;font-size:13px;font-weight:500;color:#333;width:100px;">操作</th>'
         +'</tr></thead>'
