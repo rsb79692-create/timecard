@@ -5168,11 +5168,13 @@ function _renderInner(){
       var mdGrandTotal=0;
       var mdImportCellCount=0;
       var mdRetiredCount=staffList.filter(function(s){return s.status==="退職";}).length;
-      var _mcol='min-width:60px;'; // 月列の最小幅
-      var _mth='padding:15px 12px;font-weight:700;font-size:16px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
-      var _mtd='padding:15px 14px;font-size:18px;font-family:monospace;text-align:';
-      var _mtot='padding:15px 16px;font-size:20px;font-family:monospace;font-weight:800;text-align:right;color:#1e3a8a;background:#dbeafe;border-left:2px solid #93c5fd;';
-      var _mname='padding:15px 18px;font-size:19px;font-weight:600;white-space:nowrap;min-width:190px;';
+      // スタイルは有給申請一覧（_plTh/_plTd/_plName）・有給取得計画（_lpTh/_lpTd/_lpName）と同一値に統一
+      // （th padding 7px 8px / td padding 8px 8px / font-size .82rem / 氏名は太字にしない）
+      var _mcol='min-width:44px;'; // 月列の最小幅（中身は2桁数字のみ）
+      var _mth='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
+      var _mtd='padding:8px 8px;font-size:.82rem;font-family:monospace;text-align:';
+      var _mtot='padding:8px 8px;font-size:.82rem;font-family:monospace;font-weight:800;text-align:right;color:#1e3a8a;background:#dbeafe;border-left:2px solid #93c5fd;';
+      var _mname='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;';
       var mdStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
       var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
       var mdRows=mdStaff.map(function(s,ri){
@@ -5196,12 +5198,12 @@ function _renderInner(){
                        : mdIsOverride ? 'background:#fff7ed;color:#9a3412;font-weight:600;' // 上書き対象だが現状は打刻値
                        : 'background:#fff;color:#0f172a;';
             var mdInTitle = mdIsOverride ? 'テスト打刻の上書き月：手入力値が打刻より優先表示されます（空欄で打刻表示に戻る）' : '過去月の出勤日数を手入力できます（空欄で未入力に戻す）';
-            tds+='<td style="'+_mtd+'right;'+_mcol+'padding:6px 6px;">'
+            tds+='<td style="'+_mtd+'right;'+_mcol+'padding:4px 4px;">'
               +'<input type="number" min="0" max="31" inputmode="numeric" value="'+mdIv+'"'
               +' onfocus="monthlyDaysEditing=true;" onblur="monthlyDaysEditing=false;"'
               +' onchange="mdSaveCell(this,\''+mdEid+'\',\''+mdYm+'\')"'
               +' title="'+mdInTitle+'"'
-              +' style="width:54px;padding:6px 4px;text-align:right;font-size:16px;font-family:monospace;border:1px solid #cbd5e1;border-radius:4px;'+mdInBg+'">'
+              +' style="width:38px;padding:5px 4px;text-align:right;font-size:.82rem;font-family:monospace;border:1px solid #cbd5e1;border-radius:4px;'+mdInBg+'">'
               +'</td>';
           } else {
             var cs= cell.src==="none" ? ''
@@ -5221,7 +5223,7 @@ function _renderInner(){
       }).join("");
       var mdFootCells="";
       for(var fmo=0;fmo<12;fmo++){
-        mdFootCells+='<td style="'+_mtd+'right;'+_mcol+'font-weight:700;font-size:17px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'')+'</td>';
+        mdFootCells+='<td style="'+_mtd+'right;'+_mcol+'font-weight:700;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(mdMonthTotals[fmo]>0?mdMonthTotals[fmo]:'')+'</td>';
       }
       var mdMonthHead="";
       for(var hmo=0;hmo<12;hmo++){
@@ -5230,32 +5232,33 @@ function _renderInner(){
       var mdYearOpts=mdYears.map(function(y){return'<option value="'+y+'"'+(y===mdYear?" selected":"")+'>'+y+'年</option>';}).join("");
       var mdTableHtml=mdStaff.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
-          +'<table style="width:100%;border-collapse:collapse;min-width:1080px;">'
+          +'<table style="width:100%;border-collapse:collapse;min-width:760px;">'
           +'<thead><tr>'
           +'<th style="'+_mth+'left;'+mdStickyHead+'">氏名</th>'
           +mdMonthHead
-          +'<th style="'+_mth+'right;font-size:17px;background:#bfdbfe;color:#1e3a8a;border-left:2px solid #93c5fd;">合計</th>'
+          +'<th style="'+_mth+'right;background:#bfdbfe;color:#1e3a8a;border-left:2px solid #93c5fd;">合計</th>'
           +'</tr></thead>'
           +'<tbody>'+mdRows+'</tbody>'
           +'<tfoot><tr>'
           +'<td style="'+_mname+mdStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">月計</td>'
           +mdFootCells
-          +'<td style="'+_mtot+'border-top:2px solid #94a3b8;font-size:22px;">'+(mdGrandTotal>0?mdGrandTotal:'')+'</td>'
+          +'<td style="'+_mtot+'border-top:2px solid #94a3b8;">'+(mdGrandTotal>0?mdGrandTotal:'')+'</td>'
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません</div>';
       tc='<div class="admin-card admin-wrap">'
         +'<div class="admin-title">📅 月別出勤日数（'+mdYear+'年）</div>'
-        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">'
+        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<select id="sel-md-year" style="width:auto;min-width:120px;padding:9px 12px;font-size:15px;">'+mdYearOpts+'</select>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
         +'<input type="checkbox" id="chk-md-retired"'+(monthlyShowRetired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">退職者も表示'+(mdRetiredCount>0?'（'+mdRetiredCount+'名）':'')+'</label>'
         +'<button class="btn-export" id="btn-md-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルは、その月に出勤打刻のあった日数（同日複数打刻は1日として集計）。空白は出勤なし。'
-        +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:1px 7px;font-weight:700;">取込</span> 色のセルは打刻データが無い過去月で、Excel取込実績を表示しています'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。'
-        +'<br>📝 <b>過去月の入力欄</b>は手入力で追加・修正できます（空欄にすると未入力に戻ります。社員番号が必要）。保存は即時。出勤打刻のある月は打刻が優先され、修正は「勤怠一覧」で行います。'
-        +'<br><span style="display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:3px;padding:1px 7px;font-weight:700;">上書き</span> 2026年4月・5月はアプリ開発時のテスト打刻のため、例外的に手入力値で上書きできます（手入力値が打刻より優先表示。空欄に戻すと元の打刻表示に復帰。打刻データ自体は削除しません）。</div>'
+        // 操作すれば分かる説明は省き、必要な注意（データ種別・入力条件・修正先・例外月）だけ残す
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;">各セルは出勤打刻のあった日数（同日複数打刻は1日）。空白は出勤なし。'
+        +'<br><span style="display:inline-block;background:#fffbeb;color:#92400e;border:1px solid #fde68a;border-radius:3px;padding:1px 7px;font-weight:700;">取込</span> は打刻の無い過去月のExcel取込実績'+(mdImportCellCount>0?'（当年 '+mdImportCellCount+'セル）':'')+'。'
+        +'<br>入力欄は過去月のみ手入力可（社員番号が必要・即時保存）。打刻のある月は打刻が優先され、修正は「勤怠一覧」で行います。'
+        +'<br><span style="display:inline-block;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:3px;padding:1px 7px;font-weight:700;">上書き</span> 2026年4月・5月はテスト打刻のため例外的に手入力値を優先表示（空欄で打刻表示に復帰。打刻データは削除しません）。</div>'
         +mdTableHtml
         +'</div>';
     }
@@ -5435,14 +5438,17 @@ function _renderInner(){
       var meReqStaffForConf=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;});
       var meCD=0,meCP=0,meCN=0;
       meReqStaffForConf.forEach(function(s){var _cst=meConfStatus(s);if(_cst==="done")meCD++;else if(_cst==="pending")meCP++;else meCN++;});
-      var _meConfTd='padding:10px 10px;font-size:13px;text-align:center;white-space:nowrap;border-left:1px solid #e5e7eb;';
-      var _meTh='padding:10px 6px;font-weight:700;font-size:13px;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
-      var _meTd='padding:9px 4px;font-size:14px;text-align:center;';
-      var _meName='padding:10px 14px;font-size:16px;font-weight:500;white-space:nowrap;min-width:150px;'; // 氏名は太字にしない（font-weight:500）
-      var _meTot='padding:10px 12px;font-size:17px;font-family:monospace;font-weight:700;text-align:right;color:#15803d;background:#dcfce7;border-left:2px solid #86efac;';
+      // スタイルは有給申請一覧（_plTh/_plTd/_plName）・有給取得計画（_lpTh/_lpTd/_lpName）と同一値に統一
+      // （th padding 7px 8px / td padding 8px 8px / font-size .82rem / 氏名は太字にしない）
+      // 日別セルだけは31列あるため左右paddingを4pxに詰める（縦paddingと文字サイズは共通値）
+      var _meConfTd='padding:8px 8px;font-size:.82rem;text-align:center;white-space:nowrap;border-left:1px solid #e5e7eb;';
+      var _meTh='padding:7px 4px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _meTd='padding:8px 4px;font-size:.82rem;text-align:center;';
+      var _meName='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;'; // 氏名は太字にしない（有給申請一覧の _plName と同じ）
+      var _meTot='padding:8px 8px;font-size:.82rem;font-family:monospace;font-weight:800;text-align:right;color:#15803d;background:#dcfce7;border-left:2px solid #86efac;';
       var meStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
       var meStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
-      var _medcol='min-width:30px;';
+      var _medcol='min-width:26px;';
       var meDayTotals=[];for(var _mx=0;_mx<=meLastDay;_mx++)meDayTotals.push(0);
       var meGrand=0;
       var meRows=meStaff.map(function(s,ri){
@@ -5456,10 +5462,11 @@ function _renderInner(){
           tds+='<td style="'+_meTd+_medcol+'background:'+cellBg+';">'+(tk?'<span style="color:#15803d;font-weight:700;">●</span>':'<span style="color:#cbd5e1;">·</span>')+'</td>';
         }
         meGrand+=rowTotal;
+        // タグの文字サイズは有給取得計画・月別出勤日数のタグ（.66rem）と統一
         var reqTag=s.mealRequired
-          ?'<span style="font-size:.62rem;color:#fff;background:#15803d;border-radius:8px;padding:1px 7px;vertical-align:middle;">要</span>'
-          :'<span style="font-size:.62rem;color:#64748b;background:#e2e8f0;border-radius:8px;padding:1px 7px;vertical-align:middle;">不要</span>';
-        var noIdTag=(s.employeeId||"").trim()?'':' <span style="font-size:.62rem;color:#fff;background:#f59e0b;border-radius:8px;padding:1px 7px;vertical-align:middle;">社員番号未設定</span>';
+          ?'<span style="font-size:.66rem;color:#fff;background:#15803d;border-radius:8px;padding:1px 7px;vertical-align:middle;">要</span>'
+          :'<span style="font-size:.66rem;color:#64748b;background:#e2e8f0;border-radius:8px;padding:1px 7px;vertical-align:middle;">不要</span>';
+        var noIdTag=(s.employeeId||"").trim()?'':' <span style="font-size:.66rem;color:#fff;background:#f59e0b;border-radius:8px;padding:1px 7px;vertical-align:middle;">社員番号未設定</span>';
         return '<tr style="border-bottom:1px solid #e5e7eb;background:'+rowBg+';">'
           +'<td style="'+_meName+meStickyCell+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+' '+reqTag+noIdTag+'</td>'
           +tds
@@ -5470,16 +5477,17 @@ function _renderInner(){
       var meDayHead='';
       for(var hd=1;hd<=meLastDay;hd++){var _hdow=new Date(meY,meM-1,hd).getDay();meDayHead+='<th style="'+_meTh+_medcol+'text-align:center;color:'+(_hdow===0?"#dc2626":_hdow===6?"#1e40af":"#334155")+';">'+hd+'</th>';}
       var meFoot='';
-      for(var fd=1;fd<=meLastDay;fd++){meFoot+='<td style="'+_meTd+_medcol+'font-weight:700;font-size:13px;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(meDayTotals[fd]>0?meDayTotals[fd]:'')+'</td>';}
-      var meMinW=240+meLastDay*30+90; // +90 = 確認列
+      for(var fd=1;fd<=meLastDay;fd++){meFoot+='<td style="'+_meTd+_medcol+'font-weight:700;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(meDayTotals[fd]>0?meDayTotals[fd]:'')+'</td>';}
+      var meMinW=110+meLastDay*26+140; // 氏名110 + 日別26/列 + 合計/確認140（文字サイズ縮小に合わせて下限も縮小）
       var meTableHtml=meStaff.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:'+meMinW+'px;">'
           +'<thead><tr>'
-          +'<th style="'+_meTh+'text-align:left;'+meStickyHead+'">氏名</th>'
+          // 氏名・合計・確認の各列は本文セルと同じ左右padding 8px に揃える（日別セルの4pxは適用しない）
+          +'<th style="'+_meTh+'text-align:left;padding:7px 8px;'+meStickyHead+'">氏名</th>'
           +meDayHead
-          +'<th style="'+_meTh+'text-align:right;background:#bbf7d0;color:#15803d;border-left:2px solid #86efac;">合計</th>'
-          +'<th style="'+_meTh+'text-align:center;border-left:1px solid #cbd5e1;">確認</th>'
+          +'<th style="'+_meTh+'text-align:right;padding:7px 8px;background:#bbf7d0;color:#15803d;border-left:2px solid #86efac;">合計</th>'
+          +'<th style="'+_meTh+'text-align:center;padding:7px 8px;border-left:1px solid #cbd5e1;">確認</th>'
           +'</tr></thead>'
           +'<tbody>'+meRows+'</tbody>'
           +'<tfoot><tr>'
@@ -5492,15 +5500,16 @@ function _renderInner(){
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません'+(meReqCount===0?'（「賄い 要」のスタッフが未設定です。スタッフ管理で設定してください）':'')+'</div>';
       tc='<div class="admin-card admin-wrap">'
         +'<div class="admin-title">🍚 賄い一覧（'+meY+'年'+meM+'月）</div>'
-        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">'
+        +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<select id="sel-meal-month" style="width:auto;min-width:130px;padding:9px 12px;font-size:15px;">'+meMonthOpts+'</select>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
         +'<button class="btn-export" id="btn-meal-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:10px;line-height:1.7;">各セルの <span style="color:#15803d;font-weight:700;">●</span> はその日に賄いを取得したことを表します。「合計」はその月の賄い取得回数。<span style="color:#15803d;font-weight:700;">要</span>＝賄い対象スタッフを上に表示しています。賄いの入力・修正はスタッフ本人の打刻画面で行います（過去月も修正可）。'
-        +'<br>右端の「確認」列は、表示中の<b>'+meY+'年'+meM+'月分</b>についてスタッフが月初に回答した入力完了状況です（✅確認済／⏳まだ／—未回答）。</div>'
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center;">'
+        // 見れば分かる説明（合計の意味・要タグの並び順）は削除し、入力先と確認列の意味だけ残す
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。入力・修正はスタッフ本人の打刻画面で行います（過去月も可）。'
+        +'<br>「確認」列は<b>'+meY+'年'+meM+'月分</b>についてスタッフが月初に回答した入力完了状況（✅確認済／⏳まだ／—未回答）。</div>'
+        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<span style="font-size:.8rem;color:#475569;font-weight:700;">'+meM+'月分 月初確認：</span>'
         +'<span style="font-size:.78rem;background:#dcfce7;color:#15803d;font-weight:700;border-radius:10px;padding:2px 10px;">✅ 確認済 '+meCD+'</span>'
         +'<span style="font-size:.78rem;background:#fee2e2;color:#b91c1c;font-weight:700;border-radius:10px;padding:2px 10px;">⏳ まだ '+meCP+'</span>'
