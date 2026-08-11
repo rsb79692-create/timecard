@@ -1368,6 +1368,143 @@ var adminTokenValid=false;
 var adminTokenInvalid=false;
 var adminTokenErrMsg=""; // 管理者URL認証の失敗理由（トークン不正／サーバ到達不可 等）
 var isAdminAuthenticated=false; // 管理者認証済みフラグ
+
+// ===== 管理者URLトークンの「設定状態」（表示専用。認証には一切使わない）=====
+// ★ 取得できなかったことを「未設定」と表示してはならない。
+//   旧実装（〜2026-08）は公開領域から読んだ値が null なら「未設定です」と断定していたため、
+//   起動時の通信失敗・401/403・タイムアウトがそのまま「未設定」の誤表示になっていた。
+//   そこで次の4状態を必ず区別する。
+//     loading      : まだ判定できない（取得前・取得中）
+//     configured   : 正常に取得できて「設定済み」
+//     unconfigured : 正常に取得できた結果、本当に未設定
+//     error        : 取得に失敗（通信断 / 401 / 403 / 5xx / timeout）＝判定不能
+var adminTokenStatus="loading";
+// ★ 無限リトライはしない。起動直後に最大2回だけ自動再試行し、以後は画面の「再取得」に委ねる。
+var ADMIN_TOKEN_STATE_MAX_RETRY=2;
+var _adminTokenStateRetries=0;
+var _adminTokenStateFetching=false;
+var _adminTokenStateTimer=null; // 予約中の自動リトライ（保存成功時に取り消すため保持する）
+
+/**
+ * 管理者URLトークンの設定状態を取得する。
+ * ★ fetchJson は「通信失敗」も「権限拒否」も「ノード不在」もすべて null を返すため、
+ *   これだけでは未設定と取得失敗を区別できない。ここでは authFetch の r.ok を必ず確認し、
+ *   「取得に成功して不在」＝unconfigured、「取得できなかった」＝error として返す。
+ * @return {Promise<{status:string,set:boolean,legacy:string}>}
+ */
+function loadAdminTokenState(){
+  var paths=["/config/adminTokenSet.json","/config/adminTokenHash.json","/config/adminToken.json"];
+  return Promise.all(paths.map(function(p){
+    return authFetch(FB_URL+p)
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(function(v){return {ok:true,value:v};})
+      .catch(function(){return {ok:false,value:null};});
+  })).then(function(res){
+    var setFlag=res[0],hash=res[1],legacy=res[2];
+    // 設定済みの確証が1つでも取れたら configured（移行期は hash 側だけが残ることがある）
+    if((setFlag.ok&&setFlag.value===true)||(hash.ok&&hash.value))return {status:"configured",set:true,legacy:""};
+    if(legacy.ok&&typeof legacy.value==="string"&&legacy.value)return {status:"configured",set:false,legacy:legacy.value};
+    // 確証が無いときは、3件すべてが「取得成功して不在」だった場合だけ未設定と断定する。
+    // 1件でも取得に失敗していれば判定材料が欠けている＝error（未設定と表示しない）。
+    if(setFlag.ok&&hash.ok&&legacy.ok)return {status:"unconfigured",set:false,legacy:""};
+    return {status:"error",set:false,legacy:""};
+  }).catch(function(){return {status:"error",set:false,legacy:""};});
+}
+
+/** loadAdminTokenState の結果を画面状態へ反映する。error のときは既知の値を保持する。 */
+function applyAdminTokenState(st){
+  if(!st||!st.status){adminTokenStatus="error";}
+  else if(st.status==="configured"){
+    adminTokenStatus="configured";ADMIN_TOKEN_SET=!!st.set;ADMIN_TOKEN=st.set?"":(st.legacy||"");
+  } else if(st.status==="unconfigured"){
+    adminTokenStatus="unconfigured";ADMIN_TOKEN_SET=false;ADMIN_TOKEN="";
+  } else {
+    // error: 直前に判明している値をそのまま残す（誤って「未設定」へ落とさない）
+    adminTokenStatus="error";
+  }
+  if(adminTokenStatus==="error")scheduleAdminTokenStateRetry();
+}
+
+/** 起動直後の一時的な失敗を自動で拾い直す（最大 ADMIN_TOKEN_STATE_MAX_RETRY 回まで）。 */
+function scheduleAdminTokenStateRetry(){
+  if(_adminTokenStateRetries>=ADMIN_TOKEN_STATE_MAX_RETRY)return; // 無限リトライ禁止
+  if(_adminTokenStateTimer)clearTimeout(_adminTokenStateTimer); // 二重予約を残さない
+  var delay=_adminTokenStateRetries===0?1500:5000;
+  _adminTokenStateRetries++;
+  _adminTokenStateTimer=setTimeout(function(){_adminTokenStateTimer=null;refreshAdminTokenState();},delay);
+}
+
+/** 予約済みの自動リトライを取り消す（トークン保存成功後など、結果が確定した場合）。 */
+function cancelAdminTokenStateRetry(){
+  if(_adminTokenStateTimer){clearTimeout(_adminTokenStateTimer);_adminTokenStateTimer=null;}
+  _adminTokenStateRetries=0;
+}
+
+// 再描画は入力中の値を壊さない範囲だけで行う（10秒ポーリングと同じ考え方）。
+function _rerenderAdminTokenCard(){
+  if(document.querySelector('.time-edit-wrap')||showPaidLeaveForm||_paidLeaveRenderGuard||monthlyDaysEditing)return;
+  var _t=document.getElementById("new-admin-token"),_p=document.getElementById("new-admin-pin");
+  if((_t&&_t.value)||(_p&&_p.value))return; // 入力途中の値を消さない
+  render();
+}
+
+/** 「再取得」ボタンの取得中／通常表示を切り替える（描画が抑止されても押せなくならないように）。 */
+function _setAdminTokenStateBtn(busy){
+  var b=document.getElementById("btn-reload-admin-token-state");
+  if(!b)return;
+  b.disabled=!!busy;
+  b.textContent=busy?"取得中…":"再取得";
+}
+
+/** 設定状態を取り直す。自動リトライと画面の「再取得」ボタンの共通経路。 */
+function refreshAdminTokenState(){
+  if(_adminTokenStateFetching)return Promise.resolve();
+  _adminTokenStateFetching=true;
+  // 再描画が抑止される状況（入力途中など）でも押下が伝わるようにボタン側にも反映する
+  _setAdminTokenStateBtn(true);
+  if(adminTokenStatus==="error"){adminTokenStatus="loading";_rerenderAdminTokenCard();}
+  return loadAdminTokenState().then(function(st){
+    _adminTokenStateFetching=false;
+    // ★ 再描画は入力途中などで抑止されうる。ボタンの復元を render() に頼ると、
+    //   「取得中…」のまま押せなくなり、再取得の手段が失われる。必ずここで戻す。
+    _setAdminTokenStateBtn(false);
+    applyAdminTokenState(st);
+    _rerenderAdminTokenCard();
+  }).catch(function(){
+    _adminTokenStateFetching=false;
+    _setAdminTokenStateBtn(false);
+    adminTokenStatus="error";
+    scheduleAdminTokenStateRetry();
+    _rerenderAdminTokenCard();
+  });
+}
+
+/** 「再取得」ボタン用。自動リトライ枠を戻したうえで取り直す。 */
+function retryAdminTokenState(){_adminTokenStateRetries=0;return refreshAdminTokenState();}
+
+// 表示用ラベル。4状態をそれぞれ別の文言・色で出す。
+function _adminTokenStateColor(){
+  if(adminTokenStatus==="configured")return ADMIN_TOKEN_SET?"#1e40af":"#475569";
+  if(adminTokenStatus==="unconfigured")return "#b91c1c";
+  if(adminTokenStatus==="error")return "#b45309";
+  return "#64748b"; // loading
+}
+function _adminTokenStateLabel(){
+  if(adminTokenStatus==="configured")return ADMIN_TOKEN_SET?"設定済み（サーバ保管）":"旧形式（要再設定）";
+  if(adminTokenStatus==="unconfigured")return "未設定（URLログイン不可）";
+  if(adminTokenStatus==="error")return "設定状態を確認できません";
+  return "確認中…";
+}
+function _adminTokenStateNote(){
+  if(adminTokenStatus==="configured"){
+    return ADMIN_TOKEN_SET?'?admin=[設定したトークン] でPINなしアクセス可'
+                          :'?admin='+esc(maskToken(ADMIN_TOKEN))+' 利用可（再設定推奨）';
+  }
+  if(adminTokenStatus==="unconfigured")return '設定がないと管理者URLログインは使用不可';
+  if(adminTokenStatus==="error")return '通信または権限の問題で確認できませんでした。<strong>未設定とは限りません</strong>。再取得するか、しばらく待ってからお試しください。';
+  return '設定状態を確認しています…';
+}
+
 var demoParam=new URLSearchParams(location.search).get("demo");
 var demoUrlUsed=demoParam!==null;
 var demoMode=false;
@@ -4164,8 +4301,13 @@ function _renderInner(){
         +'</div></div>'
         +'<div class="admin-card">'
         +'<div class="admin-title">管理者トークン（URL直接ログイン）</div>'
-        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+(ADMIN_TOKEN_SET?"#1e40af":(ADMIN_TOKEN?"#475569":"#b91c1c"))+';font-family:monospace;">'+(ADMIN_TOKEN_SET?"設定済み（サーバ保管）":(ADMIN_TOKEN?"旧形式（要再設定）":"未設定（URLログイン不可）"))+'</strong></div>'
-        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+(ADMIN_TOKEN_SET?'?admin=[設定したトークン] でPINなしアクセス可':(ADMIN_TOKEN?'?admin='+esc(maskToken(ADMIN_TOKEN))+' 利用可（再設定推奨）':'設定がないと管理者URLログインは使用不可'))+'</div>'
+        // ★ loading / error を「未設定」と表示しない。取得できていないことと、
+        //   取得できた結果として未設定であることは、管理者の取るべき行動が正反対になる。
+        +'<div style="font-size:.85rem;color:#475569;margin-bottom:4px;">現在のトークン: <strong style="color:'+_adminTokenStateColor()+';font-family:monospace;">'+_adminTokenStateLabel()+'</strong></div>'
+        +'<div style="font-size:.78rem;color:#8496a7;margin-bottom:12px;word-break:break-all;">'+_adminTokenStateNote()+'</div>'
+        +(adminTokenStatus==="error"
+          ?'<div style="margin-bottom:12px;"><button id="btn-reload-admin-token-state" style="background:#fff;color:#b45309;border:1px solid #f59e0b;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">再取得</button></div>'
+          :'')
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-token" type="text" maxlength="128" placeholder="新しいトークン（英数字・_・- で4文字以上）" style="flex:1;">'
         +'<button id="btn-change-token" style="background:#1e40af;color:#fff;border:none;padding:8px 16px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
@@ -6397,7 +6539,9 @@ function _renderInner(){
         if(r.ok){
           // ★ 成功したときだけローカル状態を更新する。先に更新すると、保存失敗時に
           //   画面上は「変更済み」に見えて実際は旧トークンのまま、という誤解が起きる。
-          ADMIN_TOKEN="";ADMIN_TOKEN_SET=true;
+          // ★ 予約済みの自動リトライを取り消す。後から発火した再取得が失敗すると、
+          //   保存に成功した直後に「設定状態を確認できません」へ戻ってしまう。
+          ADMIN_TOKEN="";ADMIN_TOKEN_SET=true;adminTokenStatus="configured";cancelAdminTokenStateRetry();
           var el=document.getElementById("new-admin-token");if(el)el.value="";
           // ★ サーバは変更時刻より前の管理者セッションを失効させる（漏えいした旧URLで
           //   入った第三者を締め出すため）。いま操作している自分自身も対象になるので、
@@ -6420,6 +6564,9 @@ function _renderInner(){
         render();
       })().catch(function(){_adminTokenSaving=false;changeTokenBtn.disabled=false;});
     };
+    // 管理者トークンの設定状態の再取得（取得失敗時のみ描画されるボタン）
+    var reloadTokenStateBtn=document.getElementById("btn-reload-admin-token-state");
+    if(reloadTokenStateBtn)reloadTokenStateBtn.onclick=function(){retryAdminTokenState();};
     // 閲覧用トークン CRUD
     var issueVtBtn=document.getElementById("btn-vt-issue");
     if(issueVtBtn)issueVtBtn.onclick=function(){
@@ -8617,8 +8764,10 @@ async function initFirebase() {
       Promise.resolve(null),
       // ★ adminTokenHash は「設定済みか」の表示にしか使わない（認証には使わない）。
       //   移行期は削除前後どちらの状態でも正しく表示できるよう、真偽値フラグと併読する。
-      Promise.all([fetchJson(FB_URL+"/config/adminTokenSet.json"),fetchJson(FB_URL+"/config/adminTokenHash.json")]),
-      fetchJson(FB_URL+"/config/adminToken.json"),
+      // ★ fetchJson は通信失敗も null を返すため、ここでは使わない。
+      //   loadAdminTokenState が r.ok を確認し、「未設定」と「取得失敗」を区別して返す。
+      loadAdminTokenState(),
+      Promise.resolve(null), // 旧 config/adminToken は loadAdminTokenState 内で読む（添字維持用）
       (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
       // デモトークンは「トークンをキーに単一ノードを引く」方式。デモURL以外では取得しない。
       (demoUrlUsed&&demoParam)?fetchJson(FB_URL+"/demoTokens/"+encodeURIComponent(demoParam)+".json"):Promise.resolve(null),
@@ -8633,7 +8782,7 @@ async function initFirebase() {
     var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
     // results[6] / results[7] は管理者PIN用の未使用プレースホルダ（読み込みを廃止）
-    var _fbAdminTokenState=results[8]||[],fbAdminToken=results[9];
+    var _fbAdminTokenState=results[8]; // {status,set,legacy}。results[9] は添字維持用の未使用プレースホルダ
     var fbViewerTokenData=results[10],fbDemoTokenRec=results[11];
     var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
     var fbMonthlyImport=results[14];
@@ -8669,8 +8818,8 @@ async function initFirebase() {
     // 管理者PINはクライアントへ読み込まない（照合はサーバのみ）。
     // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
     // 表示専用。config/adminTokenSet が真、または旧 config/adminTokenHash が残っていれば「設定済み」。
-    if(_fbAdminTokenState[0]===true||_fbAdminTokenState[1]){ADMIN_TOKEN_SET=true;ADMIN_TOKEN="";}
-    else if(fbAdminToken){ADMIN_TOKEN=fbAdminToken;}
+    // ★ 取得に失敗していた場合は error のまま保持し、「未設定」とは表示しない（短時間の自動再試行つき）。
+    applyAdminTokenState(_fbAdminTokenState);
     // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
     if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
     // 賄い（まかない）取得記録（employeeIdキーのマップ）
@@ -9076,11 +9225,130 @@ document.addEventListener("keydown",function(e){
   else if(k==="Escape"){e.preventDefault();if(pinChecking)return;pinInput="";pinError=false;pinErrorMsg="";render();} // 入力クリア
 });
 
+// ===== 配信版の更新検知（開きっぱなしの古い画面を残さない）=====
+// ★ このアプリは単一 index.html で、開いたままにすると修正後も古いJSが動き続ける。
+//   2026-08 のサーバ側認証移行では、移行前の画面が公開領域の取得失敗を「未設定」と
+//   誤判定し続け、「管理者PINが未設定です」を出したままになった（リロードすると直る）。
+//   そこで配信中の index.html の版（ETag / Last-Modified）を監視し、変わっていたら
+//   再読み込みを促す。★ 自動リロードはしない（打刻・入力中に画面を奪わない）。
+var _appVersionTag="";        // 起動時に確認した配信版
+var _appUpdateNotified=false; // バナーは1回だけ
+var _appVersionLastCheck=0;
+var APP_VERSION_CHECK_MS=30*60*1000; // 定期確認は30分間隔
+var APP_VERSION_MIN_GAP_MS=5*60*1000; // タブ復帰が続いても5分に1回まで
+
+function _fetchAppVersionTag(){
+  // クエリ（?admin= 等）は付けない。パスだけを HEAD で確認する。
+  return fetch(location.pathname,{method:"HEAD",cache:"no-store"})
+    .then(function(r){
+      if(!r.ok)return "";
+      return r.headers.get("ETag")||r.headers.get("Last-Modified")||"";
+    }).catch(function(){return "";});
+}
+
+// ★ 固定バナーは最下部のコンテンツを覆う。上部の mode-banner と同じく、
+//   表示中は body に下余白を確保して最終行・最下部ボタンを操作可能に保つ。
+var _appBannerPrevPad="";
+function _syncAppBannerPadding(bar){
+  document.body.style.paddingBottom=(bar.offsetHeight+8)+"px";
+}
+function _hideAppUpdateBanner(bar){
+  if(bar&&bar.parentNode)bar.parentNode.removeChild(bar);
+  document.body.style.paddingBottom=_appBannerPrevPad;
+}
+
+function _showAppUpdateBanner(){
+  if(document.getElementById("app-update-banner"))return;
+  var bar=document.createElement("div");
+  bar.id="app-update-banner";
+  // ★ z-index はモーダル（9999）より下に置く。バナーがモーダルの操作を隠してはならない。
+  bar.style.cssText="position:fixed;left:0;right:0;bottom:0;z-index:9998;background:#1e40af;color:#fff;"
+    +"padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:.85rem;box-shadow:0 -2px 8px rgba(0,0,0,.2);";
+  var msg=document.createElement("span");
+  msg.style.cssText="flex:1;line-height:1.4;";
+  msg.textContent="新しいバージョンがあります。再読み込みしてください。";
+  var reload=document.createElement("button");
+  reload.textContent="再読み込み";
+  reload.style.cssText="background:#fff;color:#1e40af;border:none;padding:7px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;";
+  reload.onclick=function(){location.reload();};
+  var later=document.createElement("button");
+  later.textContent="後で";
+  later.style.cssText="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.6);padding:7px 12px;border-radius:2px;font-size:.85rem;cursor:pointer;font-family:inherit;";
+  // ★ 「後で」は先送りであって無効化ではない。ここで通知済みのまま閉じると、
+  //   まさに塞ぎたかった「古いJSのまま残るタブ」が無通知で生き残ってしまう。
+  later.onclick=function(){
+    _hideAppUpdateBanner(bar);
+    _appUpdateNotified=false;               // 次の定期確認で再提示する
+    _appVersionLastCheck=Date.now();        // 直後の再表示はしない（最短でも次の間隔後）
+  };
+  bar.appendChild(msg);bar.appendChild(reload);bar.appendChild(later);
+  document.body.appendChild(bar);
+  _appBannerPrevPad=document.body.style.paddingBottom;
+  _syncAppBannerPadding(bar);
+}
+// 画面回転・幅変更でバナーが2行になると余白が不足するため、都度測り直す。
+// ★ 登録はモジュールスコープで1回だけ（表示のたびに登録すると解除経路が無く積み上がる）。
+//   要素は毎回引き直すので、閉じたあとの古い参照を掴むこともない。
+window.addEventListener("resize",function(){
+  var b=document.getElementById("app-update-banner");
+  if(b)_syncAppBannerPadding(b);
+});
+
+function checkAppVersion(){
+  if(_appUpdateNotified||!_appVersionTag)return;
+  var now=Date.now();
+  if(now-_appVersionLastCheck<APP_VERSION_MIN_GAP_MS)return;
+  _appVersionLastCheck=now;
+  _fetchAppVersionTag().then(function(tag){
+    if(!tag||tag===_appVersionTag)return; // 取得失敗（空文字）は「更新なし」として扱う（誤検知させない）
+    _appUpdateNotified=true;
+    _showAppUpdateBanner();
+  });
+}
+
+// ★ 起動時に電波が悪いと初回の版取得に失敗する。そこで諦めると、そのタブは
+//   以後まったく更新に気づけない（＝再発防止が効かない端末が生まれる）。
+//   有限回だけ再試行し、オンライン復帰でも1回試す。
+var APP_VERSION_WATCH_MAX_TRIES=5;
+var _appVersionWatchTries=0;
+var _appVersionWatching=false;
+function startAppVersionWatch(){
+  if(location.protocol!=="http:"&&location.protocol!=="https:")return;
+  if(_appVersionTag||_appVersionWatching)return; // 監視中／確立済みなら二重に張らない
+  _appVersionWatching=true;
+  _fetchAppVersionTag().then(function(tag){
+    _appVersionWatching=false;
+    if(!tag){
+      // 版を取得できない（オフライン／ヘッダを返さない配信環境）→ 有限回だけ再試行
+      if(_appVersionWatchTries<APP_VERSION_WATCH_MAX_TRIES){
+        _appVersionWatchTries++;
+        setTimeout(startAppVersionWatch,60000);
+      }
+      return;
+    }
+    _appVersionTag=tag;_appVersionLastCheck=Date.now();
+    setInterval(checkAppVersion,APP_VERSION_CHECK_MS);
+    document.addEventListener("visibilitychange",function(){
+      if(document.visibilityState==="visible")checkAppVersion();
+    });
+  });
+}
+// オンライン復帰時: まだ監視を確立できていなければ、再試行の予算を戻してその場で試す。
+// （予算を戻さないと、起動直後に数分オフラインだった端末が二度と監視を張れない）
+window.addEventListener("online",function(){
+  if(_appVersionTag)return;
+  _appVersionWatchTries=0;
+  startAppVersionWatch();
+});
+
 // まず即座にレンダリング（Firebaseを待たない）
 render();
 
 // その後Firebaseから個別パスで取得して再レンダリング
 initFirebase();
+
+// 配信版の監視を開始（起動処理を妨げない）
+startAppVersionWatch();
 </script>
 <script>
 if ('serviceWorker' in navigator) {
