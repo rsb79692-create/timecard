@@ -932,12 +932,14 @@ function listenFirebase() {
         }).catch(function(){});
     }
     if(screen==="admin"&&adminTab==="paidleave"){
-      // 残日数も polling で同期（承認処理中・フォーム編集中はスキップ）
-      if(!paidLeaveBalanceSaving&&!paidLeaveBalanceDirty){
+      // 残日数も polling で同期（承認処理中・フォーム編集中・付与日数修正モーダル表示中はスキップ）
+      // ★修正モーダル表示中に差し替えると、画面の「消化済み日数」と確認文言が食い違う。
+      //   保存時は対象行を取り直して検証するため、ここで止めても古い値で書く経路は生まれない。
+      if(!paidLeaveBalanceSaving&&!paidLeaveBalanceDirty&&!_plBalEditModalOpen){
         authFetch(FB_URL+"/tc5_paid_leave_balances.json")
           .then(function(r){return r.json();})
           .then(function(val){
-            if(val&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving){
+            if(val&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_plBalEditModalOpen){
               var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
               paidLeaveBalances=(arr||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});
               if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -1962,6 +1964,8 @@ var staffNotifications={}; // tc5_staff_notifications キャッシュ（社員�
 var staffNotifOpen=false; // 打刻画面: 通知履歴の展開トグル（開いた時に既読化）
 var _paidLeaveGrantsCache=[]; // 未登録付与一覧キャッシュ（paidleaveタブ描画中のみ有効）
 var _plGrantModalOpen=false; // 有給付与登録モーダル表示中フラグ（render()でのclose防止用）
+var _plBalEditModalOpen=false; // 付与日数修正モーダル表示中フラグ（Escキーで閉じる判定用）
+var _plBalEditId=""; // 付与日数修正モーダルの対象付与行id（保存時に正本を再取得するためidだけ保持）
 var _paidLeaveRenderGuard=false; // 有給管理タブ表示中の自動再描画抑制フラグ（polling由来のrender()をスキップ）
 var paidLeaveLoading=false;
 var paidLeaveBalanceDirty=false; // 残日数入力フォーム編集中フラグ（polling 上書き防止）
@@ -2350,7 +2354,7 @@ var DEMO_BLOCK_SELECTORS=[
   ".btn-crq-approve",".btn-crq-reject",
   // 有給の承認・却下・引戻・付与・残数編集・削除
   ".btn-pl-approve",".btn-pl-reject",".btn-pl-withdraw",
-  ".btn-pl-bal-row-save",".btn-pl-bal-row-delete","#btn-pl-bal-save",
+  ".btn-pl-bal-row-edit",".btn-pl-bal-row-delete","#btn-pl-bal-save",
   "#pl-bal-new-staff","#pl-bal-new-grant-date","#pl-bal-new-granted",
   // 勤怠精査の完了・解除
   "#btn-review-done","#btn-review-unset",
@@ -2372,7 +2376,7 @@ var DEMO_BLOCK_SELECTORS=[
   ".btn-st-copy",".btn-st-del","#btn-st-issue","#st-new-name","#st-new-expires"
 ].join(",");
 // インラインハンドラから書き込み関数を呼ぶ要素も自動的に封じる（将来追加分への保険）
-var DEMO_WRITE_FN_RE=/\b(saveRecord|patchRecord|softDeleteRecord|saveApprovals|saveCorrectionRequestFb|patchCorrectionRequestFb|savePaidLeaveRequest|patchPaidLeaveRequest|savePaidLeaveBalance|patchPaidLeaveBalance|deletePaidLeaveBalance|saveData|saveToFirebase|mealSaveEntry|mealToggleDate|mealSelectAttendance|mealConfSave|mealConfGoPrev|reviewStatusSave|mdSaveCell|deleteDocument|bulkDeleteDocuments|bulkDeleteStaffDocs|uploadDocument|uploadStaffDocument|saveFacilities|adminSavePin|showAdminPinSetModal|delStaff|viewerDownloadAndDelete|submitProxyLeaveRequest|savePaidLeaveGrantRecord|openPaidLeaveGrantModal|openProxyLeaveModal|adminViewPin|staffNotifReadAndOpen)\s*\(/;
+var DEMO_WRITE_FN_RE=/\b(saveRecord|patchRecord|softDeleteRecord|saveApprovals|saveCorrectionRequestFb|patchCorrectionRequestFb|savePaidLeaveRequest|patchPaidLeaveRequest|savePaidLeaveBalance|patchPaidLeaveBalance|deletePaidLeaveBalance|saveData|saveToFirebase|mealSaveEntry|mealToggleDate|mealSelectAttendance|mealConfSave|mealConfGoPrev|reviewStatusSave|mdSaveCell|deleteDocument|bulkDeleteDocuments|bulkDeleteStaffDocs|uploadDocument|uploadStaffDocument|saveFacilities|adminSavePin|showAdminPinSetModal|delStaff|viewerDownloadAndDelete|submitProxyLeaveRequest|savePaidLeaveGrantRecord|openPaidLeaveGrantModal|openProxyLeaveModal|adminViewPin|staffNotifReadAndOpen|openPaidLeaveBalEditModal|savePaidLeaveBalGrantedDays)\s*\(/;
 function _applyDemoUiLock(){
   if(writePolicy!=="readonlyWithAllowList")return;
   var app=document.getElementById("app");
@@ -4952,7 +4956,6 @@ function _renderInner(){
             var expired=(b.expiresAt&&b.expiresAt<today_pl);
             var rowBg=expired?"#f8f8f8":"#fff";
             var textColor=expired?"#9ca3af":"#0f172a";
-            var safeId=b.id.replace(/[^a-zA-Z0-9_\-]/g,"_");
             // 社員番号表示: b.staffId が社員番号形式かどうかを判定して表示
             var dispEmpId=(function(){
               var sid=(b.staffId||"").trim();
@@ -4975,9 +4978,11 @@ function _renderInner(){
               +'<td style="'+_plTd+'font-family:monospace;color:'+(expired?"#9ca3af":"#b45309")+';white-space:nowrap;">'+esc(b.expiresAt||"")+'</td>'
               +'<td style="'+_plTd+'text-align:right;font-family:monospace;font-weight:700;color:'+(expired?"#9ca3af":"#166534")+';">'+esc(b.remainDays!=null?b.remainDays:((b.grantedDays||0)-(b.usedDays||0)))+'日</td>'
               +'<td style="padding:10px 4px;white-space:nowrap;">'
-              +(expired?""
-                :'<button class="btn-pl-bal-row-save" data-balid="'+esc(b.id)+'" style="background:#1e40af;color:#fff;border:none;'+_plBtn+'margin-right:3px;">保存</button>'
-              )
+              // 旧「保存」ボタンは使用日数の入力欄（pl-bal-used-*）が描画されておらず、押すと必ず
+              // 「使用日数を正しく入力してください」で終わる状態だったため撤去した（機能の喪失はない）。
+              // 値の訂正は下の「修正」モーダルへ一本化する。
+              // 付与日数の訂正（誤登録の修正用）。付与日・消化済み日数・他の付与行は変更しない
+              +'<button class="btn-pl-bal-row-edit" data-balid="'+esc(b.id)+'" style="background:#fff;color:#1e40af;border:1px solid #1e40af;'+_plBtn+'margin-right:3px;">修正</button>'
               +'<button class="btn-pl-bal-row-delete" data-balid="'+esc(b.id)+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;'+_plBtn+'">削除</button>'
               +'</td></tr>';
           });
@@ -6045,27 +6050,9 @@ function _renderInner(){
         console.error("[PaidLeave] new grant save error",e);
       });
     };
-    // 既存付与行の保存ボタン（行ごと編集用）
-    document.querySelectorAll(".btn-pl-bal-row-save").forEach(function(btn){
-      btn.onclick=function(){
-        var rowId=btn.dataset.balid;
-        var usedEl=document.getElementById("pl-bal-used-"+rowId);
-        var usedVal=usedEl?parseFloat(usedEl.value||"0"):null;
-        if(usedVal===null||isNaN(usedVal)||usedVal<0){showAlert("使用日数を正しく入力してください");return;}
-        var idx=paidLeaveBalances.findIndex(function(b){return normalizePaidLeaveBalance(b).id===rowId;});
-        if(idx<0){showAlert("対象データが見つかりません");return;}
-        var bal=normalizePaidLeaveBalance(paidLeaveBalances[idx]);
-        var newRemain=Math.round((bal.grantedDays-usedVal)*10)/10;
-        bal.usedDays=usedVal;
-        bal.remainDays=newRemain;
-        paidLeaveBalances[idx]=bal;
-        patchPaidLeaveBalance(rowId,{usedDays:usedVal,remainDays:newRemain}).then(function(){
-          showAlert("保存しました（使用"+usedVal+"日 / 残"+newRemain+"日）",function(){paidLeaveBalanceDirty=false;_paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;});
-        }).catch(function(e){
-          showAlert("保存に失敗しました。");
-          console.error("[PaidLeave] row save error",e);
-        });
-      };
+    // 既存付与行の「修正」ボタン（付与日数の誤登録を訂正する。モーダルはbody直下で管理）
+    document.querySelectorAll(".btn-pl-bal-row-edit").forEach(function(btn){
+      btn.onclick=function(){openPaidLeaveBalEditModal(btn.dataset.balid);};
     });
     // 既存付与行の削除ボタン
     document.querySelectorAll(".btn-pl-bal-row-delete").forEach(function(btn){
@@ -8222,6 +8209,8 @@ function todayDateStr(){
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u3092 Firebase \u306B\u65B0\u898F\u4FDD\u5B58\uFF08PUT\u3001id \u30AD\u30FC\u3067\u4FDD\u5B58\uFF09
 function savePaidLeaveBalance(bal){
+  // 閲覧専用（労務士）は書き込み不可。viewer画面に描画しないことだけを認可にしない（フェイルクローズ）
+  if(viewerMode){console.warn("[viewerMode] paid leave balance write blocked");return Promise.resolve(false);}
   if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(bal.id)+".json";
   // 解決値は保存成否(boolean)。既存呼び出しは戻り値未使用のため後方互換。例外時もrejectせずfalseを返す。
@@ -8372,20 +8361,25 @@ function markStaffNotifRead(sid){
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u306B PATCH\uFF08\u90E8\u5206\u66F4\u65B0\uFF09
 function patchPaidLeaveBalance(id,partial){
+  // 閲覧専用（労務士）は書き込み不可。viewer画面に描画しないことだけを認可にしない（フェイルクローズ）
+  if(viewerMode){console.warn("[viewerMode] paid leave balance write blocked");return Promise.resolve(false);}
   if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
+  // 解決値は保存成否(boolean)。既存呼び出し（FIFO消化・行保存）は戻り値未使用のため後方互換。
   return authFetch(url,{
     method:"PATCH",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify(partial)
   }).then(function(res){
-    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance patch error",res.status,t);});}
-    else{console.log("[PaidLeave] balance patched",id,partial);}
-  }).catch(function(e){console.error("[PaidLeave] balance patch network error",e);});
+    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] balance patch error",res.status,t);});return false;}
+    console.log("[PaidLeave] balance patched",id,partial);return true;
+  }).catch(function(e){console.error("[PaidLeave] balance patch network error",e);return false;});
 }
 
 // \u6709\u7D66\u6B8B\u65E5\u6570\u884C\u3092 Firebase \u304B\u3089\u524A\u9664
 function deletePaidLeaveBalance(id){
+  // 閲覧専用（労務士）は削除不可。viewer画面に描画しないことだけを認可にしない（フェイルクローズ）
+  if(viewerMode){console.warn("[viewerMode] paid leave balance delete blocked");return Promise.resolve(false);}
   if(demoWriteBlocked())return Promise.resolve(false);
   var url=FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(id)+".json";
   return authFetch(url,{method:"DELETE"})
@@ -9072,6 +9066,263 @@ function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt
   render();
 }
 
+// ===== 有給「付与日数の修正」モーダル（body直下固定 — render()再描画から完全分離） =====
+// 誤って登録した付与日数だけを後から訂正する。
+// 変更するのは対象付与行の grantedDays と remainDays のみで、
+// 付与日・有効期限・消化済み日数(usedDays)・他の付与行・取得申請・承認状態・FIFOの消化順は変更しない。
+//
+// 残日数の再計算は正本の定義そのまま:
+//   remainDays = grantedDays - usedDays
+//   usedDays ＝ 承認時に applyFifoConsumption がこの付与行から消化した累計（正本の消化済み日数）。
+//   未来日の承認済み取得も承認時点で usedDays に入っているため、消化済みの判定に別計算を新設しない。
+// 画面の残表示（未来分を戻す buildFutureApprovedLeaveMap）は usedDays を上限に戻す実装なので、
+// usedDays を変えない本修正では戻し量が変化せず、表示・合計・取得予定の整合は保たれる。
+function ensurePaidLeaveBalEditModal(){
+  var wrap=document.getElementById("pl-bal-edit-modal-wrap");
+  if(wrap)return wrap; // 既存なら再利用
+  wrap=document.createElement("div");
+  wrap.id="pl-bal-edit-modal-wrap";
+  wrap.style.cssText="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:200;align-items:flex-start;justify-content:center;overflow-y:auto;padding:40px 16px 80px;";
+  wrap.innerHTML=''
+    +'<div style="background:#fff;width:100%;max-width:420px;border-radius:2px;border:1px solid #adb5bd;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid #e4e8ed;">'
+    +'<span style="font-size:14px;font-weight:700;color:#1a2332;">付与日数の修正</span>'
+    +'<button onclick="closePaidLeaveBalEditModal()" style="background:#dde1e7;border:1px solid #adb5bd;width:28px;height:28px;border-radius:2px;font-size:14px;color:#475569;cursor:pointer;font-family:inherit;line-height:1;">×</button>'
+    +'</div>'
+    +'<div style="padding:14px 18px;">'
+    +'<div id="pl-bal-edit-info" style="background:#f1f5f9;border-radius:4px;padding:8px 10px;font-size:.78rem;color:#334155;margin-bottom:10px;overflow-wrap:break-word;"></div>'
+    +'<div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:.82rem;margin-bottom:12px;">'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">付与日</span><span id="pl-bal-edit-gdate" style="font-family:monospace;color:#0f172a;"></span>'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">有効期限</span><span style="color:#b45309;overflow-wrap:break-word;"><span id="pl-bal-edit-exp" style="font-family:monospace;"></span><span id="pl-bal-edit-exp-note" style="font-weight:700;"></span></span>'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">現在の付与日数</span><span id="pl-bal-edit-cur-granted" style="font-weight:700;color:#1e40af;"></span>'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">消化済み日数</span><span id="pl-bal-edit-used" style="font-weight:700;color:#0f172a;"></span>'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">現在の残日数</span><span id="pl-bal-edit-cur-remain" style="font-weight:700;color:#166534;"></span>'
+    +'</div>'
+    +'<div id="pl-bal-edit-note" style="display:none;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:7px 10px;font-size:.72rem;color:#713f12;line-height:1.6;margin-bottom:12px;"></div>'
+    +'<div style="margin-bottom:4px;"><label for="pl-bal-edit-granted" style="display:block;font-size:11px;font-weight:700;color:#1e40af;margin-bottom:3px;">修正後の付与日数</label>'
+    // font-size は 16px 未満にしない（iOSがフォーカス時にページズームするため）
+    +'<input type="number" id="pl-bal-edit-granted" min="0" max="40" step="0.5" style="width:100%;font-size:16px;padding:8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>'
+    +'<div id="pl-bal-edit-preview" style="font-size:.78rem;font-weight:700;color:#166534;min-height:1.4em;line-height:1.6;"></div>'
+    +'<div style="font-size:.7rem;color:#64748b;line-height:1.6;margin-top:6px;">付与日・消化済み日数・取得申請・承認状態は変更しません。残日数は「修正後の付与日数 − 消化済み日数」で再計算します。</div>'
+    +'</div>'
+    +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
+    +'<button id="btn-pl-bal-edit-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存する</button>'
+    +'<button onclick="closePaidLeaveBalEditModal()" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+    +'</div></div>';
+  document.body.appendChild(wrap);
+  return wrap;
+}
+// 一覧と同じ「第N回」を求める（一覧は同一表示名の付与行を付与日昇順で番号付けしている）。
+// 一覧側の _grantNo は描画用コピーにのみ付くため、モーダルでは同じ規則で計算して表示を一致させる。
+function _plGrantNoOfBal(bal){
+  var nm=bal.staffName||bal.staffId||"";
+  var list=(paidLeaveBalances||[]).map(function(b){return normalizePaidLeaveBalance(b);})
+    .filter(function(b){return (b.staffName||b.staffId||"")===nm;})
+    .sort(function(a,b){return (a.grantDate||"").localeCompare(b.grantDate||"");});
+  for(var i=0;i<list.length;i++){if(list[i].id===bal.id)return i+1;}
+  return bal.grantNum||"";
+}
+function openPaidLeaveBalEditModal(balId){
+  var bal=null;
+  (paidLeaveBalances||[]).forEach(function(b){
+    var nb=normalizePaidLeaveBalance(b);
+    if(nb.id===balId)bal=nb;
+  });
+  if(!bal){showAlert("対象データが見つかりません");return;}
+  var used=Math.round((bal.usedDays||0)*10)/10;
+  var granted=Math.round((bal.grantedDays||0)*10)/10;
+  var remain=Math.round((bal.remainDays!=null?bal.remainDays:(granted-used))*10)/10;
+  _plBalEditId=balId;
+  _plBalEditModalOpen=true;
+  var wrap=ensurePaidLeaveBalEditModal();
+  var grantNo=_plGrantNoOfBal(bal);
+  var infoEl=document.getElementById("pl-bal-edit-info");
+  if(infoEl){
+    infoEl.textContent="";
+    var nb2=document.createElement("b");nb2.textContent=bal.staffName||bal.staffId||"";
+    infoEl.appendChild(nb2);
+    infoEl.appendChild(document.createTextNode("（社員番号："+(bal.staffId||"未設定")+"）"
+      +(grantNo?"　第"+grantNo+"回":"")));
+  }
+  var set=function(id,txt){var el=document.getElementById(id);if(el)el.textContent=txt;};
+  set("pl-bal-edit-gdate",bal.grantDate||"—");
+  set("pl-bal-edit-exp",bal.expiresAt||"—");
+  // 「期限切れ」の注記は日付と別要素にする（日付側は monospace のため和文を混ぜない）
+  set("pl-bal-edit-exp-note",(bal.expiresAt&&bal.expiresAt<todayDateStr())?"（期限切れ）":"");
+  set("pl-bal-edit-cur-granted",granted+"日");
+  set("pl-bal-edit-used",used+"日");
+  set("pl-bal-edit-cur-remain",remain+"日");
+  // 未来日の承認済み取得分（画面の残表示で戻している分）がある付与行は、内訳を明示する。
+  // 「消化済み日数」に未来分が含まれていることを管理者が誤解しないようにするための表示のみ。
+  var backDays=0;
+  try{ backDays=(buildFutureApprovedLeaveMap().byLot||{})[balId]||0; }catch(e){ backDays=0; }
+  var noteEl=document.getElementById("pl-bal-edit-note");
+  if(noteEl){
+    if(backDays>0){
+      noteEl.textContent="消化済み "+used+"日 のうち "+backDays+"日 は明日以降の取得予定（承認済み）です。"
+        +"一覧の「第"+grantNo+"回」欄はこの分を戻して "+Math.round((remain+backDays)*10)/10+"日 と表示しています。"
+        +"修正では消化済み日数を変更しないため、この表示ルールは変わりません。";
+      noteEl.style.display="block";
+    }else{
+      noteEl.textContent="";
+      noteEl.style.display="none";
+    }
+  }
+  var inp=document.getElementById("pl-bal-edit-granted");
+  var prev=document.getElementById("pl-bal-edit-preview");
+  var btn=document.getElementById("btn-pl-bal-edit-save");
+  // プレビューは保存と同じ判定関数を使う（画面の可否と保存の可否を食い違わせない）
+  var renderPreview=function(){
+    var v=_plBalEditValidate((inp&&inp.value)||"",used,granted);
+    if(prev){
+      prev.style.color=v.ok?"#166534":(v.same?"#64748b":"#dc2626");
+      prev.textContent=v.ok
+        ?"修正後の残日数：付与"+v.granted+"日 − 消化済み"+used+"日 = "+v.remain+"日"
+        :(v.empty?"修正後の残日数：—":(v.same?v.msg:"⚠ "+v.msg)); // 色に依存せず文字でも判別できるようにする
+    }
+    if(btn)btn.disabled=!v.ok; // 保存できない入力のうちは押させない
+  };
+  if(inp){
+    inp.min=String(used>0?used:0.5); // 0日への変更は不可（消化済みがある場合はその日数が下限）
+    inp.value=String(granted);
+    inp.oninput=renderPreview;
+    inp.onchange=renderPreview;
+  }
+  if(btn)btn.onclick=function(){savePaidLeaveBalGrantedDays();};
+  renderPreview();
+  wrap.style.display="flex";
+  if(inp){try{inp.focus();inp.select();}catch(e){}}
+}
+function closePaidLeaveBalEditModal(){
+  var wrap=document.getElementById("pl-bal-edit-modal-wrap");
+  if(wrap)wrap.style.display="none";
+  // 閉じた後にDOMへ氏名・社員番号を残さない（同じ端末を共用するため）
+  ["pl-bal-edit-info","pl-bal-edit-gdate","pl-bal-edit-exp","pl-bal-edit-exp-note","pl-bal-edit-cur-granted",
+   "pl-bal-edit-used","pl-bal-edit-cur-remain","pl-bal-edit-note","pl-bal-edit-preview"].forEach(function(id){
+    var el=document.getElementById(id);if(el)el.textContent="";
+  });
+  var noteEl=document.getElementById("pl-bal-edit-note");if(noteEl)noteEl.style.display="none";
+  var inp=document.getElementById("pl-bal-edit-granted");if(inp)inp.value="";
+  _plBalEditModalOpen=false;
+  _plBalEditId="";
+}
+// 付与日数の入力値検証。プレビューと保存の両方から呼び、判定と文言を1箇所に集約する。
+// 戻り値: {ok:true,granted,remain} / {ok:false,msg,empty?,same?}
+function _plBalEditValidate(raw,used,curGranted){
+  var v=parseFloat(raw);
+  if(isNaN(v))return {ok:false,empty:true,msg:"付与日数を数値で入力してください。"};
+  var g=Math.round(v*10)/10;
+  if(g<=0)return {ok:false,msg:"付与日数は0より大きい値で入力してください。"};
+  if(g>40)return {ok:false,msg:"付与日数が大きすぎます（40日以下で入力してください）。"};
+  if(g<used)return {ok:false,msg:"すでに"+used+"日取得済みのため、付与日数を"+used+"日未満には変更できません。"};
+  if(Math.round(g*2)/2!==g)return {ok:false,msg:"付与日数は0.5日単位で入力してください。"};
+  if(g===curGranted)return {ok:false,same:true,msg:"付与日数が変わっていません。"};
+  return {ok:true,granted:g,remain:Math.round((g-used)*10)/10};
+}
+// 付与日数の修正を保存する。
+// ★ 検証・再計算・書き込みは「確認ダイアログのOKを押した後」に、対象1行だけを Firebase から
+//   取り直して行う。確認ダイアログは開いている時間が無制限で、その間に別端末の管理者が同じ
+//   付与行を承認（applyFifoConsumption が usedDays / remainDays を更新）すると、画面が持って
+//   いた古い usedDays で remainDays を書き、その消化を残日数の上だけ打ち消してしまうため。
+//   取得値が表示時と食い違っていた場合は書き込まず、最新値で再表示して操作をやり直させる。
+function savePaidLeaveBalGrantedDays(){
+  if(viewerMode)return;              // 閲覧専用は書き込み不可（フェイルクローズ）
+  if(demoWriteBlocked())return;
+  // 承認・却下など他の有給処理中は受け付けない（無言で止めず理由を出す）
+  if(paidLeaveBalanceSaving){showAlert("他の有給処理を実行中です。完了後に再度お試しください。");return;}
+  var balId=_plBalEditId;
+  var idx=(paidLeaveBalances||[]).findIndex(function(b){return normalizePaidLeaveBalance(b).id===balId;});
+  if(idx<0){showAlert("対象データが見つかりません");closePaidLeaveBalEditModal();return;}
+  var shown=normalizePaidLeaveBalance(paidLeaveBalances[idx]); // 画面に出している値（確認文言用）
+  var shownUsed=Math.round((shown.usedDays||0)*10)/10;
+  var shownGranted=Math.round((shown.grantedDays||0)*10)/10;
+  var shownRemain=Math.round((shown.remainDays!=null?shown.remainDays:(shownGranted-shownUsed))*10)/10;
+  var raw=(document.getElementById("pl-bal-edit-granted")||{}).value||"";
+  var v=_plBalEditValidate(raw,shownUsed,shownGranted);
+  if(!v.ok){showAlert(v.msg);return;}
+  // 確認ダイアログを出す前にボタンを止める（連打で確認が積み重なるのを防ぐ）
+  var confBtn=document.getElementById("btn-pl-bal-edit-save");
+  if(confBtn)confBtn.disabled=true;
+  showConfirm("付与日数を "+shownGranted+"日 → "+v.granted+"日に変更します。\n"
+    +"残日数は "+shownRemain+"日 → "+v.remain+"日 になります（消化済み "+shownUsed+"日 は変更しません）。\n\nよろしいですか？",function(){
+    _plBalEditCommit(balId,raw,{used:shownUsed,granted:shownGranted});
+  },function(){
+    if(confBtn)confBtn.disabled=false; // キャンセルで元に戻す
+  });
+}
+// 確認OK後の確定処理。対象1行を取り直して検証し直してから PATCH する。
+function _plBalEditCommit(balId,raw,shown){
+  if(viewerMode)return;                                    // 入口ごとにフェイルクローズ
+  if(demoWriteBlocked())return;
+  if(paidLeaveBalanceSaving)return;
+  if(!balId||_plBalEditId!==balId)return;                  // 確認中にEscや×で閉じられていたら書き込まない
+  var btn=document.getElementById("btn-pl-bal-edit-save");
+  if(btn)btn.disabled=true;
+  paidLeaveBalanceSaving=true; // polling による正本の上書き・再描画を止める
+  var unlock=function(){paidLeaveBalanceSaving=false;if(btn)btn.disabled=false;};
+  // 対象付与行だけを取得（全件取得しない）。取得失敗時は書き込まない。
+  authFetch(FB_URL+"/tc5_paid_leave_balances/"+encodeURIComponent(balId)+".json")
+    .then(function(r){if(!r.ok)throw new Error("fetch failed "+r.status);return r.json();})
+    .then(function(row){
+      if(!row||typeof row!=="object"){
+        // 他の操作で削除済み。ローカル一覧からも取り除く（削除ボタンと同じ扱い）
+        var iDel=(paidLeaveBalances||[]).findIndex(function(b){return normalizePaidLeaveBalance(b).id===balId;});
+        if(iDel>=0)paidLeaveBalances.splice(iDel,1);
+        unlock();
+        closePaidLeaveBalEditModal();
+        // 再描画はアラートのコールバックに任せない（背景クリックで閉じても一覧を更新する）
+        _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+        showAlert("この付与行は他の操作で削除されていました。保存は行わず、一覧から取り除きました。");
+        return;
+      }
+      var fresh=normalizePaidLeaveBalance(row);
+      var used=Math.round((fresh.usedDays||0)*10)/10;
+      var granted=Math.round((fresh.grantedDays||0)*10)/10;
+      // 表示時と正本が食い違う＝別の操作が入った。書き込まずに最新値で再表示する。
+      if(used!==shown.used||granted!==shown.granted){
+        var i0=(paidLeaveBalances||[]).findIndex(function(b){return normalizePaidLeaveBalance(b).id===balId;});
+        if(i0>=0)paidLeaveBalances[i0]=fresh; // ローカルを最新へ
+        unlock();
+        // 再描画・再表示はアラートのコールバックに任せない（背景クリックで閉じても最新値に揃える）
+        _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+        openPaidLeaveBalEditModal(balId);
+        showAlert("表示中に別の操作でこの付与行が更新されました（消化済み "+shown.used+"日 → "+used+"日 / 付与 "+shown.granted+"日 → "+granted+"日）。\n保存は行っていません。最新の値で開き直しました。");
+        return;
+      }
+      var v2=_plBalEditValidate(raw,used,granted);
+      if(!v2.ok){unlock();showAlert(v2.msg);return;}
+      var patch={
+        grantedDays:v2.granted,
+        remainDays:v2.remain,
+        grantedDaysBefore:granted,                                 // 直前の値（追跡用。計算には使わない）
+        grantedDaysUpdatedAt:new Date().toISOString(),
+        grantedDaysUpdatedVia:(typeof uiMode!=="undefined"?String(uiMode||""):"") // UIモード（normal/adminDemo等）。個人を特定する操作者IDは本アプリに存在しない
+      };
+      // 初回訂正時だけ登録当初の値を残す（2回目以降の訂正で原本値が失われないようにする）
+      if(fresh.grantedDaysOriginal==null)patch.grantedDaysOriginal=granted;
+      return patchPaidLeaveBalance(balId,patch).then(function(ok){
+        unlock();
+        if(ok===false){showAlert("保存に失敗しました。通信状態を確認して再度お試しください。");return;}
+        // ★保存はここで成立している。以降の後処理で例外が出ても「失敗」と誤表示しない
+        try{
+          var i2=(paidLeaveBalances||[]).findIndex(function(b){return normalizePaidLeaveBalance(b).id===balId;});
+          if(i2>=0)paidLeaveBalances[i2]=Object.assign(fresh,patch); // 取得した正本＋今回の更新分
+          closePaidLeaveBalEditModal();
+          // 再描画はアラートのコールバックに任せない（背景クリックで閉じた場合に一覧が旧値のまま残る）
+          paidLeaveBalanceDirty=false;_paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+        }catch(e2){
+          _paidLeaveRenderGuard=true;
+          console.error("[PaidLeave] granted days edit post-save error",e2);
+        }
+        showAlert("付与日数を"+v2.granted+"日に修正しました（残 "+v2.remain+"日 / 消化済み "+used+"日）");
+      });
+    }).catch(function(e){
+      unlock();
+      console.error("[PaidLeave] granted days edit error",e);
+      showAlert("保存に失敗しました。通信状態を確認して再度お試しください。");
+    });
+}
+
 // ===== 有給「管理者代理申請」モーダル（body直下固定 — render()再描画から完全分離） =====
 // 既存の有給申請・承認ロジックは一切変更せず、申請データ生成と既存承認経路の再利用のみで実現する。
 var _proxyLeaveModalOpen=false;
@@ -9206,11 +9457,12 @@ function submitProxyLeaveRequest(){
   });
 }
 
-// 有給付与登録モーダル・代理申請モーダル: Escキーで閉じる（body直下固定なので常時有効）
+// 有給付与登録モーダル・代理申請モーダル・付与日数修正モーダル: Escキーで閉じる（body直下固定なので常時有効）
 document.addEventListener("keydown",function(e){
   if(e.key!=="Escape")return;
   if(_plGrantModalOpen){closePaidLeaveGrantModal();}
   if(_proxyLeaveModalOpen){closeProxyLeaveModal();}
+  if(_plBalEditModalOpen){closePaidLeaveBalEditModal();}
 });
 
 // 管理者ログイン(PIN)画面のみ: 物理キーボード入力に対応（画面ボタンと併用。pinTap/pinOkを再利用）。
