@@ -104,9 +104,10 @@
 
 - **build**: ビルド工程は**無い**（静的 `index.html`。トランスパイル/バンドルなし）。
 - **lint**: lint 設定・コマンドは**未整備**（ESLint 等の設定ファイルなし）。「lint して」と言われても存在しないコマンドを実行しない。
-- **test**: 自動テストフレームワーク・Playwright・smoke・`agent:ship` は**未整備**。実施可能な確認は手動の構文チェックと dryRun のみ:
+- **test**: テストフレームワーク（Playwright / Jest 等）・smoke・`agent:ship` は**未整備**。実施可能な確認は手動の構文チェック・dryRun・下記の回帰テストのみ:
   - JS 構文: `node --check scripts/morning-check.js`（同様に `notify-check.js` / `fcm-check.js` / `api/line-notify.js` / `api/discord-notify.js` / `sw.js`）
   - JSON 構文: `node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"`（`database.rules.json` も同様）
+  - **管理者トークン状態の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-admin-token-state.js`。`index.html` の管理者URLトークン「設定状態」判定ブロックを抽出して検証する。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
   - アプリ本体: `git push origin main` → **GitHub Pages が自動デプロイ**（`https://rsb79692-create.github.io/timecard/`）。本リポジトリに Pages 用ワークフローや `CNAME` は無く、ブランチ配信前提（Pages 設定自体はリポジトリ設定側で管理＝リポジトリ内からは設定値まで未確認）。
@@ -195,8 +196,9 @@
 2. **JS 構文チェック**: 変更した `.js` / `sw.js` に `node --check`
 3. **JSON 構文チェック**: `manifest.json` / `database.rules.json`
 4. **Service Worker 整合**: `sw.js` の `CACHE_NAME` がファイル変更に合わせて更新されているか、`OFFLINE_URLS` の参照ファイルが存在するか
-5. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
-6. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
+5. **管理者トークン状態の回帰テスト**: `node scripts/test-admin-token-state.js`（全件 PASS / 0 FAIL を確認）。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+6. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
+7. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 
 総合判定は「出荷可 / 要修正」。要修正なら ship に進まない。
 
