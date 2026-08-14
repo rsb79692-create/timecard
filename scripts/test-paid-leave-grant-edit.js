@@ -68,7 +68,24 @@ function makeCtx(rows, targetId, server, opts) {
   };
   // モーダル内の要素スタブ。id ごとに1つ作り、textContent / value / min を記録する。
   function el(id) {
-    if (!state.els[id]) state.els[id] = { id: id, textContent: "", value: "", min: "", disabled: false, style: {}, appendChild: function () { }, focus: function () { }, select: function () { } };
+    if (!state.els[id]) {
+      const e = {
+        id: id, value: "", min: "", disabled: false, style: {},
+        children: [], focused: 0,
+        appendChild: function (c) { this.children.push(c); },
+        focus: function () { this.focused++; },
+        select: function () { }
+      };
+      // textContent は実DOMと同じく「代入で子ノードを全削除する」性質にする。
+      // 素のプロパティにすると、実装が textContent 代入より前に appendChild するよう壊れても
+      // テストが PASS し続ける（開き直しで内訳が重複する回帰を見逃す）。
+      let text = "";
+      Object.defineProperty(e, "textContent", {
+        get: function () { return text + e.children.map(function (c) { return c.textContent; }).join(""); },
+        set: function (v) { text = String(v); e.children.length = 0; }
+      });
+      state.els[id] = e;
+    }
     return state.els[id];
   }
   const ctx = {
@@ -131,7 +148,7 @@ function makeCtx(rows, targetId, server, opts) {
     },
     document: {
       getElementById: function (id) { return el(id); },
-      createElement: function () { return { style: {}, textContent: "", appendChild: function () { } }; },
+      createElement: function () { return { style: { cssText: "" }, textContent: "", children: [], appendChild: function (c) { this.children.push(c); } }; },
       createTextNode: function () { return {}; }
     }
   };
@@ -290,8 +307,12 @@ async function main() {
     check("12. プレビューに 3日 を出す", prev.indexOf("= 3日") >= 0, prev);
     check("12. プレビューに旧式の 5日 を出さない", prev.indexOf("= 5日") < 0, prev);
     check("12. プレビューに消化済み合計 5日 を明示する", prev.indexOf("消化済み合計 5日") >= 0, prev);
-    check("12. 消化済み合計の表示に carryIn の内訳を出す",
-      ctx._el("pl-bal-edit-used").textContent === "5日（うちシステム上の消化 3日）", ctx._el("pl-bal-edit-used").textContent);
+    check("12. 消化済み合計は 5日", ctx._el("pl-bal-edit-used").textContent.indexOf("5日") === 0, ctx._el("pl-bal-edit-used").textContent);
+    check("12. 内訳は別行にする（数値と単位を途中で折り返させない）",
+      ctx._el("pl-bal-edit-used").children.length === 1
+      && ctx._el("pl-bal-edit-used").children[0].textContent === "うちシステム上の消化 3日"
+      && /display:block/.test(ctx._el("pl-bal-edit-used").children[0].style.cssText),
+      JSON.stringify(ctx._el("pl-bal-edit-used").children.map(function (c) { return c.textContent; })));
     check("12. 現在の残日数は正本の 2日", ctx._el("pl-bal-edit-cur-remain").textContent === "2日", ctx._el("pl-bal-edit-cur-remain").textContent);
     check("12. 入力欄の下限は消化済み合計（usedDays ではない）", ctx._el("pl-bal-edit-granted").min === "5", ctx._el("pl-bal-edit-granted").min);
     check("12. 登録時点の消化分を注記する",
@@ -307,6 +328,33 @@ async function main() {
     check("12. carryIn 無しの行では消化済みの内訳注記を出さない",
       ctx4._el("pl-bal-edit-used").textContent === "4日" && ctx4._el("pl-bal-edit-note").textContent === "",
       ctx4._el("pl-bal-edit-used").textContent + " / " + ctx4._el("pl-bal-edit-note").textContent);
+  }
+
+  // --- 17. 注記の見せ方（読み飛ばさせない） ---
+  {
+    // 注記が2件（登録時点の消化 ＋ 取得予定）出るケース
+    const ctx = openAndType([ROW_CARRY], "plb_A", 8, { futureByLot: { plb_A: 1 } });
+    const note = ctx._el("pl-bal-edit-note").textContent;
+    check("17. 注記2件は改行で区切り、箇条書きにする",
+      note.split("\n").length === 2 && note.indexOf("・") === 0, JSON.stringify(note.slice(0, 40)));
+    check("17. 注記があるときは入力欄へフォーカスしない（注記を飛ばさせない）",
+      ctx._el("pl-bal-edit-granted").focused === 0, "focused=" + ctx._el("pl-bal-edit-granted").focused);
+    check("17. 代わりにモーダル内へフォーカスを移す（背景に残さない）",
+      ctx._el("pl-bal-edit-card").focused === 1, "focused=" + ctx._el("pl-bal-edit-card").focused);
+    // 注記が無い行は従来どおり入力欄へフォーカスする
+    const ctx2 = openAndType([ROW_PLAIN], "plb_B", 12);
+    check("17. 注記が無ければ従来どおりフォーカスする",
+      ctx2._el("pl-bal-edit-granted").focused === 1, "focused=" + ctx2._el("pl-bal-edit-granted").focused);
+    // 注記1件のときは箇条書きにしない
+    const ctx3 = openAndType([ROW_CARRY], "plb_A", 8);
+    check("17. 注記1件は箇条書きにしない",
+      ctx3._el("pl-bal-edit-note").textContent.indexOf("・") !== 0, ctx3._el("pl-bal-edit-note").textContent.slice(0, 20));
+    // 開き直しても内訳が二重にならない（textContent 代入で子ノードを消してから append する）
+    const ctx5 = makeCtx([ROW_CARRY], "plb_A");
+    ctx5.openPaidLeaveBalEditModal("plb_A");
+    ctx5.openPaidLeaveBalEditModal("plb_A");
+    check("17. 開き直しても内訳が重複しない",
+      ctx5._el("pl-bal-edit-used").children.length === 1, "children=" + ctx5._el("pl-bal-edit-used").children.length);
   }
 
   // --- 13. フェイルクローズ（画面に出さないことだけを認可にしない） ---
