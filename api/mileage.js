@@ -25,6 +25,7 @@ const S = require("./_lib/secrets");
 const M = require("./_lib/mileage");
 const A = require("./_lib/mileage-auto");     // 打刻→経路の共通計算（index.html と同一ソース）
 const P = require("./_lib/mileage-punch");    // 打刻データの読み取り専用アクセス
+const STD = require("./_lib/mileage-standard"); // 7施設42方向の標準距離と取り込み計画（純粋計算）
 
 const MIN_MS = 60;
 
@@ -40,7 +41,7 @@ const READ_LIMIT_ADMIN = 120;
 /** 書込系 action か（ACTIONS と対で管理する）。 */
 const WRITE_ACTIONS = {
   saveRequest: 1, deleteRequest: 1, setEnabled: 1, savePlace: 1, deletePlace: 1,
-  saveLeg: 1, deleteLeg: 1, setSettings: 1, approveRequest: 1, approveAll: 1, rejectRequest: 1,
+  saveLeg: 1, deleteLeg: 1, importLegs: 1, setSettings: 1, approveRequest: 1, approveAll: 1, rejectRequest: 1,
   reopenRequest: 1, closeMonth: 1, reopenMonth: 1,
 };
 
@@ -58,6 +59,7 @@ const ACTIONS = {
   deletePlace: ["a"],
   saveLeg: ["a"],
   deleteLeg: ["a"],
+  importLegs: ["a"],
   setSettings: ["a"],
   approveRequest: ["a"],
   approveAll: ["a"],
@@ -444,9 +446,37 @@ async function handleSavePlace(body, actor) {
   // 打刻の施設名との対応づけ。★ 同じ施設名を複数の地点へ割り当てると
   //   自動集計がどちらの地点か決められず、その施設を含む日が丸ごと「距離未登録」になる。
   const facility = M.normText(body.facility, 40);
-  if (facility) {
-    const fdup = places.find(function (p) { return p.id !== placeId && String(p.facility || "") === facility; });
-    if (fdup) return { status: 409, error: "duplicate_facility", conflictWith: fdup.name };
+  // aliases ＝ 旧施設名。改名（施設マスタでは削除＋追加）後も過去打刻を同じ地点へ寄せるために使う。
+  const aliases = M.normFacilityList(body.aliases, facility);
+  // ★ 打刻の施設を選ばずに旧施設名だけ入れさせない。
+  //   facilities が非空になると placeMap は「地点名＝施設名」の暗黙対応を**行わなくなる**ため、
+  //   その施設が丸ごと未対応になる。しかも画面は「（地点名が一致）」と出続けるので、
+  //   誤支給は起きない（要確認で確定が止まる）が、原因が分からないまま月次確定が止まる。
+  if (!facility && aliases.length) return { status: 400, error: "alias_without_facility" };
+  // ★ 現在名と旧名の両方を、他の地点が使っていないか検査する。
+  //   片方だけ検査すると「A地点の現在名 ＝ B地点の旧名」が成立し、その施設が未対応になる。
+  const mine = (facility ? [facility] : []).concat(aliases);
+  for (const nm of mine) {
+    const fdup = places.find(function (p) {
+      if (p.id === placeId) return false;
+      // placeMap は非アクティブな地点を対応表に入れない。ここで弾くと、集計上は誰も使っていない
+      // 旧地点を理由に 409 になり、外す設定も無く行き止まりになる。規則を placeMap へ揃える。
+      if (p.active === false) return false;
+      const fl = p.facilities || [];
+      if (fl.indexOf(nm) >= 0) return true;   // 明示指定（facility / aliases）で既に持っている
+      // ★ 明示指定が無い地点は「地点名＝施設名」で**暗黙に**対応している（placeMap の名前フォールバック）。
+      //   ここを見ないと、その施設名を別地点の旧施設名として登録できてしまう。placeMap は明示指定を
+      //   優先するため、409 にも要確認にもならないまま、その施設の打刻が別地点の距離で計算される
+      //   ＝**支給額が警告なく変わる**。画面の地点一覧は元の地点に「（地点名が一致）」と表示し続けるため、
+      //   表示と実際の集計が食い違ったまま気づけない。
+      return fl.length === 0 && String(p.name || "").trim() === nm;
+    });
+    // implicit ＝ 相手地点は「打刻の施設」を設定しておらず、地点名が一致しているだけ。
+    //   この区別を返さないと、管理者が相手地点を開いても外すべき設定が無く詰まる。
+    if (fdup) {
+      return { status: 409, error: "duplicate_facility", conflictWith: fdup.name, facility: nm,
+               implicit: (fdup.facilities || []).length === 0 };
+    }
   }
 
   await M.ensureMeta();
@@ -458,11 +488,12 @@ async function handleSavePlace(body, actor) {
     order: isFinite(order) ? order : (prev ? prev.order : places.length + 1),
     active: active,
     facility: facility,
+    aliases: aliases,
     createdAt: (prevRaw && prevRaw.createdAt) ? String(prevRaw.createdAt) : M.nowIso(),
     updatedAt: M.nowIso(),
   });
   M.audit(actor, prev ? "place.update" : "place.create", placeId,
-    { name: name, active: active, facility: facility });
+    { name: name, active: active, facility: facility, aliases: aliases.length });
   return { status: 200, ok: true, placeId: placeId };
 }
 
@@ -510,6 +541,47 @@ async function handleSaveLeg(body, actor) {
   await G.dbPatchRoot(patch);
   M.audit(actor, "leg.set", M.legKey(fromId, toId), { km: km, alsoReverse: body.alsoReverse === true });
   return { status: 200, ok: true };
+}
+
+/**
+ * 標準区間距離（7施設42方向）の取り込み。
+ *
+ * ★ この action の安全性は「何を書かないか」で決まる。
+ *   ・書くのは status==="new"（未登録）だけ。
+ *   ・"same"（既に同値）は書かない → 何度実行しても結果が変わらない＝冪等。
+ *   ・"conflict"（既存値が違う）は**絶対に自動上書きしない**。管理者が個別に判断する。
+ *     ここで上書きすると、現地で実測して直した値が初期データで巻き戻り、
+ *     しかも巻き戻ったことが誰にも見えない。
+ *   ・"no_place"（施設に対応する地点が無い／一意に決まらない）は書けないので報告だけする。
+ *   apply=false なら一切書かず差分だけ返す（管理画面が確認用に使う）。
+ */
+async function handleImportLegs(body, actor) {
+  const apply = body.apply === true;
+  const [places, legs] = await Promise.all([M.loadPlaces(), M.loadLegs()]);
+  const plan = STD.planLegImport(places, legs);
+
+  if (!apply) {
+    return { status: 200, ok: true, applied: false, rows: plan.rows, counts: plan.counts,
+             missingFacilities: plan.missingFacilities, total: plan.total };
+  }
+
+  const now = M.nowIso();
+  // ★ 書き込む patch の組み立ては STD.buildLegImportPatch（純粋関数）だけが行う。
+  //   ここに書き込みループを増やしてはならない（既存値の上書き経路になる）。
+  const patch = STD.buildLegImportPatch(plan, ROOT + "/legs", now, actor);
+  const written = Object.keys(patch).length;
+  if (written > 0) {
+    await M.ensureMeta();
+    await G.dbPatchRoot(patch);
+  }
+  M.audit(actor, "leg.import", "standard", {
+    written: written, newCount: plan.counts.new, same: plan.counts.same,
+    conflict: plan.counts.conflict, noPlace: plan.counts.no_place,
+  });
+  // 書込後の状態を返す（画面が再取得しなくても結果が分かるように、new は same 相当になる）
+  return { status: 200, ok: true, applied: true, written: written,
+           rows: plan.rows, counts: plan.counts,
+           missingFacilities: plan.missingFacilities, total: plan.total };
 }
 
 async function handleDeleteLeg(body, actor) {
@@ -1200,6 +1272,7 @@ module.exports = async function handler(req, res) {
       case "deletePlace": r = await handleDeletePlace(body, actor); break;
       case "saveLeg": r = await handleSaveLeg(body, actor); break;
       case "deleteLeg": r = await handleDeleteLeg(body, actor); break;
+      case "importLegs": r = await handleImportLegs(body, actor); break;
       case "setSettings": r = await handleSetSettings(body, actor); break;
       case "approveRequest": r = await handleRequestStatus(body, actor, "approved"); break;
       case "approveAll": r = await handleApproveAll(body, actor); break;

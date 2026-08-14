@@ -144,18 +144,45 @@ function mileageAutoBuildNodes(dayRecords){
 }
 
 /**
+ * この地点に対応づけられた打刻施設名の一覧（現在の名前 ＋ 旧施設名）。
+ * ★ 施設マスタ（master/locations）には改名機能が無く、改名は「削除＋追加」になる。
+ *   そのため改名しても過去の tc5_records.workFacility は**旧名のまま残る**。
+ *   旧名を aliases に入れておくと、過去打刻と新規打刻が同じ地点として集計される。
+ *   （過去の打刻は書き換えない。打刻はその時点の事実として保持する。）
+ * facilities が配列で入っていればそれを正とする（サーバの loadPlaces が組み立てる）。
+ */
+function mileageAutoFacilitiesOf(p){
+  var src=[],out=[],i,v;
+  if(p&&Array.isArray(p.facilities))src=p.facilities;
+  else{
+    if(p&&p.facility)src.push(p.facility);
+    if(p&&Array.isArray(p.aliases))src=src.concat(p.aliases);
+  }
+  for(i=0;i<src.length;i++){
+    v=String(src[i]||"").trim();
+    // ★ 同じ地点の中で名前が重複していると「2つの地点が同名」と誤判定して
+    //   その施設が丸ごと未対応になるため、必ず取り除く。
+    if(v&&out.indexOf(v)<0)out.push(v);
+  }
+  return out;
+}
+
+/**
  * 地点マスタから「施設名 → 地点ID」の対応表を作る。
- * ・places[].facility（管理画面で明示的に対応づけた施設名）を優先する
+ * ・places[].facility / aliases（管理画面で明示的に対応づけた施設名）を優先する
  * ・未設定の地点は、地点名と施設名が完全一致する場合だけ対応づける
  * ★ 同じ施設名に複数の地点が対応する場合は、どちらか一方を推測せず「未対応」とする。
  */
 function mileageAutoPlaceMap(places){
-  var exp=mileageAutoDict(),imp=mileageAutoDict(),i,p,key;
+  var exp=mileageAutoDict(),imp=mileageAutoDict(),i,j,p,key,fl;
   for(i=0;i<(places||[]).length;i++){
     p=places[i];
     if(!p||!p.id||p.active===false)continue;
-    key=String(p.facility||"").trim();
-    if(key){(exp[key]=exp[key]||[]).push(p.id);continue;}
+    fl=mileageAutoFacilitiesOf(p);
+    if(fl.length){
+      for(j=0;j<fl.length;j++){key=fl[j];(exp[key]=exp[key]||[]).push(p.id);}
+      continue;
+    }
     key=String(p.name||"").trim();
     if(key)(imp[key]=imp[key]||[]).push(p.id);
   }
@@ -345,6 +372,7 @@ module.exports = {
   facilityOf: mileageAutoFacilityOf,
   destOf: mileageAutoDestOf,
   isRouteType: mileageAutoIsRouteType,
+  facilitiesOf: mileageAutoFacilitiesOf,
   buildNodes: mileageAutoBuildNodes,
   placeMap: mileageAutoPlaceMap,
   dayRoute: mileageAutoDayRoute,

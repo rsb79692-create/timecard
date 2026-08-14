@@ -132,6 +132,19 @@ function normText(v, max) {
   return s.length > max ? s.slice(0, max) : s;
 }
 
+/** 旧施設名リストの正規化。上限10件。空・重複・`facility` 自身と同じものは落とす。 */
+const MAX_ALIASES = 10;
+function normFacilityList(v, exclude) {
+  if (!Array.isArray(v)) return [];
+  const out = [];
+  for (let i = 0; i < v.length && out.length < MAX_ALIASES; i++) {
+    const s = normText(v[i], 40);
+    if (!s || s === exclude || out.indexOf(s) >= 0) continue;
+    out.push(s);
+  }
+  return out;
+}
+
 // ===== 権限解決 =====
 
 /**
@@ -288,10 +301,18 @@ async function loadPlaces() {
     for (const id of Object.keys(raw)) {
       const p = raw[id];
       if (!p || typeof p !== "object" || typeof p.name !== "string") continue;
-      // facility ＝ この地点に対応する「打刻の施設名」。応援打刻からの自動集計で使う。
+      // facility ＝ この地点に対応する「打刻の施設名」（現在の名前）。応援打刻からの自動集計で使う。
+      // aliases ＝ 同じ地点を指す**旧施設名**。施設マスタには改名機能が無く「削除＋追加」になるため、
+      //   改名すると過去の tc5_records.workFacility は旧名のまま残る。旧名をここへ入れておくと、
+      //   過去打刻と新規打刻の両方が同じ地点として集計される（過去の打刻は書き換えない）。
       // 未設定の地点は、地点名と施設名が完全一致する場合だけ対応づける（mileage-auto.placeMap）。
+      // ★ trim する。placeMap は trim して突き合わせるのに、重複検査が生値だと規則がずれる。
+      const facility = typeof p.facility === "string" ? p.facility.trim() : "";
+      const aliases = normFacilityList(p.aliases, facility);
       out.push({ id: id, name: p.name, order: Number(p.order) || 0, active: p.active !== false,
-                 facility: typeof p.facility === "string" ? p.facility : "" });
+                 facility: facility, aliases: aliases,
+                 // facilities ＝ この地点に対応づくすべての施設名。集計側はこれだけを見る。
+                 facilities: (facility ? [facility] : []).concat(aliases) });
     }
   }
   out.sort(function (a, b) {
@@ -464,6 +485,7 @@ module.exports = {
   normRate,
   normText,
   normName,
+  normFacilityList,
   resolveIdentity,
   isValidAdmin,
   isValidViewer,

@@ -664,6 +664,295 @@ ok("closeMonth にも打刻全件取得の読み取り上限が掛かる",
 ok("確定済み月の一覧だけを返すときは monthly を取得しない",
   /ym \? G\.dbGet\(ROOT \+ "\/monthly"\) : Promise\.resolve\(null\)/.test(apiSrc));
 
+console.log("\n[22] 施設マスタ取り込み・旧施設名・標準区間距離（7施設42方向）");
+const STD = require("../api/_lib/mileage-standard.js");
+const libSrcForPlaces = fs.readFileSync(path.join(__dirname, "..", "api", "_lib", "mileage.js"), "utf8");
+
+// ── 標準データそのもの ──
+eq("標準区間は42方向", STD.STANDARD_LEGS.length, 42);
+eq("標準データの施設は7件", STD.standardFacilities().length, 7);
+ok("標準区間に 0km 以下が無い", STD.STANDARD_LEGS.every(function (s) { return s.km > 0; }));
+(function () {
+  const seen = Object.create(null);
+  let dup = 0;
+  for (const s of STD.STANDARD_LEGS) { const k = s.from + ">" + s.to; if (seen[k]) dup++; seen[k] = 1; }
+  eq("標準区間に同じ方向の重複が無い", dup, 0);
+})();
+const G42 = Object.create(null);
+for (const s of STD.STANDARD_LEGS) G42[s.from + ">" + s.to] = s.km;
+(function () {
+  const F = STD.standardFacilities(), missing = [];
+  for (const a of F) for (const b of F) if (a !== b && G42[a + ">" + b] === undefined) missing.push(a + "→" + b);
+  ok("7施設の全方向（7×6＝42）が揃っている", missing.length === 0, missing.join(","));
+  ok("自分自身への区間（0km になる組）を持たない",
+    !F.some(function (a) { return G42[a + ">" + a] !== undefined; }));
+})();
+
+// ── Excel 由来の非対称を維持する（対称へ均さない）──
+eq("ハーベスト→ミュゲ貝塚 = 5.3（Excel実測）", G42["ハーベスト>ミュゲ貝塚"], 5.3);
+eq("ミュゲ貝塚→ハーベスト = 11.9（逆方向は別の値）", G42["ミュゲ貝塚>ハーベスト"], 11.9);
+eq("ハーベスト→ミュゲ春木 = 11.9（Excel実測）", G42["ハーベスト>ミュゲ春木"], 11.9);
+eq("ミュゲ春木→ハーベスト = 13.9（逆方向は別の値）", G42["ミュゲ春木>ハーベスト"], 13.9);
+ok("非対称な2組を対称へ均していない",
+  G42["ハーベスト>ミュゲ貝塚"] !== G42["ミュゲ貝塚>ハーベスト"]
+  && G42["ハーベスト>ミュゲ春木"] !== G42["ミュゲ春木>ハーベスト"]);
+
+// ── ハルイロ12方向（ユーザー確認値）──
+const HAL = { "ナナイロ": 3.2, "ココラ": 0.8, "ハーベスト": 3.7, "ミュゲ貝塚": 5.7, "ミュゲ春木": 14.0, "ミュゲの泉": 6.7 };
+for (const k of Object.keys(HAL)) {
+  eq("ハルイロ→" + k + " = " + HAL[k], G42["ハルイロ>" + k], HAL[k]);
+  eq(k + "→ハルイロ = " + HAL[k], G42[k + ">ハルイロ"], HAL[k]);
+}
+ok("ハルイロの往復は A→B と B→A を別レコードで持つ",
+  STD.STANDARD_LEGS.filter(function (s) { return s.from === "ハルイロ" || s.to === "ハルイロ"; }).length === 12);
+
+// ── 標準データを登録した世界での実際の集計 ──
+function buildStdWorld(exclude) {
+  const F = STD.standardFacilities().filter(function (nm) { return nm !== exclude; });
+  const places = F.map(function (nm, i) {
+    return { id: "p" + (i + 1), name: nm, facility: nm, facilities: [nm], aliases: [], order: i + 1, active: true };
+  });
+  const byFac = Object.create(null);
+  places.forEach(function (p) { byFac[p.facility] = p.id; });
+  const legs = Object.create(null);
+  for (const s of STD.STANDARD_LEGS) {
+    if (!byFac[s.from] || !byFac[s.to]) continue;
+    legs[byFac[s.from] + "__" + byFac[s.to]] = s.km;
+  }
+  return { places: places, legs: legs, byFac: byFac };
+}
+const W = buildStdWorld("");
+const WCTX = { placeByFacility: AU.placeMap(W.places), legs: W.legs };
+const dayHal = [
+  { id: "r1", type: "clockIn", date: "2026-08-20", timestamp: "2026-08-20T00:00:00.000Z", workFacility: "ナナイロ" },
+  { id: "r2", type: "facilityChange", date: "2026-08-20", timestamp: "2026-08-20T02:00:00.000Z", fromFacility: "ナナイロ", workFacility: "ハルイロ" },
+  { id: "r3", type: "clockOut", date: "2026-08-20", timestamp: "2026-08-20T08:00:00.000Z" },
+];
+const rHal = AU.dayRoute(dayHal, WCTX);
+eq("応援打刻の経路が 起点→応援先→起点 になる", AU.routeText(rHal.routes), "ナナイロ → ハルイロ → ナナイロ");
+eq("ナナイロ → ハルイロ → ナナイロ = 6.4km", rHal.totalKm, 6.4);
+eq("42方向が揃っていれば要確認にならない", rHal.status, "auto");
+
+// ★ 片方向だけ登録されている状態を「0km で確定」にしない
+(function () {
+  const partial = Object.create(null);
+  partial[W.byFac["ナナイロ"] + "__" + W.byFac["ハルイロ"]] = 3.2;
+  const r = AU.dayRoute(dayHal, { placeByFacility: AU.placeMap(W.places), legs: partial });
+  eq("帰りの区間が未登録なら距離未登録にする", r.status, "missing_leg");
+  ok("未登録区間を 0km として合計に入れない", r.totalKm === 3.2 && r.missingLegs.length === 1);
+})();
+
+// ── 旧施設名（alias）──
+(function () {
+  const pAlias = [
+    { id: "p1", name: "ナナイロ", facility: "ナナイロ", facilities: ["ナナイロ"], active: true },
+    { id: "p2", name: "ミュゲ貝塚", facility: "ミュゲ貝塚", facilities: ["ミュゲ貝塚", "貝塚"], aliases: ["貝塚"], active: true },
+  ];
+  const mapA = AU.placeMap(pAlias);
+  eq("現在の施設名が地点へ対応する", mapA["ミュゲ貝塚"], "p2");
+  eq("旧施設名も同じ地点へ対応する（過去打刻を拾える）", mapA["貝塚"], "p2");
+  // サーバが facilities を組み立てる前の形（facility + aliases）でも動くこと
+  eq("facilities が無くても facility+aliases から対応する",
+    AU.placeMap([{ id: "p2", name: "ミュゲ貝塚", facility: "ミュゲ貝塚", aliases: ["貝塚"], active: true }])["貝塚"], "p2");
+  // 後方互換：aliases を持たない既存データ
+  eq("aliases が無い既存データも従来どおり対応する",
+    AU.placeMap([{ id: "p1", name: "ナナイロ", facility: "ナナイロ", active: true }])["ナナイロ"], "p1");
+  eq("facility 未設定なら地点名一致で対応する（従来どおり）",
+    AU.placeMap([{ id: "p1", name: "ナナイロ", facility: "", active: true }])["ナナイロ"], "p1");
+  // 同一地点内の重複で「同名の地点が2つ」と誤判定しない
+  eq("同じ地点内で名前が重複しても未対応にならない",
+    AU.placeMap([{ id: "p1", name: "X", facilities: ["ナナイロ", "ナナイロ"], active: true }])["ナナイロ"], "p1");
+  // 別々の地点が同じ施設名 → 推測せず未対応
+  ok("2つの地点が同じ施設名なら推測せず未対応にする",
+    AU.placeMap([{ id: "p1", name: "A", facilities: ["ナナイロ"], active: true },
+                 { id: "p2", name: "B", facilities: ["ナナイロ"], active: true }])["ナナイロ"] === undefined);
+  // 改名した施設の過去打刻（旧名）が集計できること
+  const pl = [{ id: "p1", name: "ナナイロ", facilities: ["ナナイロ"], active: true },
+              { id: "p2", name: "ミュゲ貝塚", facilities: ["ミュゲ貝塚", "貝塚"], active: true }];
+  const lg = Object.create(null);
+  lg["p1__p2"] = 6.2; lg["p2__p1"] = 6.2;
+  const dayOld = [
+    { id: "a", type: "clockIn", date: "2026-05-02", timestamp: "2026-05-02T00:00:00.000Z", workFacility: "ナナイロ" },
+    { id: "b", type: "facilityChange", date: "2026-05-02", timestamp: "2026-05-02T02:00:00.000Z", fromFacility: "ナナイロ", workFacility: "貝塚" },
+  ];
+  const rOld = AU.dayRoute(dayOld, { placeByFacility: AU.placeMap(pl), legs: lg });
+  eq("旧施設名で記録された過去打刻も距離が出る", rOld.totalKm, 12.4);
+})();
+
+// ── 取り込み計画（既存値の保護と冪等性）──
+(function () {
+  const plan0 = STD.planLegImport(W.places, {});
+  eq("何も登録されていなければ42件すべて新規", plan0.counts.new, 42);
+  eq("新規以外は0件", plan0.counts.same + plan0.counts.conflict + plan0.counts.no_place, 0);
+
+  const plan1 = STD.planLegImport(W.places, W.legs);
+  eq("取り込み後に再実行しても新規は0件（冪等）", plan1.counts.new, 0);
+  eq("取り込み後は42件すべて登録済み扱い", plan1.counts.same, 42);
+
+  const legsMod = Object.assign(Object.create(null), W.legs);
+  legsMod[W.byFac["ナナイロ"] + "__" + W.byFac["ハルイロ"]] = 9.9;
+  const plan2 = STD.planLegImport(W.places, legsMod);
+  eq("既存値が違う区間は conflict になる", plan2.counts.conflict, 1);
+  eq("conflict があっても new にはしない（自動上書きしない）", plan2.counts.new, 0);
+  ok("conflict 行は現在値と標準値の両方を報告する",
+    plan2.rows.some(function (r) { return r.status === "conflict" && r.currentKm === 9.9 && r.km === 3.2; }));
+
+  const W2 = buildStdWorld("ハルイロ");
+  const plan3 = STD.planLegImport(W2.places, {});
+  eq("地点が無い施設の区間は no_place（12方向）", plan3.counts.no_place, 12);
+  ok("no_place の施設名を管理者へ報告する", plan3.missingFacilities.indexOf("ハルイロ") >= 0);
+  ok("no_place には理由コードが付く", plan3.rows.filter(function (r) { return r.status === "no_place"; })
+    .every(function (r) { return r.reason === "missing_place"; }));
+  // 2つの施設名が同じ地点に対応している場合（fromId===toId）は missingFacilities に出ないため、
+  // 理由コードが無いと「地点が未対応 N件」の数字だけが出て原因が分からなくなる
+  (function () {
+    const merged = [{ id: "p1", name: "統合", facilities: ["ナナイロ", "ココラ"], active: true }];
+    const p = STD.planLegImport(merged, {});
+    ok("同じ地点へ2施設名が対応している区間は same_place として理由が出る",
+      p.rows.some(function (r) { return r.status === "no_place" && r.reason === "same_place"; }));
+  })();
+  // ★ 同じ key へ複数の標準区間が落ちる場合は「1件目だけ書く」をしない（定義順で距離が決まってしまう）
+  (function () {
+    const dup = [
+      { id: "p1", name: "起点", facilities: ["ナナイロ"], active: true },
+      // ミュゲ貝塚とミュゲ春木を1つの地点へ寄せると、ナナイロ→両者 が同じ key になる
+      { id: "p2", name: "統合先", facilities: ["ミュゲ貝塚", "ミュゲ春木"], active: true },
+    ];
+    const p = STD.planLegImport(dup, {});
+    const dupRows = p.rows.filter(function (r) { return r.reason === "dup_key"; });
+    ok("key が衝突した区間は1本も書かない（全行 no_place）", dupRows.length >= 2
+      && dupRows.every(function (r) { return r.status === "no_place" && r.key === ""; }),
+      "dup_key rows=" + dupRows.length);
+    const patch = STD.buildLegImportPatch(p, "/mileage/legs", "T", "a");
+    ok("衝突した key は patch に1つも入らない",
+      !Object.keys(patch).some(function (k) { return k.indexOf("p1__p2") >= 0 || k.indexOf("p2__p1") >= 0; }),
+      Object.keys(patch).join(","));
+  })();
+  ok("no_place の行には書き込み用 key を作らない",
+    plan3.rows.filter(function (r) { return r.status === "no_place"; }).every(function (r) { return r.key === ""; }));
+
+  // 手動で作った地点（打刻施設に対応しない本社など）を壊さない
+  const withManual = W.places.concat([{ id: "pManual", name: "本社", facility: "", facilities: [], aliases: [], order: 99, active: true }]);
+  const plan4 = STD.planLegImport(withManual, W.legs);
+  eq("打刻施設に対応しない手動地点があっても標準取り込みは影響を受けない", plan4.counts.same, 42);
+  eq("手動地点を巻き込んで新規区間を作らない", plan4.counts.new, 0);
+})();
+
+// ── 施設名の「暗黙の対応」を奪えないこと（金額が警告なく変わる経路の封鎖）──
+// 明示指定（facility/aliases）は地点名一致より優先される。したがって、地点名だけで暗黙に
+// 対応している施設名を、別地点の旧施設名として登録できてしまうと、409 も要確認も出ないまま
+// その施設の打刻が別地点の距離で計算される＝支給額が黙って変わる。
+eq("明示指定は地点名一致より優先される（だから重複検査が必要）",
+  AU.placeMap([{ id: "pA", name: "A", facilities: ["X"], active: true },
+               { id: "pB", name: "X", facilities: [], active: true }])["X"], "pA");
+ok("duplicate_facility は地点名で暗黙に対応している地点も検査する",
+  /fl\.length === 0 && String\(p\.name \|\| ""\)\.trim\(\) === nm/.test(apiSrc));
+ok("重複検査は現在名と旧名の両方を対象にする",
+  /const mine = \(facility \? \[facility\] : \[\]\)\.concat\(aliases\);/.test(apiSrc));
+ok("地点の施設名は trim して保持する（重複検査と placeMap の規則を揃える）",
+  /p\.facility\.trim\(\)/.test(libSrcForPlaces));
+
+// ── サーバ実装が「書かない」ことを固定する ──
+// ★ 文字列一致では守れない。ガード行を残したまま別ループを足すだけで既存値を上書きでき、
+//   実際にその変異はテストを素通りした。書き込む patch そのものを検査する。
+(function () {
+  const rows = [
+    { status: "new", key: "a__b", km: 1.1 },
+    { status: "same", key: "c__d", km: 2.2 },
+    { status: "conflict", key: "e__f", km: 3.3 },
+    { status: "no_place", key: "", km: 4.4 },
+    { status: "new", key: "g__h", km: 5.5 },
+  ];
+  const patch = STD.buildLegImportPatch({ rows: rows }, "/mileage/legs", "T", "admin");
+  const keys = Object.keys(patch).sort();
+  eq("書き込む patch は new の区間だけ", JSON.stringify(keys),
+    JSON.stringify(["/mileage/legs/a__b", "/mileage/legs/g__h"]));
+  ok("same の区間を patch に含めない", keys.indexOf("/mileage/legs/c__d") < 0);
+  ok("conflict の区間を patch に含めない（既存値を巻き戻さない）", keys.indexOf("/mileage/legs/e__f") < 0);
+  ok("no_place の区間を patch に含めない", !keys.some(function (k) { return k.indexOf("__") < 0; }));
+  eq("patch の中身は km と更新者", JSON.stringify(patch["/mileage/legs/a__b"]),
+    JSON.stringify({ km: 1.1, updatedAt: "T", updatedBy: "admin" }));
+  eq("書き込む区間が無ければ patch は空", Object.keys(STD.buildLegImportPatch({ rows: [rows[1], rows[2]] }, "/x", "T", "a")).length, 0);
+  // 42方向すべて新規の計画からは、ちょうど42キーが出ること
+  eq("全件新規なら patch は42キー",
+    Object.keys(STD.buildLegImportPatch(STD.planLegImport(W.places, {}), "/mileage/legs", "T", "a")).length, 42);
+  // 取り込み済みの状態からは1キーも出ないこと（冪等）
+  eq("取り込み済みなら patch は0キー（冪等）",
+    Object.keys(STD.buildLegImportPatch(STD.planLegImport(W.places, W.legs), "/mileage/legs", "T", "a")).length, 0);
+})();
+ok("ハンドラは patch 生成を純粋関数へ委ね、独自の書き込みループを持たない",
+  /STD\.buildLegImportPatch\(plan, ROOT \+ "\/legs"/.test(apiSrc)
+  && !/patch\[ROOT \+ "\/legs\/" \+ r\.key\]/.test(apiSrc));
+ok("importLegs は apply=false のとき一切書き込まない",
+  /if \(!apply\) \{[\s\S]{0,240}applied: false/.test(apiSrc));
+ok("importLegs は管理者のみ", /importLegs: \["a"\]/.test(apiSrc));
+ok("importLegs は書込系として回数制限の対象", /saveLeg: 1, deleteLeg: 1, importLegs: 1/.test(apiSrc));
+ok("サーバは施設マスタ（/honomi/master/locations）を読まない", !/master\/locations/.test(apiSrc));
+
+// ── 管理画面の導線 ──
+ok("「施設マスタから取り込む」がある",
+  /施設マスタから取り込む/.test(html) && /function mileageImportFacilities\(/.test(html));
+ok("取り込み対象は未対応の施設だけ（同じ施設を二重に作らない）",
+  /function mileageFacilityLinkState\(/.test(html) && /unlinked:unlinked,conflict:conflict/.test(html));
+ok("取り込み判定は集計と同じ mileageAutoFacilitiesOf を使う",
+  /function mileageFacilityLinkState\(\)\{[\s\S]{0,900}mileageAutoFacilitiesOf/.test(html));
+ok("複数地点が同じ施設名を持つ場合は「取り込み済み」と扱わず競合として出す（行き止まりを作らない）",
+  /ids\.length!==1\)conflict\.push/.test(html) && /集計で未対応/.test(html));
+ok("施設マスタ未取得を「未登録なし」と断定しない",
+  /if\(!facilitiesLoaded\)\{showAlert/.test(html) && /施設マスタ未取得/.test(html));
+ok("取り込み件数に上限があり、429 で中断する",
+  /MILEAGE_IMPORT_MAX/.test(html) && /res\.status===429/.test(html));
+ok("取り込みの details は開閉状態を保持する（押した瞬間に閉じない）",
+  /mileage\.importOpen\?' open':''/.test(html) && /ontoggle="mileageSetImportOpen/.test(html));
+ok("セッションリセットで取り込み状態も捨てる（確認中で固着しない）",
+  /mileage\.importPlan=null;mileage\.importLoading=false;mileage\.importOpen=false;/.test(html));
+ok("地点・区間を変更したら取り込み差分を捨てる（古い警告を残さない）",
+  /action==="savePlace"\|\|action==="deletePlace"\|\|action==="saveLeg"\|\|action==="deleteLeg"\)mileage\.importPlan=null/.test(html));
+ok("旧施設名の入力中がポーリング再描画で消えない",
+  /"mlg-place-facility","mlg-place-aliases"/.test(html));
+ok("単価が未設定のときは入力欄に既定値を描画しない（設定済みに見せない）",
+  /st2\.configured\?esc\(st2\.ratePerKm\):""/.test(html));
+ok("no_place の理由を画面に出す", /MILEAGE_IMPORT_REASON/.test(html) && /same_place/.test(html));
+ok("旧施設名だけの保存を拒否する（地点名フォールバックが黙って外れるため）",
+  /alias_without_facility/.test(apiSrc) && /alias_without_facility/.test(html));
+ok("重複検査は非アクティブな地点を対象外にする（placeMap と規則を揃える）",
+  /if \(p\.active === false\) return false;/.test(apiSrc));
+ok("duplicate_facility はどの施設名が衝突したかを返し、暗黙一致を書き分ける",
+  /implicit: \(fdup\.facilities \|\| \[\]\)\.length === 0/.test(apiSrc) && /_d\.implicit/.test(html));
+ok("地点一覧の「打刻の施設」表示は判定と同じ根拠から出す",
+  /\+\(mileageAutoFacilitiesOf\(p\)\.length[\s\S]{0,700}地点名が一致/.test(html));
+// ★ 対応表だけで判定すると、打刻施設でない地点名（本社など）にも「（地点名が一致）」が出る。
+//   施設マスタに実在する名前であることを必ず併せて確認する。
+ok("「地点名が一致」は施設マスタに実在する名前かつ対応表がこの地点を指すときだけ",
+  /masterLocs\.indexOf\(p\.name\)>=0\s*\n?\s*\?\(mileageAutoHas\(pmapNow,p\.name\)&&pmapNow\[p\.name\]===p\.id/.test(html));
+ok("他地点が同名を握っている地点は「対応なし」と出す（対応済みと嘘をつかない）",
+  /対応なし（同じ名前を他の地点が使っています）/.test(html));
+ok("summary に display:block を付けない（開閉マーカーが消えるため）",
+  !/<summary style="[^"]*display:block/.test(html));
+ok("取り込み完了の通知は再確認より先に出す（エラーを上書きしない）",
+  /showAlert\("標準区間距離を取り込みました。"\);\s*\n\s*await mileageImportLegsCheck\(\);/.test(html));
+// テストの WRITE_ACTIONS 一覧がサーバと同期していること（次に書込 action を足したとき静かに漏れない）
+(function () {
+  const m = apiSrc.match(/const WRITE_ACTIONS = \{([\s\S]*?)\};/);
+  const server = m ? (m[1].match(/(\w+)\s*:/g) || []).map(function (s) { return s.replace(":", "").trim(); }).sort() : [];
+  ok("サーバの WRITE_ACTIONS に importLegs が含まれる", server.indexOf("importLegs") >= 0);
+  // ★ ACTIONS は上で vm 評価済みのオブジェクトを使う。正規表現で再パースすると、
+  //   インデントや配列の折り返しを変えただけで偽 FAIL になる。
+  ok("書込系 action に労務士(v)が1つも含まれない（サーバ定義から機械的に検査）",
+    server.length > 0 && server.every(function (a) {
+      return Array.isArray(ACTIONS[a]) && ACTIONS[a].indexOf("v") < 0;
+    }), "server=" + server.join(","));
+})();
+ok("手動での地点追加を残している", /mileageSavePlaceFromForm\(\)/.test(html));
+ok("「標準区間距離を取り込む」がある", /標準区間距離を取り込む/.test(html));
+ok("取り込み前に差分を確認させる（いきなり書かない）",
+  /function mileageImportLegsCheck\(/.test(html) && /"importLegs",\{apply:false\}/.test(html));
+ok("旧施設名を編集時に読み込む（保存で黙って消えない）",
+  /mlg-place-aliases[\s\S]{0,400}p\.aliases/.test(html));
+ok("旧施設名を保存時に送る", /aliases:aliases/.test(html));
+ok("単価未設定のときは標準値を提案するだけで自動保存しない",
+  /function mileageFillStandardSettings\(/.test(html) && /内容を確認して「保存」を押してください/.test(html));
+
 console.log("\n================ 結果 ================");
 console.log("PASS: " + pass + " / FAIL: " + fail);
 if (fail > 0) process.exit(1);

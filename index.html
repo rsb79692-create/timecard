@@ -8102,6 +8102,7 @@ var mileage={
   autoOpen:{},            // 社員番号 → 日別の展開状態
   autoOnlyIssues:false,   // 「要確認の日だけ表示」
   checkYm:"",checkData:null,checkLoading:false, // サーバ側の再集計・確定後差異の確認結果
+  importPlan:null,importLoading:false,importOpen:false, // 標準区間距離の取り込み（差分・通信中・節の開閉）
   enabledMap:{},          // 社員番号 → true（管理者の bootstrap で取得。正本はサーバ）
   modalEid:"",modalName:"",modalWas:false, // スタッフ管理モーダルで開いている職員と、開いた時点のON/OFF
   syncFailed:{},          // 社員番号 → true（利用設定の送信に失敗した職員。次回保存で必ず再送する）
@@ -8162,8 +8163,21 @@ function mileageErrText(res){
   if(c==="date_out_of_range")return "申請できるのは過去12か月〜翌月までです。日付を確認してください。";
   if(c==="stale_confirmation")return "確認した内容と現在の集計が一致しません（打刻が変わった可能性があります）。\nもう一度「この月を確定する」を押して、内容を確認し直してください。";
   if(c==="punch_unavailable")return "打刻データを取得できなかったため確定できません。時間をおいてやり直してください。";
-  if(c==="duplicate_facility")return "この施設は既に別の地点（"+((res.data&&res.data.conflictWith)||"?")+"）に対応づけられています。\n"
-    +"同じ施設を2つの地点に割り当てると、自動集計がどちらの地点か決められず「距離未登録」になります。";
+  if(c==="duplicate_facility"){
+    // ★ どの名前が衝突したかを必ず出す。1回の保存で「打刻の施設1件＋旧施設名10件」を送れるため、
+    //   名前を出さないと管理者はどれを直せばよいか分からない。
+    var _d=res.data||{},_cw=_d.conflictWith||"?",_fn=_d.facility?"「"+_d.facility+"」":"この施設名";
+    return _fn+"は既に別の地点（"+_cw+"）が使っています。\n"
+      +(_d.implicit
+        // 相手は「打刻の施設」未設定＝地点名が一致しているだけ。相手を開いても外す設定が無いので、
+        // 何をすればよいかをここで具体的に書く。
+        ?"（"+_cw+"は「打刻の施設」を設定しておらず、地点名が施設名と同じため自動で対応しています。\n"
+          +"　この名前を使うには、"+_cw+"の地点名を変えるか、そちらに別の「打刻の施設」を設定してください。）"
+        :"同じ施設を2つの地点に割り当てると、自動集計がどちらの地点か決められず「距離未登録」になります。");
+  }
+  if(c==="alias_without_facility")return "旧施設名を登録するときは「打刻の施設」も選んでください。\n"
+    +"打刻の施設を選ばずに旧施設名だけを入れると、地点名で自動対応していた施設が対象外になります。\n\n"
+    +"対応づけを外したい場合は、「旧施設名」の欄も空にしてから保存してください。";
   if(c==="unresolved"){
     var det=(res.data&&res.data.detail)||[];
     var head="要確認が "+((res.data&&res.data.unresolved)||det.length)+" 件あるため確定できません。\n\n";
@@ -8253,6 +8267,9 @@ function mileageResetSession(){
   mileage.adminYm="";mileage.adminData=null;
   mileage.autoOpen={};mileage.autoOnlyIssues=false;
   mileage.checkYm="";mileage.checkData=null;mileage.checkLoading=false;
+  // ★ importLoading を戻さないと、在飛行中にリセットされたとき true のまま固着し、
+  //   以後「差分を確認する」がページ再読込まで永久に効かなくなる（busy と扱いを揃える）。
+  mileage.importPlan=null;mileage.importLoading=false;mileage.importOpen=false;
 }
 
 /**
@@ -8345,7 +8362,7 @@ function mileageBootForViewer(){
  */
 function mileageAdminEditing(){
   if(screen!=="admin"||adminTab!=="mileage")return false;
-  var ids=["mlg-place-name","mlg-place-order","mlg-place-facility","mlg-leg-km","mlg-rate"];
+  var ids=["mlg-place-name","mlg-place-order","mlg-place-facility","mlg-place-aliases","mlg-leg-km","mlg-rate"];
   for(var i=0;i<ids.length;i++){
     var el=document.getElementById(ids[i]);
     if(el&&String(el.value||"").trim()!=="")return true;
@@ -8481,18 +8498,45 @@ function mileageAutoBuildNodes(dayRecords){
 }
 
 /**
+ * この地点に対応づけられた打刻施設名の一覧（現在の名前 ＋ 旧施設名）。
+ * ★ 施設マスタ（master/locations）には改名機能が無く、改名は「削除＋追加」になる。
+ *   そのため改名しても過去の tc5_records.workFacility は**旧名のまま残る**。
+ *   旧名を aliases に入れておくと、過去打刻と新規打刻が同じ地点として集計される。
+ *   （過去の打刻は書き換えない。打刻はその時点の事実として保持する。）
+ * facilities が配列で入っていればそれを正とする（サーバの loadPlaces が組み立てる）。
+ */
+function mileageAutoFacilitiesOf(p){
+  var src=[],out=[],i,v;
+  if(p&&Array.isArray(p.facilities))src=p.facilities;
+  else{
+    if(p&&p.facility)src.push(p.facility);
+    if(p&&Array.isArray(p.aliases))src=src.concat(p.aliases);
+  }
+  for(i=0;i<src.length;i++){
+    v=String(src[i]||"").trim();
+    // ★ 同じ地点の中で名前が重複していると「2つの地点が同名」と誤判定して
+    //   その施設が丸ごと未対応になるため、必ず取り除く。
+    if(v&&out.indexOf(v)<0)out.push(v);
+  }
+  return out;
+}
+
+/**
  * 地点マスタから「施設名 → 地点ID」の対応表を作る。
- * ・places[].facility（管理画面で明示的に対応づけた施設名）を優先する
+ * ・places[].facility / aliases（管理画面で明示的に対応づけた施設名）を優先する
  * ・未設定の地点は、地点名と施設名が完全一致する場合だけ対応づける
  * ★ 同じ施設名に複数の地点が対応する場合は、どちらか一方を推測せず「未対応」とする。
  */
 function mileageAutoPlaceMap(places){
-  var exp=mileageAutoDict(),imp=mileageAutoDict(),i,p,key;
+  var exp=mileageAutoDict(),imp=mileageAutoDict(),i,j,p,key,fl;
   for(i=0;i<(places||[]).length;i++){
     p=places[i];
     if(!p||!p.id||p.active===false)continue;
-    key=String(p.facility||"").trim();
-    if(key){(exp[key]=exp[key]||[]).push(p.id);continue;}
+    fl=mileageAutoFacilitiesOf(p);
+    if(fl.length){
+      for(j=0;j<fl.length;j++){key=fl[j];(exp[key]=exp[key]||[]).push(p.id);}
+      continue;
+    }
     key=String(p.name||"").trim();
     if(key)(imp[key]=imp[key]||[]).push(p.id);
   }
@@ -9233,6 +9277,9 @@ function mileageAdminSetYm(v){
 /** 管理者操作の共通処理。実行 → 結果表示 → 当月データ再取得。 */
 async function mileageAdminDo(action,params,okMsg,reloadMaster,timeoutMs){
   if(mileage.busy)return false;
+  // 地点・区間を変更したら、取得済みの取り込み差分は取得時点の情報なので捨てる。
+  // 残すと、解消済みの「地点が未対応」警告や古い「新規 N 件」を出し続ける。
+  if(action==="savePlace"||action==="deletePlace"||action==="saveLeg"||action==="deleteLeg")mileage.importPlan=null;
   var g=mileage.gen;
   mileage.busy=true;render();
   var res=await mileageApi(action,params,timeoutMs);
@@ -9310,16 +9357,207 @@ function mileageSetEnabledFor(eid,nm,on){
   mileageAdminDo("setEnabled",{employeeId:eid,staffName:nm,enabled:!!on},"");
 }
 
+/**
+ * 施設マスタ（master/locations）のうち、まだどの地点にも対応づいていない施設名を返す。
+ * ★ 判定規則は mileageAutoPlaceMap と必ず同じにする。ここだけ違うと
+ *   「取り込み済みと表示されるのに集計では未対応」というズレが起きる。
+ */
+function mileageFacilityLinkState(){
+  // ★ 判定規則は mileageAutoPlaceMap と厳密に同じにする（明示指定が優先／同名が複数なら未対応）。
+  //   ここだけ違うと「取り込み済みと表示されるのに集計では未対応」という行き止まりになる。
+  var exp=mileageAutoDict(),imp=mileageAutoDict();
+  mileage.places.forEach(function(p){
+    if(!p||!p.id||p.active===false)return;
+    var fl=mileageAutoFacilitiesOf(p);
+    if(fl.length){fl.forEach(function(nm){(exp[nm]=exp[nm]||[]).push(p.id);});return;}
+    var nm2=String(p.name||"").trim();
+    if(nm2)(imp[nm2]=imp[nm2]||[]).push(p.id);   // 地点名一致のフォールバック
+  });
+  var unlinked=[],conflict=[],seenName=mileageAutoDict();
+  masterLocs.forEach(function(nm){
+    if(!nm)return;
+    if(mileageAutoHas(seenName,nm))return;   // 施設マスタ側の重複で同じ名前を2回作りにいかない
+    seenName[nm]=true;
+    var ids=mileageAutoHas(exp,nm)?exp[nm]:(mileageAutoHas(imp,nm)?imp[nm]:null);
+    if(!ids)unlinked.push(nm);
+    // 複数の地点が同じ施設名を持つと placeMap はどちらか推測せず未対応にする。
+    // これを「取り込み済み」と表示すると、取り込みボタンを押しても何も起きない行き止まりになる。
+    else if(ids.length!==1)conflict.push(nm);
+  });
+  return {unlinked:unlinked,conflict:conflict};
+}
+/**
+ * 施設マスタの施設を mileage 地点として取り込む。
+ * ★ サーバから /honomi/master/locations を読む方式にはしない。ただし理由を取り違えないこと。
+ *   masterFacilities も同じ /honomi/master/locations から読んでおり、そこは匿名認証で誰でも書ける。
+ *   **入力の信頼度は同じで、「クライアント経由だから安全」ではない。**
+ *   実際に効いている防御は (1) 管理者が確認ダイアログで全件見て承認する
+ *   (2) savePlace がサーバ側で normText / duplicate_name / duplicate_facility を再検査する、の2つ。
+ *   サーバが自動取り込みする方式にすると (1) が消える。それが避けたい差分である。
+ */
+var MILEAGE_IMPORT_MAX=50;   // 1回に取り込める施設数の上限（下記の理由で必須）
+async function mileageImportFacilities(){
+  if(mileage.busy)return;
+  // ★ 施設マスタを取得できていない状態を「未登録なし」と断定しない。
+  //   キャッシュの無い端末では取得前に masterLocs が空になり、事実と違う案内を出してしまう。
+  if(!facilitiesLoaded){showAlert("施設マスタを取得できていません。\n画面を再読み込みしてからお試しください。");return;}
+  var st=mileageFacilityLinkState();
+  var todo=st.unlinked;
+  if(st.conflict.length){
+    showAlert("次の施設は、複数の地点が同じ名前を持っているため対応づけできません。\n\n"+st.conflict.join("\n")
+      +"\n\n上の地点一覧で、どちらか一方の「打刻の施設」または「旧施設名」を外してください。");
+    return;
+  }
+  if(!todo.length){showAlert("取り込む施設はありません。\n施設マスタの施設は、すべて地点として登録済みです。");return;}
+  // ★ todo の件数は /honomi/master/locations 由来＝匿名認証で誰でも書ける。上限が無いと、
+  //   大量注入された施設名をそのまま特権書込（savePlace）の回数に変換でき、管理者の書込枠
+  //   （10分300回）を枯渇させて承認・月次確定まで止められる。
+  if(todo.length>MILEAGE_IMPORT_MAX){
+    showAlert("取り込み対象が "+todo.length+" 件と多すぎます（上限 "+MILEAGE_IMPORT_MAX+" 件）。\n\n"
+      +"施設マスタに身に覚えのない施設が登録されていないか確認してください。");
+    return;
+  }
+  showConfirm("次の施設を地点として登録します。\n\n"+todo.join("\n")
+    +"\n\n※見覚えのない施設名が混ざっていないか確認してください。\n"
+    +"※登録済みの施設は対象外です。\n※区間距離は登録されません。続けて「標準区間距離を取り込む」を実行してください。",
+    async function(){
+      if(mileage.busy)return;
+      var g=mileage.gen;
+      mileage.busy=true;render();
+      var okCount=0,ng=[],base=mileage.places.length,stopped="";
+      for(var i=0;i<todo.length;i++){
+        // ★ 逐次で呼ぶこと。並列にすると savePlace の重複検査（loadPlaces のスナップショットに対する
+        //   read-modify-write）を複数が同時に通過し、同名地点が2件できる。そうなると placeMap が
+        //   「同名の地点が複数」としてその施設を丸ごと未対応にする＝集計が黙って壊れる。
+        //   初期設定で1回だけの操作なので、待ち時間より整合性を優先する。
+        var res=await mileageApi("savePlace",{name:todo[i],facility:todo[i],order:base+i+1,active:true});
+        if(mileageStale(g))return;
+        if(res.ok)okCount++;
+        else{
+          ng.push(todo[i]+"："+mileageErrText(res));
+          // 回数制限に当たったら残りを叩き続けない（枠をさらに消費しても成功しないため）
+          if(res.status===429){stopped="\n\n回数制限に達したため中断しました。10分ほどおいてから残りを取り込んでください。";break;}
+        }
+      }
+      mileage.busy=false;
+      mileage.importPlan=null;   // 地点が変わったので、取得済みの取り込み差分は古い
+      await mileageBoot();
+      if(mileage.adminYm)await mileageLoadAdmin(mileage.adminYm);else render();
+      showAlert(okCount+" 件の地点を登録しました。"+(ng.length?"\n\n登録できなかった施設：\n"+ng.join("\n"):"")+stopped);
+    });
+}
+/** &lt;details&gt; の開閉を状態として保持する（render で DOM を作り直しても閉じないように）。 */
+function mileageSetImportOpen(v){mileage.importOpen=!!v;}   // ここで render しない（開閉が跳ねる）
+/** 標準区間距離の差分を取得する（この時点では一切書き込まない）。 */
+async function mileageImportLegsCheck(){
+  if(mileage.busy||mileage.importLoading)return;
+  var g=mileage.gen;
+  mileage.importLoading=true;render();
+  var res=await mileageApi("importLegs",{apply:false},20000);
+  if(mileageStale(g))return;
+  mileage.importLoading=false;
+  if(!res.ok||!res.data){mileage.importPlan=null;showAlert(mileageErrText(res));render();return;}
+  mileage.importPlan=res.data;render();
+}
+/** 差分を確認したうえで、未登録の区間だけを登録する。 */
+async function mileageImportLegsApply(){
+  var plan=mileage.importPlan;
+  if(!plan||!plan.counts)return;
+  if(!plan.counts.new){showAlert("新規に登録する区間はありません。");return;}
+  showConfirm("未登録の "+plan.counts.new+" 区間を登録します。\n\n"
+    +"・既に同じ値で登録済み："+plan.counts.same+" 件（変更しません）\n"
+    +"・値が違う区間："+plan.counts.conflict+" 件（自動では上書きしません）\n"
+    +(plan.counts.no_place?"・地点が未対応で登録できない："+plan.counts.no_place+" 件\n":""),
+    async function(){
+      var ok=await mileageAdminDo("importLegs",{apply:true},null,true,20000);
+      if(!ok)return;
+      // ★ 先に完了を知らせてから再確認する。
+      //   showModal は既存のオーバーレイを消さずに appendChild するため、モーダルは「積み重なる」。
+      //   後から出したものが手前に来る＝先に読まれるので、失敗しうる再確認は後に置く。
+      //   （逆順にすると、再確認のエラーの手前に「取り込みました」が重なって読み違える。）
+      showAlert("標準区間距離を取り込みました。");
+      await mileageImportLegsCheck();
+    });
+}
+var MILEAGE_IMPORT_LABEL={
+  "new":'<span style="color:#166534;font-weight:700;">新規</span>',
+  "same":'<span style="color:#64748b;">登録済み（同じ値）</span>',
+  "conflict":'<span style="color:#b91c1c;font-weight:700;">既存と値が違う</span>',
+  "no_place":'<span style="color:#92400e;font-weight:700;">地点が未対応</span>'
+};
+// no_place の理由。件数だけ出して理由を出さないと、画面の案内と実際の原因が噛み合わず行き止まりになる。
+var MILEAGE_IMPORT_REASON={
+  "missing_place":"地点が未登録",
+  "same_place":"2つの施設名が同じ地点に対応している",
+  "dup_key":"同じ区間が重複している"
+};
+function mileageImportLabel(st){
+  return Object.prototype.hasOwnProperty.call(MILEAGE_IMPORT_LABEL,st)?MILEAGE_IMPORT_LABEL[st]:esc(String(st));
+}
+function mileageImportReason(rs){
+  return Object.prototype.hasOwnProperty.call(MILEAGE_IMPORT_REASON,rs)?MILEAGE_IMPORT_REASON[rs]:"";
+}
+/** 取り込み差分の一覧。既定では「新規」「値が違う」「未対応」だけを出す（同値42件を並べても読めないため）。 */
+function mileageImportPlanHtml(plan){
+  var c=plan.counts||{};
+  var show=(plan.rows||[]).filter(function(r){return r.status!=="same";});
+  return '<div style="margin-top:10px;">'
+    +'<div style="font-size:.8rem;font-weight:700;color:#0f172a;margin-bottom:6px;">'
+    +'標準 '+Number(plan.total||0)+' 区間：新規 '+Number(c["new"]||0)+' ／ 登録済み '+Number(c.same||0)
+    +' ／ 値が違う '+Number(c.conflict||0)+' ／ 地点未対応 '+Number(c.no_place||0)+'</div>'
+    +((plan.missingFacilities&&plan.missingFacilities.length)
+      ?'<div style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:6px 10px;font-size:.76rem;margin-bottom:6px;">'
+        +'地点が未対応の施設：<b>'+esc(plan.missingFacilities.join("、"))+'</b><br>'
+        +'先に「施設マスタから取り込む」で地点を作ってから、もう一度確認してください。</div>':"")
+    +(c.conflict
+      ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:6px 10px;font-size:.76rem;margin-bottom:6px;">'
+        +'既存の値と違う区間が '+Number(c.conflict)+' 件あります。<b>自動では上書きしません。</b>'
+        +'現地で実測して直した値がここで巻き戻らないようにするためです。変更する場合は上の入力欄から1件ずつ保存してください。</div>':"")
+    +(show.length
+      ?'<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;"><table style="border-collapse:collapse;font-size:.74rem;min-width:100%;">'
+        +'<tr><th style="border:1px solid #cbd5e1;background:#f1f5f9;padding:4px 8px;text-align:left;white-space:nowrap;">区間</th>'
+        +'<th style="border:1px solid #cbd5e1;background:#f1f5f9;padding:4px 8px;white-space:nowrap;">標準</th>'
+        +'<th style="border:1px solid #cbd5e1;background:#f1f5f9;padding:4px 8px;white-space:nowrap;">現在</th>'
+        +'<th style="border:1px solid #cbd5e1;background:#f1f5f9;padding:4px 8px;white-space:nowrap;">状態</th></tr>'
+        +show.map(function(r){
+          return '<tr><td style="border:1px solid #cbd5e1;padding:4px 8px;white-space:nowrap;">'+esc(r.from)+' → '+esc(r.to)+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:right;">'+Number(r.km)+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:4px 8px;text-align:right;">'+(r.currentKm==null?"—":Number(r.currentKm))+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:4px 8px;white-space:nowrap;">'+mileageImportLabel(r.status)
+            +(mileageImportReason(r.reason)?'<span style="display:block;font-size:.68rem;color:#92400e;font-weight:400;white-space:normal;max-width:14em;">'+esc(mileageImportReason(r.reason))+'</span>':"")
+            +'</td></tr>';
+        }).join("")
+        +'</table></div>'
+      :'<div style="font-size:.76rem;color:#166534;">すべて登録済みです（差分はありません）。</div>')
+    +(c["new"]
+      ?'<button onclick="mileageImportLegsApply()" style="margin-top:8px;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:7px 12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">未登録の '+Number(c["new"])+' 区間を登録する</button>'
+      :'')
+    +'</div>';
+}
+/** 単価・端数の入力欄へ標準値を入れるだけ。保存はしない（管理者が内容を見て「保存」を押す）。 */
+function mileageFillStandardSettings(){
+  // ★ 値はサーバの既定（bootstrap の settings。未設定なら DEFAULT_RATE / DEFAULT_ROUND が入る）を使う。
+  //   クライアントに 16 / "none" を直書きするとサーバ側の既定と二重管理になりドリフトする。
+  // フォールバックは "round"（ローカル初期値）ではなく "none"。バナーが案内する標準値と食い違わせない。
+  var r=document.getElementById("mlg-rate");if(r)r.value=String(mileage.settings.ratePerKm||16);
+  var m=document.getElementById("mlg-round");if(m)m.value=(mileage.settings.configured?String(mileage.settings.roundMode||"none"):"none");
+  showAlert("入力欄に標準値を入れました。\n内容を確認して「保存」を押してください。");
+}
 function mileageSavePlaceFromForm(){
   var nameEl=document.getElementById("mlg-place-name");
   var idEl=document.getElementById("mlg-place-id");
   var ordEl=document.getElementById("mlg-place-order");
   var facEl=document.getElementById("mlg-place-facility");
+  var aliEl=document.getElementById("mlg-place-aliases");
   var name=(nameEl&&nameEl.value||"").trim();
   if(!name){showAlert("地点名を入力してください");return;}
+  // 旧施設名は「、」「,」「読点+空白」いずれの区切りでも受ける（現場の入力揺れを弾かない）
+  var aliases=String((aliEl&&aliEl.value)||"").split(/[、,，]/)
+    .map(function(s){return s.trim();}).filter(function(s){return !!s;});
   mileageAdminDo("savePlace",{
     placeId:(idEl&&idEl.value)||"",name:name,
     facility:(facEl&&facEl.value)||"",
+    aliases:aliases,
     order:ordEl&&ordEl.value!==""?parseInt(ordEl.value,10):undefined,active:true
   },"地点を保存しました",true);
 }
@@ -9330,6 +9568,9 @@ function mileageEditPlace(id){
   var nameEl=document.getElementById("mlg-place-name");if(nameEl)nameEl.value=p.name;
   var ordEl=document.getElementById("mlg-place-order");if(ordEl)ordEl.value=String(p.order||"");
   var facEl=document.getElementById("mlg-place-facility");if(facEl)facEl.value=String(p.facility||"");
+  // ★ 編集時に旧施設名を読み込まないと、保存した瞬間に旧名の対応が黙って消える
+  var aliEl=document.getElementById("mlg-place-aliases");
+  if(aliEl)aliEl.value=(p.aliases&&p.aliases.length)?p.aliases.join("、"):"";
   if(nameEl&&nameEl.scrollIntoView)nameEl.scrollIntoView({block:"center"});
 }
 function mileageDeletePlace(id){
@@ -9651,12 +9892,28 @@ function mileageAdminCardHtml(){
 
   // ── 地点・区間距離 ──
   if(T==="places"){
+    // ★ 「打刻の施設」の表示は、集計が実際に使う対応表そのものから出す。
+    //   表示側で条件を書き直すと必ずズレる（実際、地点名だけで判定していたため
+    //   他地点が明示保持している施設名でも「（地点名が一致）」と出し続けていた）。
+    var pmapNow=mileageAutoPlaceMap(mileage.places);
     var placeRows=mileage.places.length?mileage.places.map(function(p){
       return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e2e8f0;">'
         +'<span style="font-size:.72rem;color:#94a3b8;width:32px;flex:0 0 auto;">'+(p.order||"")+'</span>'
         +'<span style="flex:1;font-size:.88rem;font-weight:700;min-width:0;word-break:break-word;">'+esc(p.name)
-        +(p.facility?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.facility)+'</span>'
-          :(masterLocs.indexOf(p.name)>=0?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.name)+'（地点名が一致）</span>':''))
+        // ★ 表示は判定（mileageAutoFacilitiesOf）と同じ根拠から出す。
+        //   facilities が非空のときは地点名フォールバックが効かないため、
+        //   「（地点名が一致）」を出すと嘘になる（対応していない施設を対応中と表示してしまう）。
+        +(mileageAutoFacilitiesOf(p).length
+          ?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.facility||"—")+'</span>'
+          // ★ 「地点名が一致」は、地点名が**打刻の施設名として実在し**、かつ対応表が
+          //   実際にこの地点を指しているときだけ表示する。placeMap の imp には施設名でない
+          //   地点名（本社など）も入るため、対応表だけで判定すると打刻施設でない地点にも出てしまう。
+          :(masterLocs.indexOf(p.name)>=0
+            ?(mileageAutoHas(pmapNow,p.name)&&pmapNow[p.name]===p.id
+              ?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.name)+'（地点名が一致）</span>'
+              :'<span style="display:block;font-size:.7rem;font-weight:400;color:#b91c1c;">打刻の施設：対応なし（同じ名前を他の地点が使っています）</span>')
+            :''))
+        +((p.aliases&&p.aliases.length)?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">旧施設名：'+esc(p.aliases.join("、"))+'</span>':'')
         +'</span>'
         +'<button onclick="mileageEditPlace(\''+escJs(p.id)+'\')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">編集</button>'
         +'<button onclick="mileageDeletePlace(\''+escJs(p.id)+'\')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
@@ -9664,6 +9921,11 @@ function mileageAdminCardHtml(){
     }).join(""):'<div class="empty">地点が未登録です</div>';
 
     var placeOpts=mileage.places.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';}).join("");
+    // 施設マスタにあるが、まだどの地点にも対応づいていない施設（＝取り込み候補）と、
+    // 複数の地点が同じ施設名を握っていて集計が未対応になっている施設（＝要修正）
+    var linkSt=mileageFacilityLinkState();
+    var unlinkedFac=linkSt.unlinked;
+    var imp=mileage.importPlan;
     // 距離マトリクス（行=出発地／列=到着地）。方向別が正本なので上下三角を別々に表示する。
     var missingCount=0;
     var matrix="";
@@ -9707,9 +9969,28 @@ function mileageAdminCardHtml(){
       +'</select>'
       +'<button onclick="mileageSavePlaceFromForm()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
       +'</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:8px;">'
+      +'<input id="mlg-place-aliases" type="text" maxlength="200" placeholder="旧施設名（改名前の名前。複数は「、」で区切る）" style="flex:1;min-width:220px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;">'
+      +'</div>'
       +'<div style="font-size:.74rem;color:#64748b;margin-top:5px;">「編集」を押すとこの欄に読み込まれます。新規登録するときは地点名だけ入れて保存してください。<br>'
-      +'<b>打刻の施設</b>を選ぶと、応援（施設変更）打刻からの自動集計でこの地点として扱われます。地点名と施設名が完全に同じ場合は、選ばなくても自動で対応します。</div>'
-      +'</div></div>'
+      +'<b>打刻の施設</b>を選ぶと、応援（施設変更）打刻からの自動集計でこの地点として扱われます。地点名と施設名が完全に同じ場合は、選ばなくても自動で対応します。<br>'
+      +'<b>旧施設名</b>は、施設名を変更したときに使います。過去の打刻には<b>変更前の施設名</b>が残るため（打刻は書き換えません）、ここに旧名を入れておくと過去の打刻も同じ地点として集計されます。</div>'
+      +'</div>'
+      +'<div style="margin-top:10px;border-top:1px dashed #cbd5e1;padding-top:10px;">'
+      +(linkSt.conflict.length
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:7px 10px;font-size:.78rem;margin-bottom:8px;">'
+          +'複数の地点が同じ施設名を持っているため、次の施設は<b>集計で未対応</b>になります：<b>'+esc(linkSt.conflict.join("、"))+'</b><br>'
+          +'どちらか一方の「打刻の施設」または「旧施設名」を外してください。</div>':"")
+      +'<button onclick="mileageImportFacilities()" style="background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:2px;padding:7px 12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">施設マスタから取り込む'
+      // ★ 施設マスタ未取得を「未登録なし」と断定しない（取得前は masterLocs が空になる）
+      // 取得は起動時の1回だけなので、失敗するとずっと false のまま＝「取得中」は誤解を招く
+      +(!facilitiesLoaded?'（施設マスタ未取得）'
+        :(unlinkedFac.length?'（未登録 '+unlinkedFac.length+' 件）'
+          :(linkSt.conflict.length?'（競合 '+linkSt.conflict.length+' 件）':'（未登録なし）')))+'</button>'
+      +'<div style="font-size:.74rem;color:#64748b;margin-top:5px;">打刻で使っている施設（拠点トークン管理の施設マスタ）を、そのまま地点として登録します。'
+      +'登録済みの施設は対象外で、<b>同じ施設を二重に作りません</b>。区間距離は登録されないため、続けて下の「標準区間距離を取り込む」を実行してください。</div>'
+      +'</div>'
+      +'</div>'
       +'<div class="admin-card">'
       +'<div class="admin-title">区間距離（方向別）</div>'
       +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">'
@@ -9725,6 +10006,22 @@ function mileageAdminCardHtml(){
       +'</div>'
       +(missingCount?'<div style="font-size:.78rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 10px;margin-bottom:8px;">未登録の区間が '+missingCount+' 組あります。職員はその区間を含む申請を確定できません（0kmでは保存されません）。</div>':"")
       +matrix
+      // ── 初期設定用の導線。通常運用では使わないので目立たせない（既定は折りたたみ）──
+      // ★ open 属性を状態から出すこと。render() が DOM を作り直すため、素の <details> だと
+      //   中のボタンを押した瞬間に閉じ、「押しても何も起きない」ように見える。
+      +'<details'+(mileage.importOpen?' open':'')+' ontoggle="mileageSetImportOpen(this.open)" style="margin-top:12px;border-top:1px dashed #cbd5e1;padding-top:8px;">'
+      // ★ display:block を付けてはならない。summary の既定は display:list-item で、
+      //   block にすると開閉マーカー（▶）が消え、太字の見出しにしか見えなくなる＝入口が発見できない。
+      //   padding は list-item のままでも効くのでタップ領域は確保できる。
+      +'<summary style="font-size:.82rem;color:#475569;cursor:pointer;font-weight:700;padding:10px 4px;">標準区間距離を取り込む（初期設定用）</summary>'
+      +'<div style="font-size:.74rem;color:#64748b;margin:6px 0 8px;line-height:1.7;">'
+      +'現行Excelの距離表（30区間）と、実測で確認したハルイロ関連（12区間）の<b>合計42方向</b>をまとめて登録します。<br>'
+      +'<b>既に登録されている区間は変更しません。</b>値が違う区間があっても自動では上書きせず、一覧に表示するだけです。'
+      +'何度実行しても結果は変わりません。</div>'
+      +'<button onclick="mileageImportLegsCheck()" style="background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:2px;padding:7px 12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">'
+      +(mileage.importLoading?"確認中…":"差分を確認する")+'</button>'
+      +(imp?mileageImportPlanHtml(imp):"")
+      +'</details>'
       +'</div>';
   }
 
@@ -9734,11 +10031,32 @@ function mileageAdminCardHtml(){
     var modeOpts=Object.keys(MILEAGE_ROUND_LABEL).map(function(k){
       return '<option value="'+k+'"'+(k===st2.roundMode?" selected":"")+'>'+esc(MILEAGE_ROUND_LABEL[k])+'</option>';
     }).join("");
+    // ★ 未設定のときだけ標準値を提案する。勝手に保存はしない（誰も決めていない単価で
+    //   給与データが作られるのを防ぐため、確定は rate_not_configured で止まる仕様と揃える）。
+    var stdRate=16,stdRound="none";
+    var needInit=!st2.configured;
+    var diffRate=Number(st2.ratePerKm)!==stdRate,diffRound=String(st2.roundMode)!==stdRound;
     body='<div class="admin-card">'
       +'<div class="admin-title">km単価・端数処理</div>'
+      +(needInit
+        ?'<div style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:8px 10px;font-size:.78rem;margin-bottom:10px;line-height:1.7;">'
+          +'<b>km単価が未設定です。</b>この状態では月次確定できません（誰も決めていない単価で給与データを作らないため）。<br>'
+          +'現行Excelの実測にもとづく標準値は <b>16円/km・丸めない</b> です。'
+          +'下のボタンで入力欄に標準値を入れてから、内容を確認して「保存」を押してください。<br>'
+          +'<button onclick="mileageFillStandardSettings()" style="margin-top:6px;background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:2px;padding:7px 12px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;">標準値を入力欄に入れる</button>'
+          +'</div>'
+        :((diffRate||diffRound)
+          ?'<div style="background:#f8fafc;color:#475569;border:1px solid #e2e8f0;border-radius:4px;padding:7px 10px;font-size:.76rem;margin-bottom:10px;">'
+            +'現在の設定は標準値（16円/km・丸めない）と異なります：'
+            +(diffRate?'単価 <b>'+Number(st2.ratePerKm)+'</b> 円/km　':'')
+            +(diffRound?'端数処理 <b>'+esc(MILEAGE_ROUND_LABEL[st2.roundMode]||st2.roundMode)+'</b>':'')
+            +'<br>意図した設定であればそのままで問題ありません。<b>自動では変更しません。</b></div>'
+          :''))
       +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">'
       +'<label style="font-size:.78rem;font-weight:700;color:#475569;">km単価（円/km）<br>'
-      +'<input id="mlg-rate" type="number" step="0.1" min="0.1" value="'+esc(st2.ratePerKm)+'" style="width:120px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;margin-top:3px;"></label>'
+      // ★ 未設定のときに既定値(16)を入れて描画しない。「未設定です」と警告しながら欄には16が入っていると、
+      //   管理者は設定済みと誤解し、標準値ボタンを押しても値が変わらないため壊れて見える。
+      +'<input id="mlg-rate" type="number" step="0.1" min="0.1" placeholder="'+(st2.configured?"":"未設定")+'" value="'+(st2.configured?esc(st2.ratePerKm):"")+'" style="width:120px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;margin-top:3px;"></label>'
       +'<label style="font-size:.78rem;font-weight:700;color:#475569;">支給額の端数処理<br>'
       +'<select id="mlg-round" style="padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;background:#fff;margin-top:3px;">'+modeOpts+'</select></label>'
       +'<button onclick="mileageSaveSettings()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
