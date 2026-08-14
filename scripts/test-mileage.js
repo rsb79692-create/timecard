@@ -288,6 +288,382 @@ ok("移動距離を使わない職員の改名では利用設定を送らない"
 ok("スタッフ情報の保存を先に確定させる",
   /saveData\("tc5_staff",staffList\);\s*\n\s*mileageSaveStaffModal\(newN\);/.test(html));
 
+console.log("\n[13] 応援打刻からの自動集計（サーバ側の共通ロジック）");
+const AU = require("../api/_lib/mileage-auto.js");
+
+// 地点マスタ（打刻の施設名と対応づける）
+const AP = [
+  { id: "p_nana", name: "ナナイロ", facility: "ナナイロ", active: true },
+  { id: "p_haru", name: "ハルイロ", facility: "ハルイロ", active: true },
+  { id: "p_myu", name: "ミュゲ春木", facility: "", active: true },   // 地点名＝施設名で自動対応
+];
+// ★ 方向別。往復で距離が違う実データがあるため、往路の値を復路へ流用しない。
+const ALEG = {
+  "p_nana__p_haru": 5.0, "p_haru__p_nana": 6.0,
+  "p_haru__p_myu": 3.0, "p_myu__p_nana": 8.0,
+};
+const ACTX = { placeByFacility: AU.placeMap(AP), legs: ALEG };
+
+eq("施設名→地点は facility 指定で対応づく", ACTX.placeByFacility["ナナイロ"], "p_nana");
+eq("facility 未指定でも地点名が一致すれば対応づく", ACTX.placeByFacility["ミュゲ春木"], "p_myu");
+eq("対応の無い施設は未対応のまま", ACTX.placeByFacility["貝塚"], undefined);
+{
+  const dup = AU.placeMap([
+    { id: "p_a", name: "A", facility: "ナナイロ", active: true },
+    { id: "p_b", name: "B", facility: "ナナイロ", active: true },
+  ]);
+  eq("同じ施設を2地点へ割り当てたら推測せず未対応にする", dup["ナナイロ"], undefined);
+}
+
+function pr(type, hhmm, extra) {
+  return Object.assign({
+    staff: "山田 太郎", date: "2026-08-03", type: type, time: hhmm,
+    timestamp: "2026-08-03T" + hhmm + ":00.000+09:00",
+  }, extra || {});
+}
+
+// A. 正常：ナナイロで出勤 → ハルイロへ応援 → ハルイロで退勤
+const dayA = [
+  pr("clockIn", "08:00", { workFacility: "ナナイロ", homeFacility: "ナナイロ" }),
+  pr("breakStart", "12:00"), pr("breakEnd", "12:45"),
+  pr("facilityChange", "13:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+  pr("clockOut", "17:00", { facilityName: "ハルイロ" }),
+];
+const rA = AU.dayRoute(dayA, ACTX);
+eq("起点はその日の出勤施設", AU.routeText(rA.routes), "ナナイロ → ハルイロ → ナナイロ");
+eq("退勤が応援先でも最後は起点へ戻す（5.0+6.0）", rA.totalKm, 11);
+eq("正常な日は自動計算済み", rA.status, "auto");
+eq("経路の指紋が残る（確定後差異の検知に使う）", rA.sig, "ナナイロ>ハルイロ>ナナイロ");
+
+// 複数施設を回る日
+const dayB = [
+  pr("clockIn", "08:00", { workFacility: "ナナイロ" }),
+  pr("facilityChange", "10:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+  pr("facilityChange", "14:00", { fromFacility: "ハルイロ", workFacility: "ミュゲ春木" }),
+  pr("clockOut", "18:00"),
+];
+eq("複数施設は時系列順に並ぶ", AU.routeText(AU.dayRoute(dayB, ACTX).routes),
+  "ナナイロ → ハルイロ → ミュゲ春木 → ナナイロ");
+eq("複数施設の合計（5.0+3.0+8.0）", AU.dayRoute(dayB, ACTX).totalKm, 16);
+
+// 配列の順序ではなく timestamp 順で判定する（Firebase はキー順＝時系列ではない）
+const dayBShuffled = [dayB[3], dayB[1], dayB[0], dayB[2]];
+eq("レコードの配列順に依存しない", AU.dayRoute(dayBShuffled, ACTX).sig, AU.dayRoute(dayB, ACTX).sig);
+
+// B. 出勤打刻忘れ：起点が確定できない → 推測しない
+const dayNoIn = [
+  pr("facilityChange", "13:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+  pr("clockOut", "17:00"),
+];
+eq("出勤打刻が無ければ起点未確定", AU.dayRoute(dayNoIn, ACTX).status, "no_origin");
+eq("起点未確定の日は距離を確定しない", AU.dayRoute(dayNoIn, ACTX).totalKm, 0);
+ok("起点未確定でも応援打刻から起点を推測しない",
+  AU.dayRoute(dayNoIn, ACTX).routes.length === 0);
+
+const dayEmptyOrigin = [
+  pr("clockIn", "08:00", {}),   // workFacility も facilityName も無い旧データ
+  pr("facilityChange", "13:00", { workFacility: "ハルイロ" }),
+  pr("clockOut", "17:00"),
+];
+eq("出勤施設が記録されていなければ起点未確定", AU.dayRoute(dayEmptyOrigin, ACTX).status, "no_origin");
+
+// 移動が無い日は行を作らない
+eq("施設変更が無い日は対象外",
+  AU.dayRoute([pr("clockIn", "08:00", { workFacility: "ナナイロ" }), pr("clockOut", "17:00")], ACTX).status,
+  "none");
+
+// C. 未登録区間・未対応施設は 0km にしない
+{
+  const ctxNoLeg = { placeByFacility: ACTX.placeByFacility, legs: { "p_nana__p_haru": 5.0 } };
+  const r = AU.dayRoute(dayA, ctxNoLeg);
+  eq("復路が未登録なら距離未登録", r.status, "missing_leg");
+  eq("未登録区間を明示する", r.missingLegs.length, 1);
+  eq("未登録区間は合計へ加算しない（0km にもしない）", r.legs[1].km, null);
+}
+{
+  const dayKaizuka = [
+    pr("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    pr("facilityChange", "13:00", { fromFacility: "ナナイロ", workFacility: "貝塚" }),
+    pr("clockOut", "17:00"),
+  ];
+  const r = AU.dayRoute(dayKaizuka, ACTX);
+  eq("地点マスタに無い施設は距離未登録", r.status, "missing_leg");
+  eq("未対応の施設名を返す", r.missingPlaces.join(","), "貝塚");
+}
+
+// 退勤打刻が無くても帰りの移動は業務ルールどおり起点へ戻す
+{
+  const r = AU.dayRoute([
+    pr("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    pr("facilityChange", "13:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+  ], ACTX);
+  eq("未退勤でも起点へ戻す", r.sig, "ナナイロ>ハルイロ>ナナイロ");
+  ok("未退勤は注記として残す", r.notes.indexOf("no_clockout") >= 0);
+}
+// 削除済みレコードは無視する
+{
+  const r = AU.dayRoute(dayA.concat([
+    Object.assign(pr("facilityChange", "15:00", { fromFacility: "ハルイロ", workFacility: "ミュゲ春木" }), { deleted: true }),
+  ]), ACTX);
+  eq("削除済みの打刻は経路に含めない", r.sig, "ナナイロ>ハルイロ>ナナイロ");
+}
+
+console.log("\n[14] 手入力・打刻修正との突き合わせ（確定できる日／できない日）");
+{
+  const auto = AU.month(dayA, "2026-08", ACTX);
+  eq("月次集計に対象日が入る", auto.dates.join(","), "2026-08-03");
+
+  const m0 = AU.merge(auto.days, {}, {});
+  eq("正常な日は合計に入る", m0.totalKm, 11);
+  eq("正常な日は要確認にならない", m0.blockers.length, 0);
+
+  // 承認済みの手入力はその日の自動集計より優先する（例外運用）
+  const m1 = AU.merge(auto.days, { "2026-08-03": { status: "approved", totalKm: 30, routeText: "手入力" } }, {});
+  eq("承認済みの手入力が自動集計より優先される", m1.totalKm, 30);
+  eq("手入力の日は source=manual", m1.rows[0].source, "manual");
+
+  // 未処理の手入力がある日は確定できない
+  const m2 = AU.merge(auto.days, { "2026-08-03": { status: "pending", totalKm: 30 } }, {});
+  eq("未処理の手入力は要確認", m2.rows[0].status, "pending_request");
+  eq("未処理の手入力は合計に入れない", m2.totalKm, 0);
+
+  // 却下された手入力は無効。自動集計へ戻す
+  const m3 = AU.merge(auto.days, { "2026-08-03": { status: "rejected", totalKm: 30 } }, {});
+  eq("却下された手入力は自動集計へ戻る", m3.totalKm, 11);
+
+  // 打刻修正が未処理の日は確定できない
+  const m4 = AU.merge(auto.days, {}, { "2026-08-03": true });
+  eq("打刻修正待ちは要確認", m4.rows[0].status, "pending_correction");
+  eq("打刻修正待ちは合計に入れない", m4.totalKm, 0);
+
+  // 移動の無い日の打刻修正は移動距離に無関係なので要確認にしない
+  const m5 = AU.merge({}, {}, { "2026-08-10": true });
+  eq("移動が無い日の打刻修正待ちは対象外", m5.rows.length, 0);
+
+  // 起点未確定・距離未登録は要確認
+  const m6 = AU.merge(AU.month(dayNoIn, "2026-08", ACTX).days, {}, {});
+  eq("起点未確定は要確認として残る", m6.blockers[0].status, "no_origin");
+}
+
+console.log("\n[15] 月次確定後の差異検知（自動では書き換えない）");
+{
+  const snap = [{ date: "2026-08-03", km: 11, source: "auto", sig: "ナナイロ>ハルイロ>ナナイロ" }];
+  eq("経路も距離も同じなら差異なし",
+    AU.diff(snap, [{ date: "2026-08-03", km: 11, sig: "ナナイロ>ハルイロ>ナナイロ", source: "auto", status: "auto" }]).length, 0);
+  const d1 = AU.diff(snap, [{ date: "2026-08-03", km: 16, sig: "ナナイロ>ハルイロ>ミュゲ春木>ナナイロ", source: "auto", status: "auto" }]);
+  eq("確定後に経路が変われば差異として出す", d1.length, 1);
+  eq("差異は確定時と現在の両方を返す", d1[0].beforeKm + "→" + d1[0].afterKm, "11→16");
+  eq("確定済みの日が消えたら差異として出す",
+    AU.diff(snap, []).length, 1);
+  // ★ 確定は「要確認0件」でしか通らない。確定後に要確認の日が現れたなら、それは確定後の変化であり
+  //   支給されていない移動が発生している可能性がある。黙って通してはならない。
+  eq("確定後に新しく発生した要確認の日は差異として出す",
+    AU.diff([], [{ date: "2026-08-04", km: 0, sig: "", source: "auto", status: "no_origin" }]).length, 1);
+  eq("そもそも集計対象にならない日（移動なし）は差異にしない",
+    AU.diff([], [{ date: "2026-08-04", km: 0, sig: "", source: "auto", status: "none" }]).length, 0);
+}
+
+console.log("\n[15-2] 打刻の不整合を「正常」として確定しない");
+{
+  // 移動先が記録されていない施設変更（管理者の手編集や直接書き込みで起こりうる）
+  const broken = [
+    pr("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    pr("facilityChange", "10:00", { fromFacility: "ナナイロ" }),          // workFacility 無し
+    pr("facilityChange", "14:00", { fromFacility: "ミュゲ春木", workFacility: "ハルイロ" }),
+    pr("clockOut", "18:00"),
+  ];
+  const r = AU.dayRoute(broken, ACTX);
+  // ★ 区間が1本欠けたまま 11km を「自動計算済」にすると、実際と違う金額が黙って確定する
+  eq("移動先が空の施設変更がある日は確定しない", r.status, "broken_punch");
+  eq("欠けた経路で距離を確定しない", r.totalKm, 0);
+  const m = AU.merge(AU.month(broken, "2026-08", ACTX).days, {}, {});
+  eq("打刻不整合は要確認として残る", m.blockers[0].status, "broken_punch");
+  eq("打刻不整合は合計に入れない", m.totalKm, 0);
+
+  // 後編集で経路の連続性が壊れた日は、確定は止めないが管理者へ提示する
+  const mismatch = [
+    pr("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    pr("facilityChange", "13:00", { fromFacility: "ミュゲ春木", workFacility: "ハルイロ" }),
+    pr("clockOut", "17:00"),
+  ];
+  const rm = AU.dayRoute(mismatch, ACTX);
+  eq("変更前施設の食い違いは注意として立てる", rm.attention, true);
+  ok("変更前施設の食い違いは注記に残る", rm.notes.indexOf("route_mismatch") >= 0);
+
+  // 同時刻（手動追加は秒が 0）でも順序が決まること
+  const sameTime = [
+    Object.assign(pr("facilityChange", "08:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }), { id: "b" }),
+    Object.assign(pr("clockIn", "08:00", { workFacility: "ナナイロ" }), { id: "a" }),
+    pr("clockOut", "17:00"),
+  ];
+  eq("同時刻は id で決定的に並べる（配列順に依存しない）",
+    AU.dayRoute(sameTime, ACTX).sig, AU.dayRoute(sameTime.slice().reverse(), ACTX).sig);
+}
+
+console.log("\n[15-3] 外部データ由来のキーでプロトタイプを汚染しない");
+{
+  // ★ /honomi は匿名認証で書けるため、氏名 "__proto__" の打刻・修正申請を1件混ぜられる。
+  //   素の {} で索引を作ると Object.prototype が汚染され、全職員の集計が壊れる（確定の妨害）。
+  const polluted = AU.month([
+    Object.assign(pr("clockIn", "08:00", { workFacility: "ナナイロ" }), { date: "__proto__" }),
+  ], "2026-08", ACTX);
+  eq("日付キーが __proto__ でも汚染されない", ({}).polluted, undefined);
+  eq("不正な日付キーは集計に入れない", polluted.dates.length, 0);
+  const mp = AU.placeMap([{ id: "p_x", name: "__proto__", facility: "__proto__", active: true }]);
+  eq("施設名が __proto__ でも Object.prototype を汚染しない", ({}).p_x, undefined);
+  ok("プロトタイプ由来のキーを対応表として拾わない", mp.toString === undefined || typeof mp.toString !== "function");
+  eq("索引ヘルパは prototype を持たない辞書を返す", Object.getPrototypeOf(AU.dict()), null);
+  eq("特殊キーは索引に使わせない", AU.safeKey("__proto__"), false);
+  eq("通常のキーは使える", AU.safeKey("山田 太郎"), true);
+}
+
+console.log("\n[16] クライアントとサーバが同一ソースを共有している");
+const SB = "// ==== SHARED-AUTO-BEGIN ====", SE = "// ==== SHARED-AUTO-END ====";
+const autoSrc = fs.readFileSync(path.join(__dirname, "..", "api", "_lib", "mileage-auto.js"), "utf8");
+const sbS = autoSrc.indexOf(SB), sbE = autoSrc.indexOf(SE);
+const hbS = html.indexOf(SB), hbE = html.indexOf(SE);
+if (sbS < 0 || sbE < 0 || hbS < 0 || hbE < 0) {
+  fail++;
+  console.log("  FAIL  共有ブロック（SHARED-AUTO）のマーカーが見つかりません");
+} else {
+  const serverBlock = autoSrc.slice(sbS, sbE + SE.length);
+  const clientBlock = html.slice(hbS, hbE + SE.length);
+  // ★ 表示（クライアント）と確定（サーバ）で計算が食い違うと、画面の金額と支給額がずれる。
+  //   コピーではなく「1文字も違わないこと」を機械的に固定する。
+  ok("共有ブロックがサーバと index.html で完全一致する", serverBlock === clientBlock,
+    "server=" + serverBlock.length + " client=" + clientBlock.length);
+
+  // 実際に評価して、同じ入力から同じ結果になることも確認する
+  const ctxC = {};
+  vm.createContext(ctxC);
+  vm.runInContext(clientBlock, ctxC);
+  const cCtx = { placeByFacility: ctxC.mileageAutoPlaceMap(AP), legs: ALEG };
+  eq("クライアントの経路生成がサーバと一致（正常日）",
+    JSON.stringify(ctxC.mileageAutoDayRoute(dayA, cCtx)), JSON.stringify(rA));
+  eq("クライアントの経路生成がサーバと一致（複数施設）",
+    JSON.stringify(ctxC.mileageAutoDayRoute(dayB, cCtx)), JSON.stringify(AU.dayRoute(dayB, ACTX)));
+  eq("クライアントも出勤打刻が無ければ起点未確定",
+    ctxC.mileageAutoDayRoute(dayNoIn, cCtx).status, "no_origin");
+  eq("クライアントの月次突き合わせがサーバと一致",
+    JSON.stringify(ctxC.mileageAutoMerge(ctxC.mileageAutoMonth(dayA, "2026-08", cCtx).days, {}, {})),
+    JSON.stringify(AU.merge(AU.month(dayA, "2026-08", ACTX).days, {}, {})));
+}
+
+console.log("\n[17] 打刻データ（/honomi）への触り方を限定する");
+// 「実際のコード」だけを見る（説明コメントに書かれた名前を検出しないよう除去する）
+function stripComments(src) {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+const punchSrc = stripComments(fs.readFileSync(path.join(__dirname, "..", "api", "_lib", "mileage-punch.js"), "utf8"));
+const apiCode = stripComments(apiSrc);
+// ★ 打刻は読むだけ。書き込み経路を1つも持たせない（勤怠データを壊さない保証）。
+ok("mileage-punch.js は書き込み関数を一切呼ばない",
+  !/dbPut|dbPatch|dbPatchRoot|dbRequest/.test(punchSrc));
+ok("mileage-punch.js が参照するのは tc5_records と tc5_correction_requests だけ",
+  [...new Set(punchSrc.match(/tc5_[a-z_]+/g) || [])].sort().join(",") === "tc5_correction_requests,tc5_records",
+  JSON.stringify(punchSrc.match(/tc5_[a-z_]+/g)));
+// ★ 本人特定に tc5_staff を使うと成りすましが成立する（誰でも書ける領域のため）。
+ok("打刻の読み取り層も tc5_staff / tc5_pins を参照しない",
+  !/tc5_staff|tc5_pins/.test(punchSrc));
+ok("api/mileage.js は打刻を直接読まず mileage-punch 経由にする",
+  /require\("\.\/_lib\/mileage-punch"\)/.test(apiCode) && !/tc5_[a-z_]+/.test(apiCode));
+ok("自動集計の共通ロジックは通信・DBに触れない（純粋計算）",
+  !/require\(/.test(autoSrc.slice(autoSrc.indexOf(SB))) && !/dbGet|fetch\(/.test(autoSrc));
+
+console.log("\n[18] 自動集計の権限と確定条件");
+ok("autoCheck は管理者(a)のみ", ACTIONS.autoCheck && ACTIONS.autoCheck.length === 1 && ACTIONS.autoCheck[0] === "a",
+  JSON.stringify(ACTIONS.autoCheck));
+ok("autoCheck は読み取り専用（書込上限リストに入れない）", !/autoCheck: 1/.test(apiSrc));
+ok("月次確定は要確認が残っていたら拒否する（unresolved）",
+  /error: "unresolved"/.test(apiSrc) && /comp\.unresolved > 0/.test(apiSrc));
+ok("月次確定は画面の数値ではなくサーバで打刻から計算し直す",
+  /const comp = await computeAutoMonth\(ym\)/.test(apiSrc));
+ok("確定スナップショットに日別内訳と経路の指紋を残す（差異検知のため）",
+  /days: days,/.test(apiSrc) && /sig: r\.sig \|\| ""/.test(apiSrc));
+ok("確定後差異は報告するだけで、確定済みの金額を自動で書き換えない",
+  /out\.drift = drift;/.test(apiSrc) && !/monthly\/" \+ s\.employeeId \+ "\/" \+ ym\] = null/.test(apiSrc));
+ok("自動集計の対象は利用ONの職員だけ（OFFは手入力分のみ）",
+  /t\.auto && t\.staffName/.test(apiSrc));
+ok("労務士の明細は確定済みスナップショットから作る",
+  /Array\.isArray\(snap\.days\)/.test(apiSrc));
+ok("職員画面は自動集計を主画面にする（申請操作を必須にしない）",
+  /応援（施設変更）の打刻から自動で集計しています。申請は不要です。/.test(html));
+ok("管理画面に「要確認の日だけ表示」がある", /要確認の日だけ表示/.test(html));
+ok("要確認が残っている月は確定ボタンを押せない",
+  /要確認が残っているため確定できません/.test(html));
+ok("同じ施設を複数地点へ割り当てられない（duplicate_facility）",
+  /duplicate_facility/.test(apiSrc) && /duplicate_facility/.test(html));
+
+console.log("\n[19] 確定を通す条件（人が確認した内容だけを確定する）");
+// ★ 自動集計には日ごとの承認工程が無い。確認 → 確定の間に内容が変わっていないことを
+//   指紋で突き合わせることが、唯一の「人が見て承認した」証跡になる。
+ok("確定は autoCheck が返した確認指紋の一致を必須にする",
+  /function confirmDigest\(/.test(apiSrc)
+  && /H\.str\(body\.confirmToken, 64\) !== expected/.test(apiSrc)
+  && /stale_confirmation/.test(apiSrc));
+ok("クライアントは確定前に必ずサーバで再集計してから確認を出す",
+  /mileageApi\("autoCheck",\{ym:ym\},30000\)/.test(html) && /confirmToken:chk\.confirmToken/.test(html));
+ok("打刻を取得できなかった月は確定しない（0件を「移動なし」と扱わない）",
+  /punch_unavailable/.test(apiSrc) && /totalRecords/.test(punchSrc));
+ok("氏名を解決できない利用ON職員は要確認にする（黙って支給漏れにしない）",
+  /name_unresolved/.test(apiSrc) && /name_unresolved/.test(html));
+ok("打刻の読み取り層もプロトタイプ汚染を防ぐ",
+  /Object\.create\(null\)/.test(punchSrc) && /__proto__/.test(punchSrc));
+ok("確定は打刻の全件取得を伴うため明示タイムアウトを渡す",
+  /mileageAdminDo\("closeMonth",\{ym:ym,confirmToken:chk\.confirmToken\},[^)]*30000\)/.test(html));
+ok("autoCheck にも読み取り上限がある（全件取得の連打を防ぐ）",
+  /READ_LIMIT_ADMIN/.test(apiSrc));
+ok("確定済みの月は職員画面も確定額を表示する（再計算値を出さない）",
+  /r\.snapshot = \{/.test(apiSrc) && /mileage\.mySnapshot/.test(html));
+
+console.log("\n[20] レビュー指摘の再発防止（2026-08-14 の review / security / performance / ui-print）");
+
+// ★ 打刻修正の承認は時刻しか書かず workFacility を付けないため、承認しても no_origin は解消しない。
+//   「打刻を修正してください」と案内すると、解消できない要確認で月全体の確定が止まったままになる。
+ok("no_origin の案内が「打刻修正では直らない」ことと手入力での復旧を示す",
+  /no_origin:"[^"]*打刻修正申請を承認しても解消しません/.test(html)
+  && /no_origin:"[^"]*手入力（例外）/.test(html));
+ok("no_origin の案内に「打刻を修正してください」を復活させない",
+  !/no_origin:"[^"]*打刻を修正してください/.test(html));
+ok("確定できないときのエラー文も手入力での復旧を案内する",
+  /「起点未確定」は打刻修正の承認では解消しません/.test(html));
+
+// ★ overlay は position:fixed + align-items:center で自身をスクロールできない。
+//   カードが画面より高いと下端の OK / キャンセルが押せなくなる（月次確定の確認は最大20行）。
+ok("確認モーダルは画面より高くなってもボタンへ到達できる",
+  /max-height:calc\(100vh - 32px\);overflow-y:auto/.test(html));
+
+// ★ 再集計の結果が「差異あり」のときしか出ないと、押しても効かないのか差異が無いのか区別できず、
+//   確定後差異の唯一の検知手段を見落とす。
+ok("サーバ再集計は差異が無くても結果を必ず表示する",
+  /サーバ側の再集計：/.test(html) && /確定後の差異はありません。/.test(html));
+ok("再集計の結果は要確認の件数で色を切り替える",
+  /Number\(chk\.unresolved\)>0\?"#b91c1c":"#166534"/.test(html));
+ok("打刻を読み取れなかったことが管理画面に出る",
+  /chkFresh&&chk\.punchUnavailable/.test(html));
+
+// ★ closedBy は監査用 actor。管理者トークンに t クレームが付く実装を入れた瞬間、
+//   労務士がトークンハッシュを読めるようになる（/mileage/audit を返さない取り決めと同じ理由）。
+ok("労務士へ返す closing は欄を列挙し、closedBy を含めない",
+  /closing: \{\s*\n\s*closedAt:/.test(apiSrc) && !/closing: closingsRaw\[ym\]/.test(apiSrc));
+
+// ★ 正規表現だけでは __proto__ / constructor を通してしまう。素の {} の索引キーに使われるため、
+//   placeById["constructor"] が存在検査を通り、enabled["__proto__"]=true は黙って無視される
+//   （＝要確認にもならず自動集計から消える。フェイルサイレントな支給漏れ）。
+ok("社員番号・IDはプロトタイプ特殊キーを拒否する",
+  M.isEmployeeId("E001") === true && M.isEmployeeId("__proto__") === false
+  && M.isEmployeeId("constructor") === false && M.isEmployeeId("prototype") === false
+  && M.isId("p1") === true && M.isId("__proto__") === false && M.isId("constructor") === false);
+
+// ★ closeMonth も autoCheck と同じ全件取得を行い、要確認が残る月では 409 を返すまでに必ず到達する。
+ok("closeMonth にも打刻全件取得の読み取り上限が掛かる",
+  /action === "autoCheck" \|\| action === "closeMonth"/.test(apiSrc));
+
+// ★ /mileage/monthly は全職員×全月の1ノードで、日別内訳 days[] を持つぶん肥大する。
+//   労務士画面は「一覧 → 対象月」の2回呼ぶため、ym が空の回で取って捨てない。
+ok("確定済み月の一覧だけを返すときは monthly を取得しない",
+  /ym \? G\.dbGet\(ROOT \+ "\/monthly"\) : Promise\.resolve\(null\)/.test(apiSrc));
+
 console.log("\n================ 結果 ================");
 console.log("PASS: " + pass + " / FAIL: " + fail);
 if (fail > 0) process.exit(1);

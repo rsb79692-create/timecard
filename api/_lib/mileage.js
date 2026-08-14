@@ -83,7 +83,16 @@ const ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
 const YM_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
 const DATE_RE = /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
 
-function isId(v) { return typeof v === "string" && ID_RE.test(v); }
+/**
+ * ★ プロトタイプを触りにいく特殊キーは、正規表現を通ってしまうので明示的に弾く。
+ *   ID・社員番号は素の {} の索引キーとして使われる箇所があり、弾かないと次が起きる:
+ *   ・placeById["constructor"] が truthy になり、存在しない地点が存在検査を通る
+ *   ・enabled["__proto__"]=true が黙って無視され、その職員が要確認にもならず
+ *     自動集計から消える（フェイルクローズではなくフェイルサイレント＝支給漏れ）
+ *   共有ブロックの mileageAutoSafeKey と同じ規律をサーバ側の入口にも置く。
+ */
+function isUnsafeKey(v) { return v === "__proto__" || v === "prototype" || v === "constructor"; }
+function isId(v) { return typeof v === "string" && !isUnsafeKey(v) && ID_RE.test(v); }
 function isYm(v) { return typeof v === "string" && YM_RE.test(v); }
 function isDate(v) {
   if (typeof v !== "string" || !DATE_RE.test(v)) return false;
@@ -95,7 +104,7 @@ function isDate(v) {
 function ymOf(dateStr) { return String(dateStr).slice(0, 7); }
 
 /** RTDB のキーに使えない文字と、社員番号として不自然な値を弾く。 */
-function isEmployeeId(v) { return typeof v === "string" && /^[A-Za-z0-9_-]{1,32}$/.test(v); }
+function isEmployeeId(v) { return typeof v === "string" && !isUnsafeKey(v) && /^[A-Za-z0-9_-]{1,32}$/.test(v); }
 
 /** 距離 km。0 より大きく 1000 未満、0.1 刻みへ丸めて返す。不正なら null。 */
 function normKm(v) {
@@ -279,7 +288,10 @@ async function loadPlaces() {
     for (const id of Object.keys(raw)) {
       const p = raw[id];
       if (!p || typeof p !== "object" || typeof p.name !== "string") continue;
-      out.push({ id: id, name: p.name, order: Number(p.order) || 0, active: p.active !== false });
+      // facility ＝ この地点に対応する「打刻の施設名」。応援打刻からの自動集計で使う。
+      // 未設定の地点は、地点名と施設名が完全一致する場合だけ対応づける（mileage-auto.placeMap）。
+      out.push({ id: id, name: p.name, order: Number(p.order) || 0, active: p.active !== false,
+                 facility: typeof p.facility === "string" ? p.facility : "" });
     }
   }
   out.sort(function (a, b) {

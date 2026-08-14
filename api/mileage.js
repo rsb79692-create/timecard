@@ -23,6 +23,8 @@ const H = require("./_lib/http");
 const G = require("./_lib/google");
 const S = require("./_lib/secrets");
 const M = require("./_lib/mileage");
+const A = require("./_lib/mileage-auto");     // 打刻→経路の共通計算（index.html と同一ソース）
+const P = require("./_lib/mileage-punch");    // 打刻データの読み取り専用アクセス
 
 const MIN_MS = 60;
 
@@ -32,6 +34,8 @@ const MIN_MS = 60;
 // ★ 打刻のような賃金事故に直結する経路ではないので、ここはハード上限（429）でよい。
 const WRITE_LIMIT_STAFF = 60;
 const WRITE_LIMIT_ADMIN = 300;
+// 自動集計の確認（autoCheck）は打刻を全件読むため、書込ではないが上限を設ける。
+const READ_LIMIT_ADMIN = 120;
 
 /** 書込系 action か（ACTIONS と対で管理する）。 */
 const WRITE_ACTIONS = {
@@ -48,6 +52,7 @@ const ACTIONS = {
   saveRequest: ["s"],
   deleteRequest: ["s"],
   adminMonth: ["a"],
+  autoCheck: ["a"],
   setEnabled: ["a"],
   savePlace: ["a"],
   deletePlace: ["a"],
@@ -252,10 +257,20 @@ async function handleAdminMonth(body) {
     for (const eid of Object.keys(enabledRaw)) if (enabledRaw[eid] === true) enabled[eid] = true;
   }
 
+  // ★ 利用ONの職員の氏名を返す。管理画面はこの氏名で打刻（tc5_records）を突き合わせ、
+  //   自動集計を手元で計算して表示する（表示のたびに全打刻をサーバへ取りに行かないため）。
+  //   確定に使う値は必ずサーバ側で計算し直す（closeMonth / autoCheck）。
+  const names = {};
+  for (const eid of Object.keys(enabled)) if (nameByEid[eid]) names[eid] = nameByEid[eid];
+  if (node && typeof node === "object") {
+    for (const eid of Object.keys(node)) if (nameByEid[eid]) names[eid] = nameByEid[eid];
+  }
+
   return {
     status: 200, ok: true, ym: ym,
     byStaff: byStaff,
     enabledMap: enabled,
+    names: names,
     settings: settings,
     closing: (closing && typeof closing === "object") ? closing : null,
     snapshots: snapshots,
@@ -426,6 +441,14 @@ async function handleSavePlace(body, actor) {
   const dup = places.find(function (p) { return p.name === name && p.id !== placeId; });
   if (dup) return { status: 409, error: "duplicate_name" };
 
+  // 打刻の施設名との対応づけ。★ 同じ施設名を複数の地点へ割り当てると
+  //   自動集計がどちらの地点か決められず、その施設を含む日が丸ごと「距離未登録」になる。
+  const facility = M.normText(body.facility, 40);
+  if (facility) {
+    const fdup = places.find(function (p) { return p.id !== placeId && String(p.facility || "") === facility; });
+    if (fdup) return { status: 409, error: "duplicate_facility", conflictWith: fdup.name };
+  }
+
   await M.ensureMeta();
   const prev = places.find(function (p) { return p.id === placeId; });
   // ★ PUT は置換なので createdAt を必ず持ち回る（更新のたびに作成日時が消えないように）
@@ -434,10 +457,12 @@ async function handleSavePlace(body, actor) {
     name: name,
     order: isFinite(order) ? order : (prev ? prev.order : places.length + 1),
     active: active,
+    facility: facility,
     createdAt: (prevRaw && prevRaw.createdAt) ? String(prevRaw.createdAt) : M.nowIso(),
     updatedAt: M.nowIso(),
   });
-  M.audit(actor, prev ? "place.update" : "place.create", placeId, { name: name, active: active });
+  M.audit(actor, prev ? "place.update" : "place.create", placeId,
+    { name: name, active: active, facility: facility });
   return { status: 200, ok: true, placeId: placeId };
 }
 
@@ -629,68 +654,269 @@ async function handleApproveAll(body, actor) {
   return { status: 200, ok: true, approved: approved, skipped: skipped };
 }
 
+// ===== 応援打刻からの自動集計（サーバ側が確定の正本）=====
+
+/** 申請ノード → { 日付: {status,totalKm,routeText} }。1日1件（reqId = d_YYYYMMDD）。 */
+function manualByDateOf(node) {
+  const out = {};
+  listRequests(node).forEach(function (r) {
+    if (!r.date) return;
+    const prev = out[r.date];
+    // 万一同じ日に複数あった場合は「承認済み > 未処理 > 却下」を優先（金額の取りこぼしを防ぐ）
+    const rank = function (s) { return s === "approved" ? 3 : s === "pending" ? 2 : 1; };
+    if (prev && rank(prev.status) >= rank(r.status)) return;
+    out[r.date] = {
+      status: r.status,
+      totalKm: M.round1(r.totalKm),
+      routeText: (r.legs || []).length
+        ? [].concat(r.legs.map(function (l) { return l.fromName; }),
+                    [r.legs[r.legs.length - 1].toName]).join(" → ")
+        : "",
+    };
+  });
+  return out;
+}
+
+/**
+ * 対象年月の全職員分を集計する。
+ *
+ * ★ 自動集計の対象は「利用ONの職員」だけ（要件）。
+ *   ただし利用OFFにした後も、その月に承認済みの手入力申請が残っていることはある。
+ *   それを黙って落とすと支給漏れになるため、申請がある職員は手入力分だけ集計へ含める。
+ */
+async function computeAutoMonth(ym) {
+  const [enabledRaw, nameByEid, places, legs, reqNode] = await Promise.all([
+    G.dbGet(ROOT + "/enabled"), M.loadStaffNames(), M.loadPlaces(), M.loadLegs(), G.dbGet(reqPath(ym)),
+  ]);
+  const enabled = {};
+  if (enabledRaw && typeof enabledRaw === "object") {
+    for (const eid of Object.keys(enabledRaw)) if (enabledRaw[eid] === true) enabled[eid] = true;
+  }
+
+  const targets = [];
+  const seenEid = {};
+  const nameSet = {};
+  function addTarget(eid, auto) {
+    if (!M.isEmployeeId(eid) || seenEid[eid]) return;
+    seenEid[eid] = true;
+    const nm = String(nameByEid[eid] || "");
+    targets.push({ employeeId: eid, staffName: nm, auto: auto });
+    if (auto && nm) nameSet[nm] = true;
+  }
+  for (const eid of Object.keys(enabled)) addTarget(eid, true);
+  if (reqNode && typeof reqNode === "object") for (const eid of Object.keys(reqNode)) addTarget(eid, false);
+
+  // 打刻と未処理の打刻修正申請は、自動集計対象の職員の分だけ取り出す
+  const [punch, pendCorrByName] = await Promise.all([
+    P.loadMonthPunches(ym, nameSet), P.loadPendingCorrections(ym, nameSet),
+  ]);
+  const punchByName = punch.byStaff;
+  // ★ 打刻ノードそのものが空で返ってきた場合、「移動が無い月」と区別できない。
+  //   自動集計の対象者がいるのに1件も打刻が無いのは通常ありえないので、確定を止める材料として返す。
+  const punchUnavailable = (punch.totalRecords === 0 && Object.keys(nameSet).length > 0);
+
+  const ctx = { placeByFacility: A.placeMap(places), legs: legs };
+  const staff = [];
+  const missingFacilities = {};
+  let unresolved = 0;
+  for (const t of targets) {
+    const auto = (t.auto && t.staffName)
+      ? A.month(punchByName[t.staffName] || [], ym, ctx)
+      : { days: {}, dates: [] };
+    const manual = manualByDateOf(reqNode && reqNode[t.employeeId]);
+    const merged = A.merge(auto.days, manual, (pendCorrByName[t.staffName] || {}));
+    merged.rows.forEach(function (r) {
+      (r.missingPlaces || []).forEach(function (f) { if (f) missingFacilities[f] = true; });
+    });
+    // ★ 利用ONなのに /mileage/staff に氏名が無い＝打刻と突き合わせられない。
+    //   これを見逃すと 0km のまま確定され、黙って支給漏れになる（他の要確認と扱いを揃える）。
+    const nameBlocked = (t.auto && !t.staffName);
+    if (nameBlocked) merged.blockers.push({ date: "", status: "name_unresolved" });
+    unresolved += merged.blockers.length;
+    staff.push({
+      employeeId: t.employeeId,
+      staffName: t.staffName,
+      autoTarget: !!t.auto,
+      // 氏名が /mileage/staff に無い＝打刻と突き合わせられない（利用設定のやり直しが必要）
+      nameResolved: !!t.staffName,
+      totalKm: merged.totalKm,
+      rows: merged.rows,
+      blockers: merged.blockers,
+    });
+  }
+  staff.sort(function (a, b) { return String(a.employeeId).localeCompare(String(b.employeeId), "ja"); });
+  return { staff: staff, unresolved: unresolved, missingFacilities: Object.keys(missingFacilities),
+           punchUnavailable: punchUnavailable };
+}
+
+/**
+ * 確定対象の内容そのものから作る指紋。
+ * ★ 管理者が画面で確認した内容と、実際に確定される内容が同一であることを保証するために使う。
+ *   自動集計には「1件ずつ承認する」工程が無いため、これが唯一の「人が確認した」証跡になる。
+ *   確認から確定までの間に打刻が変わっていれば一致せず、やり直しになる。
+ */
+function confirmDigest(ym, staffRows) {
+  const parts = [ym];
+  staffRows.forEach(function (s) {
+    const days = s.rows
+      .filter(function (r) { return r.status === "auto" || r.status === "manual"; })
+      .map(function (r) { return r.date + ":" + r.km + ":" + r.source + ":" + (r.sig || ""); })
+      .join(",");
+    parts.push(s.employeeId + "=" + s.totalKm + "[" + days + "]");
+  });
+  return require("crypto").createHash("sha256").update(parts.join("|")).digest("hex").slice(0, 32);
+}
+
+/**
+ * 管理者向けの確認。
+ * ・未確定の月 : 要確認（起点未確定／距離未登録／打刻修正待ち／未処理の手入力申請）の一覧
+ * ・確定済みの月: 確定後に打刻が変わって金額が動く日（＝確定後差異あり）の一覧
+ * ★ どちらも読み取りだけ。確定済みの金額を自動で書き換えることは絶対にしない。
+ */
+async function handleAutoCheck(body) {
+  const ym = H.str(body.ym, 7);
+  if (!M.isYm(ym)) return { status: 400, error: "bad_ym" };
+
+  const [comp, closing] = await Promise.all([
+    computeAutoMonth(ym), G.dbGet(ROOT + "/closings/" + ym),
+  ]);
+  const closed = !!(closing && typeof closing === "object");
+
+  const out = {
+    status: 200, ok: true, ym: ym, closed: closed,
+    unresolved: comp.unresolved,
+    missingFacilities: comp.missingFacilities,
+    punchUnavailable: comp.punchUnavailable,
+    // 管理者が確認した内容で確定させるための指紋（closeMonth へそのまま渡す）
+    confirmToken: confirmDigest(ym, comp.staff),
+    totalKm: comp.staff.reduce(function (a, s) { return M.round1(a + s.totalKm); }, 0),
+    staff: comp.staff.map(function (s) {
+      return {
+        employeeId: s.employeeId, staffName: s.staffName,
+        autoTarget: s.autoTarget, nameResolved: s.nameResolved,
+        totalKm: s.totalKm, blockers: s.blockers, attentionDays: s.rows.filter(function (r) { return r.attention; }).length,
+        dayCount: s.rows.filter(function (r) { return r.status === "auto" || r.status === "manual"; }).length,
+      };
+    }),
+  };
+
+  if (closed) {
+    const monthlyRaw = await G.dbGet(ROOT + "/monthly");
+    const drift = [];
+    comp.staff.forEach(function (s) {
+      const snap = (monthlyRaw && monthlyRaw[s.employeeId] && monthlyRaw[s.employeeId][ym]) || null;
+      const snapDays = (snap && Array.isArray(snap.days)) ? snap.days : [];
+      // 確定前の古いスナップショット（日別内訳を持たない）は差異判定の対象外にする。
+      // 「差異なし」と誤って報告しないよう、判定できないことを明示する。
+      if (snap && !Array.isArray(snap.days)) {
+        drift.push({ employeeId: s.employeeId, staffName: s.staffName, unknown: true, days: [] });
+        return;
+      }
+      const diffs = A.diff(snapDays, s.rows);
+      if (!diffs.length) return;
+      let after = 0;
+      s.rows.forEach(function (r) { if (r.status === "auto" || r.status === "manual") after = M.round1(after + r.km); });
+      drift.push({
+        employeeId: s.employeeId, staffName: s.staffName,
+        beforeKm: snap ? M.round1(snap.totalKm) : 0, afterKm: after,
+        days: diffs.slice(0, 60),
+      });
+    });
+    out.drift = drift;
+  }
+  return out;
+}
+
 /**
  * 月次確定。給与計算の正本 /mileage/monthly/{employeeId}/{ym} を作る。
  * ★ ここで単価・端数処理・合計距離・支給額をスナップショットする。
  *   以後 settings を変えても、この月の金額は動かない。
+ * ★ 集計はサーバ側で打刻から計算し直す。画面の表示値は受け取らない。
+ * ★ 未解決の「要確認」が1件でもあれば確定しない（未確定データを給与へ混入させない）。
  */
 async function handleCloseMonth(body, actor) {
   const ym = H.str(body.ym, 7);
   if (!M.isYm(ym)) return { status: 400, error: "bad_ym" };
 
-  const existing = await G.dbGet(ROOT + "/closings/" + ym);
+  // 確定済み判定と単価の取得は互いに独立なので、1往復ぶん逐次にしない。
+  // 確定は打刻の全件取得を伴い時間予算が厳しいため、削れる RTT は削る。
+  const [existing, settings] = await Promise.all([
+    G.dbGet(ROOT + "/closings/" + ym), M.loadSettings(),
+  ]);
   if (existing && typeof existing === "object") return { status: 409, error: "already_closed" };
 
-  const [node, nameByEid, settings] = await Promise.all([
-    G.dbGet(reqPath(ym)), M.loadStaffNames(), M.loadSettings(),
-  ]);
   // ★ km単価が一度も設定されていない状態で確定させない。
   //   既定値のまま確定すると、誰も決めていない単価で給与データが作られる。
   if (!settings.configured) return { status: 409, error: "rate_not_configured" };
 
+  const comp = await computeAutoMonth(ym);
+
+  // ★ 打刻が1件も取れていない状態で「移動が無い月」として確定しない（未取得と 0 を区別する）。
+  if (comp.punchUnavailable) return { status: 409, error: "punch_unavailable" };
+
+  // 要確認が残っていたら確定しない。どの職員のどの日かを返す（管理者が直せるように）。
+  if (comp.unresolved > 0) {
+    const detail = [];
+    comp.staff.forEach(function (s) {
+      s.blockers.forEach(function (b) {
+        if (detail.length < 200) {
+          detail.push({ employeeId: s.employeeId, staffName: s.staffName, date: b.date, status: b.status });
+        }
+      });
+    });
+    return { status: 409, error: "unresolved", unresolved: comp.unresolved, detail: detail,
+             missingFacilities: comp.missingFacilities };
+  }
+
+  // ★ 管理者が画面で確認した内容と一致するときだけ確定する。
+  //   自動集計は日ごとの承認工程を持たないため、ここが「人が見て承認した」唯一の関門になる。
+  //   確認から確定までの間に打刻が変わっていれば一致せず、確認からやり直させる。
+  const expected = confirmDigest(ym, comp.staff);
+  if (H.str(body.confirmToken, 64) !== expected) {
+    return { status: 409, error: "stale_confirmation" };
+  }
+
   const now = M.nowIso();
   const patch = {};
   const rows = [];
-  let pendingTotal = 0;
-
-  if (node && typeof node === "object") {
-    for (const eid of Object.keys(node)) {
-      if (!M.isEmployeeId(eid)) continue;
-      const list = listRequests(node[eid]);
-      const approved = list.filter(function (r) { return r.status === "approved"; });
-      pendingTotal += list.filter(function (r) { return r.status === "pending"; }).length;
-      // ★ 承認済みが1件も無い職員は出力対象にしない（未確定データを給与へ混入させない）
-      if (!approved.length) continue;
-      let totalKm = 0;
-      approved.forEach(function (r) { totalKm = M.round1(totalKm + r.totalKm); });
-      if (!(totalKm > 0)) continue;
-      const row = {
-        employeeId: eid,
-        staffName: nameByEid[eid] || (approved[0] && approved[0].staffName) || "",
-        ym: ym,
-        totalKm: totalKm,
-        ratePerKm: settings.ratePerKm,
-        roundMode: settings.roundMode,
-        amount: M.monthlyAmount(totalKm, settings.ratePerKm, settings.roundMode),
-        dayCount: approved.length,
-        closedAt: now,
-        closedBy: actor,
-      };
-      patch[ROOT + "/monthly/" + eid + "/" + ym] = row;
-      rows.push(row);
-    }
+  for (const s of comp.staff) {
+    if (!(s.totalKm > 0)) continue;   // 移動が無い職員は出力しない
+    const days = s.rows
+      .filter(function (r) { return r.status === "auto" || r.status === "manual"; })
+      .map(function (r) {
+        return { date: r.date, km: r.km, source: r.source, sig: r.sig || "",
+                 route: M.normText(r.routeText, 200) };
+      });
+    const row = {
+      employeeId: s.employeeId,
+      staffName: s.staffName,
+      ym: ym,
+      totalKm: s.totalKm,
+      ratePerKm: settings.ratePerKm,
+      roundMode: settings.roundMode,
+      amount: M.monthlyAmount(s.totalKm, settings.ratePerKm, settings.roundMode),
+      dayCount: days.length,
+      // ★ 日別内訳と経路の指紋（sig）を残す。これが無いと「確定後に打刻が変わったか」を
+      //   後から判定できない（＝確定後差異ありを検知できない）。
+      days: days,
+      closedAt: now,
+      closedBy: actor,
+    };
+    patch[ROOT + "/monthly/" + s.employeeId + "/" + ym] = row;
+    rows.push(row);
   }
 
   patch[ROOT + "/closings/" + ym] = {
     closedAt: now, closedBy: actor,
     ratePerKm: settings.ratePerKm, roundMode: settings.roundMode,
     staffCount: rows.length,
-    excludedPending: pendingTotal,
+    excludedPending: 0,
+    source: "auto",
   };
   await M.ensureMeta();
   await G.dbPatchRoot(patch);
-  M.audit(actor, "month.close", ym, { staffCount: rows.length, excludedPending: pendingTotal });
-  return { status: 200, ok: true, ym: ym, rows: rows, excludedPending: pendingTotal };
+  M.audit(actor, "month.close", ym, { staffCount: rows.length, mode: "auto" });
+  return { status: 200, ok: true, ym: ym, rows: rows, excludedPending: 0 };
 }
 
 /** 確定解除。スナップショットも消す（「確定済み」と言える状態を中途半端に残さない）。 */
@@ -722,8 +948,12 @@ async function handleMonthlyReport(body) {
   const ym = H.str(body.ym, 7);
   const withDetail = body.withDetail === true;
 
+  // ★ ym が空のときは確定済み月の一覧を返すだけで monthly を使わない。
+  //   /mileage/monthly は全職員×全月の1ノードで、日別内訳 days[] を持つぶん肥大する。
+  //   労務士画面は「一覧取得 → 対象月取得」で2回呼ぶため、取って捨てる分をここで削る。
   const [closingsRaw, monthlyRaw] = await Promise.all([
-    G.dbGet(ROOT + "/closings"), G.dbGet(ROOT + "/monthly"),
+    G.dbGet(ROOT + "/closings"),
+    ym ? G.dbGet(ROOT + "/monthly") : Promise.resolve(null),
   ]);
   const closedMonths = [];
   if (closingsRaw && typeof closingsRaw === "object") {
@@ -756,17 +986,48 @@ async function handleMonthlyReport(body) {
   }
   rows.sort(function (a, b) { return String(a.employeeId).localeCompare(String(b.employeeId), "ja"); });
 
+  // ★ closing を素通ししない。closedBy は監査用の actor で、管理者トークンに t クレーム
+  //   （トークンハッシュ先頭16桁）が付く実装を入れた瞬間、労務士がそれを読めるようになる。
+  //   これは /mileage/audit を API から返さない取り決めと同じ理由で外へ出してはならない値。
+  //   rows と同じく「返す欄を列挙する」方針に揃える。
+  const c0 = closingsRaw[ym] || {};
   const out = {
     status: 200, ok: true, ym: ym, closed: true,
-    closing: closingsRaw[ym], closedMonths: closedMonths, rows: rows,
+    closing: {
+      closedAt: String(c0.closedAt || ""),
+      ratePerKm: Number(c0.ratePerKm) || 0,
+      roundMode: String(c0.roundMode || ""),
+      staffCount: Number(c0.staffCount) || 0,
+      source: String(c0.source || ""),
+    },
+    closedMonths: closedMonths, rows: rows,
   };
 
   if (withDetail) {
-    // 日別明細も確定済みの承認データだけから作る
-    const node = await G.dbGet(reqPath(ym));
+    // 日別明細も確定済みのスナップショットだけから作る（未確定・要確認は混ぜない）
     const detail = [];
     const inReport = {};
     rows.forEach(function (r) { inReport[r.employeeId] = r; });
+
+    // ★ 新方式（自動集計）の確定は日別内訳をスナップショットしている。それを正本にする。
+    let fromSnapshot = false;
+    for (const eid of Object.keys(inReport)) {
+      const snap = monthlyRaw && monthlyRaw[eid] && monthlyRaw[eid][ym];
+      if (!snap || !Array.isArray(snap.days)) continue;
+      fromSnapshot = true;
+      snap.days.forEach(function (d) {
+        detail.push({
+          employeeId: eid, staffName: inReport[eid].staffName,
+          date: String(d.date || ""),
+          route: String(d.route || String(d.sig || "").replace(/>/g, " → ").replace(/\|/g, " ／ ")),
+          totalKm: M.round1(d.km),
+          note: String(d.source || "") === "manual" ? "手入力" : "",
+        });
+      });
+    }
+
+    // 旧方式（申請ベース）で確定済みの月は、従来どおり承認済み申請から作る
+    const node = fromSnapshot ? null : await G.dbGet(reqPath(ym));
     if (node && typeof node === "object") {
       for (const eid of Object.keys(node)) {
         if (!inReport[eid]) continue;   // 確定に含まれない職員は明細も出さない
@@ -852,6 +1113,19 @@ module.exports = async function handler(req, res) {
       ? (typeof ident.claims.t === "string" && ident.claims.t ? ("admin:" + ident.claims.t) : "admin")
       : ident.role === "s" ? ("staff:" + staff.employeeId) : "viewer";
 
+    // ★ 打刻の全件取得を伴う action は連打させない（コストとタイムアウトの抑止）。
+    //   closeMonth も同じ全件取得を行い、しかも要確認が残っている月では 409 を返すまでに
+    //   必ずそこへ到達する。書込上限（300回/10分）だけでは抑止の意図が届かないため、
+    //   autoCheck と同じ読み取り上限を掛ける。
+    if (action === "autoCheck" || action === "closeMonth") {
+      const n = await S.bumpAndCount("mlg_r", S.sanitizeKey(actor));
+      if (n > READ_LIMIT_ADMIN) {
+        res.setHeader("Retry-After", "600");
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 429, "rate_limited");
+      }
+    }
+
     // 書込系はハード上限を設ける（監査ログの無制限増加とAPI連打の抑止）
     if (Object.prototype.hasOwnProperty.call(WRITE_ACTIONS, action)) {
       const limit = ident.role === "a" ? WRITE_LIMIT_ADMIN : WRITE_LIMIT_STAFF;
@@ -897,16 +1171,30 @@ module.exports = async function handler(req, res) {
       case "myMonth": {
         const ym = H.str(body.ym, 7);
         if (!M.isYm(ym)) { r = { status: 400, error: "bad_ym" }; break; }
-        const [node, closing] = await Promise.all([
+        const [node, closing, snap] = await Promise.all([
           G.dbGet(reqPath(ym, staff.employeeId)), G.dbGet(ROOT + "/closings/" + ym),
+          G.dbGet(ROOT + "/monthly/" + staff.employeeId + "/" + ym),
         ]);
-        r = { status: 200, ok: true, ym: ym, requests: listRequests(node),
-              closed: !!(closing && typeof closing === "object") };
+        const isClosed = !!(closing && typeof closing === "object");
+        r = { status: 200, ok: true, ym: ym, requests: listRequests(node), closed: isClosed };
+        // ★ 確定済みの月は、現在の打刻から計算し直した値ではなく確定額を見せる。
+        //   確定後に打刻が直されても支給額は動かないため、再計算値を出すと画面と給与が食い違う。
+        if (isClosed && snap && typeof snap === "object") {
+          r.snapshot = {
+            totalKm: M.round1(snap.totalKm), amount: Number(snap.amount) || 0,
+            ratePerKm: Number(snap.ratePerKm) || 0, dayCount: Number(snap.dayCount) || 0,
+            days: Array.isArray(snap.days) ? snap.days.map(function (d) {
+              return { date: String(d.date || ""), km: M.round1(d.km),
+                       source: String(d.source || ""), route: String(d.route || "") };
+            }) : null,
+          };
+        }
         break;
       }
       case "saveRequest": r = await handleSaveRequest(body, staff); break;
       case "deleteRequest": r = await handleDeleteRequest(body, staff); break;
       case "adminMonth": r = await handleAdminMonth(body); break;
+      case "autoCheck": r = await handleAutoCheck(body); break;
       case "setEnabled": r = await handleSetEnabled(body, actor); break;
       case "savePlace": r = await handleSavePlace(body, actor); break;
       case "deletePlace": r = await handleDeletePlace(body, actor); break;

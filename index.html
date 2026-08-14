@@ -1163,7 +1163,11 @@ function showModal(opts){
   var ov=document.createElement("div");
   ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
   var card=document.createElement("div");
-  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;";
+  // ★ max-height / overflow-y は必須。overlay は align-items:center の position:fixed で
+  //   overlay 自身をスクロールできないため、カードが画面より高いと上下へはみ出し、
+  //   下端の「OK」「キャンセル」が押せなくなる（＝操作不能になる）。
+  //   月次確定の確認メッセージは職員名を最大20行並べるため、スマホでは実際に画面を超える。
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;max-height:calc(100vh - 32px);overflow-y:auto;";
   if(opts.title){var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;";ttl.textContent=opts.title;card.appendChild(ttl);}
   var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#0f172a;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
   var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
@@ -8089,10 +8093,15 @@ var mileage={
   places:[],legs:{},
   // 職員側
   myMonth:"",myRequests:[],myLoading:false,myClosed:false,myError:false,
+  myExpand:false,        // 打刻画面：日別をすべて表示するか（既定は要確認＋直近だけ）
+  mySnapshot:null,       // 確定済みの月の確定内容（サーバのスナップショット）
   draft:{date:"",placeIds:[],note:"",editingId:""},
   formOpen:false,
   // 管理者側
-  adminTab:"requests",adminYm:"",adminData:null,adminLoading:false,
+  adminTab:"auto",adminYm:"",adminData:null,adminLoading:false,
+  autoOpen:{},            // 社員番号 → 日別の展開状態
+  autoOnlyIssues:false,   // 「要確認の日だけ表示」
+  checkYm:"",checkData:null,checkLoading:false, // サーバ側の再集計・確定後差異の確認結果
   enabledMap:{},          // 社員番号 → true（管理者の bootstrap で取得。正本はサーバ）
   modalEid:"",modalName:"",modalWas:false, // スタッフ管理モーダルで開いている職員と、開いた時点のON/OFF
   syncFailed:{},          // 社員番号 → true（利用設定の送信に失敗した職員。次回保存で必ず再送する）
@@ -8151,6 +8160,27 @@ function mileageErrText(res){
   if(c==="bad_km")return "距離の値が正しくありません（0より大きい数値）。";
   if(c==="bad_date")return "日付が正しくありません。";
   if(c==="date_out_of_range")return "申請できるのは過去12か月〜翌月までです。日付を確認してください。";
+  if(c==="stale_confirmation")return "確認した内容と現在の集計が一致しません（打刻が変わった可能性があります）。\nもう一度「この月を確定する」を押して、内容を確認し直してください。";
+  if(c==="punch_unavailable")return "打刻データを取得できなかったため確定できません。時間をおいてやり直してください。";
+  if(c==="duplicate_facility")return "この施設は既に別の地点（"+((res.data&&res.data.conflictWith)||"?")+"）に対応づけられています。\n"
+    +"同じ施設を2つの地点に割り当てると、自動集計がどちらの地点か決められず「距離未登録」になります。";
+  if(c==="unresolved"){
+    var det=(res.data&&res.data.detail)||[];
+    var head="要確認が "+((res.data&&res.data.unresolved)||det.length)+" 件あるため確定できません。\n\n";
+    return head+det.slice(0,10).map(function(x){
+      return "・"+(x.staffName||x.employeeId)+(x.date?" "+x.date:"")+"："
+        +(x.status==="no_origin"?"起点未確定"
+          :x.status==="missing_leg"?"距離未登録"
+          :x.status==="pending_correction"?"打刻修正待ち"
+          :x.status==="pending_request"?"手入力の承認待ち"
+          :x.status==="broken_punch"?"打刻不整合"
+          :x.status==="name_unresolved"?"氏名が未解決":x.status);
+    }).join("\n")+(det.length>10?"\n…ほか "+(det.length-10)+" 件":"")
+      // ★「起点未確定」は打刻修正の承認では直らない（承認で作られる出勤打刻に施設が入らないため）。
+      //   誤った復旧手順へ誘導すると、解消できない要確認で月全体の確定が止まったままになる。
+      +(det.some(function(x){return x.status==="no_origin";})
+        ?"\n\n※「起点未確定」は打刻修正の承認では解消しません。手入力（例外）で登録して承認してください。":"");
+  }
   return "処理に失敗しました。時間をおいて、もう一度お試しください。";
 }
 
@@ -8215,11 +8245,14 @@ function mileageResetSession(){
   mileage.role="";mileage.enabled=false;mileage.employeeId="";mileage.staffName="";
   mileage.places=[];mileage.legs={};
   mileage.myMonth="";mileage.myRequests=[];mileage.myLoading=false;mileage.myClosed=false;mileage.myError=false;
+  mileage.myExpand=false;mileage.mySnapshot=null;
   mileage.draft={date:"",placeIds:[],note:"",editingId:""};
   mileage.formOpen=false;mileage.busy=false;
   mileage.enabledMap={};mileage.modalEid="";mileage.modalName="";mileage.modalWas=false;mileage.syncFailed={};
   mileage.viewYm="";mileage.viewData=null;mileage.viewTried=false;mileage.viewClosedMonths=[];
   mileage.adminYm="";mileage.adminData=null;
+  mileage.autoOpen={};mileage.autoOnlyIssues=false;
+  mileage.checkYm="";mileage.checkData=null;mileage.checkLoading=false;
 }
 
 /**
@@ -8312,7 +8345,7 @@ function mileageBootForViewer(){
  */
 function mileageAdminEditing(){
   if(screen!=="admin"||adminTab!=="mileage")return false;
-  var ids=["mlg-place-name","mlg-place-order","mlg-leg-km","mlg-rate"];
+  var ids=["mlg-place-name","mlg-place-order","mlg-place-facility","mlg-leg-km","mlg-rate"];
   for(var i=0;i<ids.length;i++){
     var el=document.getElementById(ids[i]);
     if(el&&String(el.value||"").trim()!=="")return true;
@@ -8325,6 +8358,447 @@ function mileageAdminEditing(){
 /** ポーリング由来の再描画を止めるべきか（移動距離モジュールの都合）。 */
 function mileageBlocksRerender(){
   return mileage.formOpen||mileageAdminEditing();
+}
+
+// ==== SHARED-AUTO-BEGIN ====
+// ★★ このブロックは api/_lib/mileage-auto.js（サーバ）と index.html（クライアント）の
+//    両方に同一内容で存在する。表示と確定が食い違わないよう、片方だけ変更してはならない。★★
+//    （scripts/test-mileage.js の「共有ブロックのソース一致」テストが FAIL する）
+
+/** 距離は 0.1km 刻み。浮動小数の誤差（6.2+4.4=10.600000000000001）を持ち回らない。 */
+function mileageAutoRound1(v){var n=Number(v);return isFinite(n)?Math.round(n*10)/10:0;}
+
+/**
+ * キーが外部データ（氏名・日付・施設名）由来の索引を作るときは、必ずこれを使う。
+ * ★ 素の {} を使うと、キーが "__proto__" のデータを1件書かれるだけで Object.prototype を
+ *   汚染できる。/honomi は匿名認証で書けるため、打刻や修正申請に "__proto__" という
+ *   氏名を1件混ぜるだけで、管理画面の集計が全職員分おかしくなる（月次確定の妨害になる）。
+ */
+function mileageAutoDict(){return Object.create(null);}
+/** 索引に安全に使えるキーか（プロトタイプを触りにいく特殊キーを弾く）。 */
+function mileageAutoSafeKey(k){
+  return typeof k==="string"&&k!==""&&k!=="__proto__"&&k!=="prototype"&&k!=="constructor";
+}
+function mileageAutoHas(o,k){return !!o&&Object.prototype.hasOwnProperty.call(o,k);}
+
+/**
+ * 出勤打刻が示す「その日の起点施設」。
+ * workFacility（応援先を選んで出勤した場合は応援先）を正とし、
+ * 未記録の旧データだけ facilityName（打刻した端末の施設）で補う。
+ */
+function mileageAutoFacilityOf(r){
+  return String((r&&(r.workFacility||r.facilityName))||"");
+}
+
+/**
+ * 施設変更打刻が示す「移動先」。
+ * ★ facilityName へフォールバックしてはならない。facilityName は打刻した端末の施設＝
+ *   移動元であり、移動先ではない。補うと実際と逆の経路を作ってしまう。
+ *   移動先が記録されていない打刻は、経路を推測せずその打刻だけ使わない。
+ */
+function mileageAutoDestOf(r){
+  return String((r&&r.workFacility)||"");
+}
+
+/** 移動距離の判定に使う打刻種別だけを残す（休憩は経路に影響しない）。 */
+function mileageAutoIsRouteType(t){
+  return t==="clockIn"||t==="clockOut"||t==="facilityChange";
+}
+
+/**
+ * 同一スタッフ・同一日の打刻から、施設の移動経路（施設名の並び）を組み立てる。
+ *
+ * ・出勤(clockIn)で区間を開始し、その施設をその日の「起点」とする
+ * ・施設変更(facilityChange)ごとに移動先を追加する
+ * ・退勤(clockOut)で区間を閉じる
+ * ・★ 最後は必ず起点施設へ戻す。実際の退勤打刻が応援先であっても、
+ *   帰りの移動は必ず発生しているため（業務ルール）。
+ *
+ * 戻り値 { routes:[[施設名,...],...], hasMove, noOrigin, notes:[...] }
+ */
+function mileageAutoBuildNodes(dayRecords){
+  var rs=[],i;
+  for(i=0;i<dayRecords.length;i++){
+    var r0=dayRecords[i];
+    if(!r0||r0.deleted)continue;
+    if(!mileageAutoIsRouteType(String(r0.type||"")))continue;
+    var t=Date.parse(r0.timestamp);
+    if(!isFinite(t))continue;   // 時刻が壊れているレコードは順序を決められないので使わない
+    rs.push({t:t,i:i,r:r0});
+  }
+  // ★ 同時刻（管理者の手動追加は秒が 0 になる）でも順序が決まるようにする。
+  //   配列順だけに頼ると、サーバとクライアントで並びが変わり結果が食い違う。
+  rs.sort(function(a,b){
+    if(a.t!==b.t)return a.t-b.t;
+    var ai=String(a.r.id||""),bi=String(b.r.id||"");
+    if(ai!==bi)return ai<bi?-1:1;
+    return a.i-b.i;
+  });
+
+  var segs=[],noteMap={},cur=null;
+  function note(k){noteMap[k]=true;}
+  for(i=0;i<rs.length;i++){
+    var rec=rs[i].r,ty=String(rec.type||"");
+    if(ty==="clockIn"){
+      // 退勤が無いまま次の出勤が来た場合も、前の勤務は前の勤務として閉じる
+      if(cur){segs.push(cur);note("multi_shift");}
+      cur={origin:mileageAutoFacilityOf(rec),nodes:[mileageAutoFacilityOf(rec)]};
+    }else if(ty==="facilityChange"){
+      // ★ 出勤打刻が無い状態の施設変更から起点を推測してはならない（打刻忘れの可能性）
+      if(!cur){note("orphan_change");continue;}
+      var to=mileageAutoDestOf(rec);
+      if(!to){note("empty_facility");continue;}
+      var from=String(rec.fromFacility||"");
+      var last=cur.nodes[cur.nodes.length-1];
+      if(from&&last&&from!==last)note("route_mismatch");
+      if(to!==last)cur.nodes.push(to);
+    }else if(ty==="clockOut"){
+      if(cur){segs.push(cur);cur=null;}
+    }
+  }
+  if(cur){note("no_clockout");segs.push(cur);}
+
+  var routes=[],hasMove=false,noOrigin=false;
+  // ★ 移動先が記録されていない施設変更があった日は、経路が1区間欠けたまま「正常」に見えてしまう。
+  //   欠けた区間を推測せず、確定できない日として扱う（管理者が打刻を直す／削除する）。
+  var brokenPunch=!!noteMap.empty_facility;
+  for(i=0;i<segs.length;i++){
+    var s=segs[i];
+    if(s.nodes.length<2)continue;            // 施設間の移動が無い日
+    hasMove=true;
+    if(!s.origin){noOrigin=true;continue;}   // 起点施設が記録されていない
+    var nodes=s.nodes.slice();
+    if(nodes[nodes.length-1]!==s.origin)nodes.push(s.origin);   // 最後は必ず起点へ戻す
+    routes.push(nodes);
+  }
+  if(noteMap.orphan_change){hasMove=true;noOrigin=true;}
+  if(brokenPunch)hasMove=true;
+
+  var notes=[];
+  for(var k in noteMap)if(Object.prototype.hasOwnProperty.call(noteMap,k))notes.push(k);
+  notes.sort();
+  return {routes:routes,hasMove:hasMove,noOrigin:noOrigin,brokenPunch:brokenPunch,notes:notes};
+}
+
+/**
+ * 地点マスタから「施設名 → 地点ID」の対応表を作る。
+ * ・places[].facility（管理画面で明示的に対応づけた施設名）を優先する
+ * ・未設定の地点は、地点名と施設名が完全一致する場合だけ対応づける
+ * ★ 同じ施設名に複数の地点が対応する場合は、どちらか一方を推測せず「未対応」とする。
+ */
+function mileageAutoPlaceMap(places){
+  var exp=mileageAutoDict(),imp=mileageAutoDict(),i,p,key;
+  for(i=0;i<(places||[]).length;i++){
+    p=places[i];
+    if(!p||!p.id||p.active===false)continue;
+    key=String(p.facility||"").trim();
+    if(key){(exp[key]=exp[key]||[]).push(p.id);continue;}
+    key=String(p.name||"").trim();
+    if(key)(imp[key]=imp[key]||[]).push(p.id);
+  }
+  var map=mileageAutoDict();
+  for(key in exp)if(exp[key].length===1)map[key]=exp[key][0];
+  for(key in imp){
+    if(mileageAutoHas(exp,key))continue;   // 明示指定が優先
+    if(imp[key].length===1)map[key]=imp[key][0];
+  }
+  return map;
+}
+
+/**
+ * 1日分の打刻 → 経路・区間距離・合計距離。
+ * ctx = { placeByFacility:{施設名:地点ID}, legs:{"fromId__toId":km} }
+ *
+ * ★ 未登録区間・未対応施設を 0km として扱ってはならない。status で区別し、
+ *   どの区間・どの施設が未登録かを返す。
+ */
+function mileageAutoDayRoute(dayRecords,ctx){
+  var b=mileageAutoBuildNodes(dayRecords);
+  var out={status:"none",totalKm:0,legs:[],routes:b.routes,notes:b.notes,
+           sig:"",missingPlaces:[],missingLegs:[],
+           // attention＝確定は止めないが管理者に見せる不審点（打刻の後編集・複数出勤・退勤漏れ）
+           attention:(b.notes.indexOf("route_mismatch")>=0||b.notes.indexOf("multi_shift")>=0
+                      ||b.notes.indexOf("no_clockout")>=0)};
+  if(!b.hasMove)return out;
+  var i,j;
+  var sigParts=[];
+  for(i=0;i<b.routes.length;i++)sigParts.push(b.routes[i].join(">"));
+  out.sig=sigParts.join("|");
+  if(b.brokenPunch){out.status="broken_punch";return out;}
+  if(b.noOrigin){out.status="no_origin";return out;}
+
+  var total=0,legs=[],missP=[],missPSeen=mileageAutoDict(),missL=[];
+  var legMap=(ctx&&ctx.legs)||{},pmap=(ctx&&ctx.placeByFacility)||{};
+  for(i=0;i<b.routes.length;i++){
+    var nodes=b.routes[i];
+    for(j=0;j+1<nodes.length;j++){
+      var fN=nodes[j],tN=nodes[j+1];
+      var fId=mileageAutoHas(pmap,fN)?pmap[fN]:"";
+      var tId=mileageAutoHas(pmap,tN)?pmap[tN]:"";
+      if(!fId&&!missPSeen[fN]){missPSeen[fN]=true;missP.push(fN);}
+      if(!tId&&!missPSeen[tN]){missPSeen[tN]=true;missP.push(tN);}
+      var km=null;
+      if(fId&&tId){
+        var key=fId+"__"+tId;
+        km=mileageAutoHas(legMap,key)?legMap[key]:null;
+        if(km==null)missL.push({fromName:fN,toName:tN});
+      }
+      legs.push({fromName:fN,toName:tN,km:km});
+      if(km!=null)total=mileageAutoRound1(total+km);
+    }
+  }
+  out.legs=legs;
+  out.missingPlaces=missP;
+  out.missingLegs=missL;
+  out.totalKm=mileageAutoRound1(total);
+  out.status=(missP.length||missL.length)?"missing_leg":"auto";
+  return out;
+}
+
+/** 経路の表示文字列（"ナナイロ → ハルイロ → ナナイロ"）。複数勤務の日は「／」で区切る。 */
+function mileageAutoRouteText(routes){
+  var out=[];
+  for(var i=0;i<(routes||[]).length;i++)out.push(routes[i].join(" → "));
+  return out.join(" ／ ");
+}
+
+/**
+ * 1人・1か月分の自動集計。recs は対象スタッフの打刻レコード（他スタッフを含んでいてもよいが、
+ * 呼び出し側で staff 一致を必ず絞ること）。
+ * 戻り値 { days:{ "YYYY-MM-DD": dayRoute }, dates:[...] }
+ */
+function mileageAutoMonth(recs,ym,ctx){
+  var byDate=mileageAutoDict(),i;
+  for(i=0;i<(recs||[]).length;i++){
+    var r=recs[i];
+    if(!r||r.deleted)continue;
+    var d=String(r.date||"");
+    if(d.slice(0,7)!==ym)continue;
+    if(!mileageAutoSafeKey(d))continue;
+    if(!mileageAutoIsRouteType(String(r.type||"")))continue;
+    (byDate[d]=byDate[d]||[]).push(r);
+  }
+  var dates=[];
+  for(var k in byDate)dates.push(k);
+  dates.sort();
+  var days=mileageAutoDict(),keep=[];
+  for(i=0;i<dates.length;i++){
+    var res=mileageAutoDayRoute(byDate[dates[i]],ctx);
+    if(res.status==="none")continue;
+    days[dates[i]]=res;keep.push(dates[i]);
+  }
+  return {days:days,dates:keep};
+}
+
+/**
+ * 自動集計と、例外の手入力申請・打刻修正申請の状態を突き合わせて、月の確定対象行を作る。
+ *
+ * ・承認済みの手入力申請がある日は、その日の自動集計より手入力を優先する（例外運用の趣旨）
+ * ・未処理の手入力申請がある日は確定できない（pending_request）
+ * ・移動がある日に未処理の打刻修正申請があると確定できない（pending_correction）
+ * ・却下された手入力申請は無効。自動集計の値へ戻す
+ *
+ * 戻り値 { rows:[...], totalKm, blockers:[{date,status}] }
+ *   rows[].status: "auto"|"manual"|"no_origin"|"missing_leg"|"pending_correction"|"pending_request"
+ */
+function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
+  var seen=mileageAutoDict(),list=[],k;
+  for(k in autoDays)if(!seen[k]){seen[k]=1;list.push(k);}
+  for(k in manualByDate)if(mileageAutoSafeKey(k)&&!seen[k]){seen[k]=1;list.push(k);}
+  list.sort();
+  var rows=[],totalKm=0,blockers=[];
+  for(var i=0;i<list.length;i++){
+    var d=list[i];
+    var a=mileageAutoHas(autoDays,d)?autoDays[d]:null;
+    var m=mileageAutoHas(manualByDate,d)?manualByDate[d]:null;
+    var mSt=m?String(m.status||""):"";
+    var row={date:d,source:"auto",status:"none",km:0,sig:a?a.sig:"",
+             autoKm:a?a.totalKm:0,autoStatus:a?a.status:"none",
+             routeText:a?mileageAutoRouteText(a.routes):"",
+             notes:a?a.notes:[],missingPlaces:a?a.missingPlaces:[],missingLegs:a?a.missingLegs:[],
+             attention:!!(a&&a.attention)};
+    if(m&&mSt==="pending"){
+      row.source="manual";row.status="pending_request";row.km=mileageAutoRound1(m.totalKm);
+      row.routeText=String(m.routeText||row.routeText);
+    }else if(m&&mSt==="approved"){
+      row.source="manual";row.status="manual";row.km=mileageAutoRound1(m.totalKm);
+      row.routeText=String(m.routeText||row.routeText);
+    }else{
+      if(m&&mSt==="rejected")row.manualRejected=true;
+      if(!a||a.status==="none")continue;
+      row.status=(pendingCorrectionDates&&mileageAutoHas(pendingCorrectionDates,d))?"pending_correction":a.status;
+      row.km=(row.status==="auto")?a.totalKm:0;
+    }
+    if(row.status==="auto"||row.status==="manual")totalKm=mileageAutoRound1(totalKm+row.km);
+    else blockers.push({date:d,status:row.status});
+    rows.push(row);
+  }
+  return {rows:rows,totalKm:mileageAutoRound1(totalKm),blockers:blockers};
+}
+
+/**
+ * 確定済みスナップショットと現在の集計を突き合わせ、確定後に生じた差異を返す。
+ * ★ 自動で書き換えない。管理者へ「確定後差異あり」として提示するためだけに使う。
+ *   経路（施設の並び）と距離が同じなら差異としない（時刻だけの打刻修正は支給額に影響しないため）。
+ */
+function mileageAutoDiff(snapDays,curRows){
+  var snap=mileageAutoDict(),cur=mileageAutoDict(),i,k,d;
+  for(i=0;i<(snapDays||[]).length;i++){
+    d=String(snapDays[i].date||"");
+    if(mileageAutoSafeKey(d))snap[d]={km:mileageAutoRound1(snapDays[i].km),sig:String(snapDays[i].sig||""),source:String(snapDays[i].source||"")};
+  }
+  for(i=0;i<(curRows||[]).length;i++){
+    d=String(curRows[i].date||"");
+    if(mileageAutoSafeKey(d))cur[d]={km:mileageAutoRound1(curRows[i].km),sig:String(curRows[i].sig||""),
+                 source:String(curRows[i].source||""),status:String(curRows[i].status||"")};
+  }
+  var seen=mileageAutoDict(),dates=[];
+  for(k in snap)if(!seen[k]){seen[k]=1;dates.push(k);}
+  for(k in cur)if(!seen[k]){seen[k]=1;dates.push(k);}
+  dates.sort();
+  var diffs=[];
+  for(i=0;i<dates.length;i++){
+    d=dates[i];
+    var s=snap[d]||null,c=cur[d]||null;
+    if(s&&c&&s.km===c.km&&s.sig===c.sig)continue;
+    // ★ 確定時は要確認が0件でなければ確定できないので、スナップショットに無い日が
+    //   要確認として現れたなら「確定後に新しく発生した」ということ。必ず報告する。
+    //   除外してよいのは、そもそも集計対象にならない日（移動なし）だけ。
+    if(!s&&c&&c.status==="none")continue;
+    diffs.push({date:d,
+      beforeKm:s?s.km:0,afterKm:c?c.km:0,
+      beforeSig:s?s.sig:"",afterSig:c?c.sig:"",
+      status:c?c.status:"removed"});
+  }
+  return diffs;
+}
+// ==== SHARED-AUTO-END ====
+
+// ---- 自動集計のクライアント側の入口（表示用。確定の正本はサーバの closeMonth）----
+// ★ 打刻（tc5_records）は起動時に全件取得済みなので、表示のたびにサーバへ取りに行かない。
+//   サーバは月次確定・要確認チェックのときだけ打刻を読み、同じ共有ロジックで計算し直す。
+var MILEAGE_AUTO_BADGE={
+  auto:'<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">自動計算済</span>',
+  manual:'<span style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">手入力（承認済）</span>',
+  broken_punch:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">打刻不整合</span>',
+  name_unresolved:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">氏名未解決</span>',
+  no_origin:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">起点未確定</span>',
+  missing_leg:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">距離未登録</span>',
+  pending_correction:'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">打刻修正待ち</span>',
+  pending_request:'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">手入力の承認待ち</span>'
+};
+var MILEAGE_AUTO_HELP={
+  broken_punch:"移動先が記録されていない施設変更打刻があります。区間が欠けたまま確定しないよう、この日は確定しません。管理者が打刻を修正または削除してください。",
+  name_unresolved:"この職員の氏名を打刻と突き合わせできません。「利用職員」タブで設定し直してください。",
+  // ★「打刻を修正してください」と案内してはならない。打刻修正申請の承認で作られる出勤打刻には
+  //   施設（workFacility）が記録されないため（承認処理は時刻しか書かない）、承認しても no_origin は
+  //   解消せず、1人1日の解消不能な要確認で月全体の確定が止まる。実際に効く復旧経路は手入力（例外）だけ。
+  no_origin:"その日の出勤打刻（起点施設）が確認できません。応援打刻から起点を推測せず、距離も金額も確定しません。※打刻修正申請を承認しても解消しません（承認で作られる出勤打刻には施設が記録されないため）。職員に「打刻に無い移動の手入力（例外）」で登録してもらい、このタブの「手入力の承認」で承認してください。",
+  missing_leg:"経路に距離が未登録の区間、または地点マスタに未対応の施設があります。0km では確定しません。",
+  pending_correction:"この日の打刻修正申請が未処理です。承認・却下を済ませてから確定してください。",
+  pending_request:"この日は手入力の申請が未処理です。承認・却下を済ませてから確定してください。"
+};
+function mileageAutoIsBlocking(st){
+  return st==="no_origin"||st==="missing_leg"||st==="pending_correction"
+    ||st==="pending_request"||st==="broken_punch";
+}
+/** 地点マスタから「施設名→地点ID」の対応表と区間距離を束ねる。 */
+function mileageAutoCtx(){
+  return {placeByFacility:mileageAutoPlaceMap(mileage.places||[]),legs:mileage.legs||{}};
+}
+/** 対象スタッフ・対象月の打刻だけを取り出す。 */
+function mileageAutoRecordsOf(staffNm,ym){
+  var out=[];
+  if(!mileageAutoSafeKey(staffNm)||!ym)return out;
+  for(var i=0;i<records.length;i++){
+    var r=records[i];
+    if(!r||r.deleted)continue;
+    if(r.staff!==staffNm)continue;
+    if(String(r.date||"").slice(0,7)!==ym)continue;
+    if(!mileageAutoIsRouteType(String(r.type||"")))continue;
+    out.push(r);
+  }
+  return out;
+}
+/** 未処理の打刻修正申請 → {日付:true} */
+function mileageAutoPendingCorr(staffNm,ym){
+  var out=mileageAutoDict();
+  if(!staffNm||!ym)return out;
+  for(var i=0;i<correctionRequests.length;i++){
+    var c=correctionRequests[i];
+    if(!c||c.staff!==staffNm)continue;
+    if(String(c.status||"")!=="pending")continue;
+    var d=String(c.date||"");
+    if(d.slice(0,7)!==ym||!mileageAutoSafeKey(d))continue;
+    out[d]=true;
+  }
+  return out;
+}
+/** 手入力の申請 → {日付:{status,totalKm,routeText}}（サーバの manualByDateOf と同じ優先順位）。 */
+function mileageAutoManualOf(list){
+  var out=mileageAutoDict(),rank=function(s){return s==="approved"?3:s==="pending"?2:1;};
+  (list||[]).forEach(function(r){
+    if(!r||!mileageAutoSafeKey(r.date))return;
+    var prev=out[r.date];
+    if(prev&&rank(prev.status)>=rank(r.status))return;
+    out[r.date]={status:r.status,totalKm:mileageAutoRound1(r.totalKm),routeText:mileageRouteText(r)};
+  });
+  return out;
+}
+/**
+ * 1人・1か月分の集計（自動＋手入力）。isAutoTarget=false（利用OFF）なら手入力だけ。
+ * recs を渡すと打刻の走査を省略する（管理画面は全職員分を1回の走査で用意する）。
+ */
+function mileageAutoCompute(staffNm,ym,manualList,isAutoTarget,recs,ctx,corrIdx){
+  ctx=ctx||mileageAutoCtx();
+  var auto=(isAutoTarget&&staffNm)
+    ?mileageAutoMonth(recs||mileageAutoRecordsOf(staffNm,ym),ym,ctx)
+    :{days:{},dates:[]};
+  var corr=corrIdx?(corrIdx[staffNm]||{}):mileageAutoPendingCorr(staffNm,ym);
+  return mileageAutoMerge(auto.days,mileageAutoManualOf(manualList),corr);
+}
+/**
+ * 対象月の打刻を「氏名 → レコード」で1回だけ索引化する。
+ * ★ 職員ごとに records を走査すると（人数×全打刻件数）になり、10秒ごとの再描画で効いてくる。
+ */
+function mileageAutoIndexRecords(ym,nameSet){
+  var idx=mileageAutoDict();
+  if(!ym)return idx;
+  for(var i=0;i<records.length;i++){
+    var r=records[i];
+    if(!r||r.deleted)continue;
+    var nm=r.staff;
+    if(!mileageAutoSafeKey(nm)||!Object.prototype.hasOwnProperty.call(nameSet,nm))continue;
+    if(String(r.date||"").slice(0,7)!==ym)continue;
+    if(!mileageAutoIsRouteType(String(r.type||"")))continue;
+    (idx[nm]=idx[nm]||[]).push(r);
+  }
+  return idx;
+}
+/** 対象月の未処理の打刻修正申請を「氏名 → {日付:true}」で索引化する。 */
+function mileageAutoIndexCorrections(ym){
+  var idx=mileageAutoDict();
+  if(!ym)return idx;
+  for(var i=0;i<correctionRequests.length;i++){
+    var c=correctionRequests[i];
+    if(!c||String(c.status||"")!=="pending")continue;
+    var d=String(c.date||"");
+    if(d.slice(0,7)!==ym)continue;
+    var nm=c.staff;
+    // ★ 氏名・日付は誰でも書ける /honomi 由来。"__proto__" を1件混ぜられるだけで
+    //   全職員の集計が壊れる（月次確定の妨害になる）ため、キーを必ず検査する。
+    if(!mileageAutoSafeKey(nm)||!mileageAutoSafeKey(d))continue;
+    (idx[nm]=idx[nm]||mileageAutoDict())[d]=true;
+  }
+  return idx;
+}
+/** 打刻に出てくるのに地点マスタへ対応づけられていない施設名（管理者向けの警告用）。 */
+function mileageAutoMissingFacilities(rows){
+  var seen={},out=[];
+  (rows||[]).forEach(function(r){
+    (r.missingPlaces||[]).forEach(function(f){if(f&&!seen[f]){seen[f]=true;out.push(f);}});
+  });
+  return out;
 }
 
 // ---- 計算（表示用。金額の正本はサーバのスナップショット）----
@@ -8414,9 +8888,11 @@ async function mileageLoadMy(ym){
   if(res.ok&&res.data){
     mileage.myRequests=Array.isArray(res.data.requests)?res.data.requests:[];
     mileage.myClosed=res.data.closed===true;
+    // 確定済みの月は、現在の打刻からの再計算ではなく確定額を表示する
+    mileage.mySnapshot=(res.data.snapshot&&typeof res.data.snapshot==="object")?res.data.snapshot:null;
   }else{
     // ★ 取得失敗を「0件」として見せない（申請したのに消えたように見える）
-    mileage.myRequests=[];mileage.myClosed=false;mileage.myError=true;
+    mileage.myRequests=[];mileage.myClosed=false;mileage.myError=true;mileage.mySnapshot=null;
   }
   if(screen==="punch")render();
 }
@@ -8544,11 +9020,12 @@ function mileageStaffCardHtml(){
     setTimeout(function(){mileageLoadMy(mileage.myMonth);},0);
   }
   var rate=mileage.settings.ratePerKm,mode=mileage.settings.roundMode;
-  var approvedKm=0,totalKm=0;
-  mileage.myRequests.forEach(function(r){
-    totalKm=mileageRound1(totalKm+r.totalKm);
-    if(r.status==="approved")approvedKm=mileageRound1(approvedKm+r.totalKm);
-  });
+  // ★ 主役は応援打刻からの自動集計。手入力は打刻で拾えない例外のときだけ使う。
+  //   打刻レコードのキーは氏名なので、画面に出ている氏名で引く
+  //   （bootstrap は氏名一致を確認したときだけ enabled にしている）。
+  var myNm=staffName||mileage.staffName||"";
+  var autoRes=mileageAutoCompute(myNm,mileage.myMonth,mileage.myRequests,true);
+  var totalKm=autoRes.totalKm;
 
   var monthSel='<select onchange="mileageSetMyMonth(this.value)" style="padding:5px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;background:#fff;">'
     +mileageMonthOptions(mileage.myMonth,mileageRecentMonths())+'</select>';
@@ -8603,11 +9080,47 @@ function mileageStaffCardHtml(){
       +'</div></div>';
   }
 
-  // ── 当月の一覧 ──
+  // ── 当月の自動集計（主画面）──
+  // ★ 通常はここを見るだけでよい。職員が毎日「申請」する操作は不要。
+  // ★ 打刻画面は1カラムで縦に伸びる。既定は「要確認の日＋直近数日」だけにして、
+  //   残りは本人の操作で展開する（要確認の日は必ず出す）。
+  var MY_LIMIT=7;
+  var myShown=autoRes.rows;
+  if(!mileage.myExpand&&autoRes.rows.length>MY_LIMIT){
+    var keep={},kept=0,i2;
+    autoRes.rows.forEach(function(r){if(mileageAutoIsBlocking(r.status)){keep[r.date]=1;kept++;}});
+    for(i2=autoRes.rows.length-1;i2>=0&&kept<MY_LIMIT;i2--){
+      if(!keep[autoRes.rows[i2].date]){keep[autoRes.rows[i2].date]=1;kept++;}
+    }
+    myShown=autoRes.rows.filter(function(r){return keep[r.date];});
+  }
+  var autoHtml=myShown.length
+    ?myShown.map(function(r){
+      var blocking=mileageAutoIsBlocking(r.status);
+      return '<div style="border:1px solid '+(blocking?"#fecaca":"#e2e8f0")+';border-radius:6px;padding:8px 10px;margin-bottom:6px;background:'+(blocking?"#fff7f7":"#fff")+';">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;">'
+        +'<span style="font-size:.82rem;font-weight:700;color:#0f172a;">'+esc(r.date)+'</span>'
+        +(MILEAGE_AUTO_BADGE[r.status]||"")
+        +'</div>'
+        +(r.routeText?'<div style="font-size:.78rem;color:#475569;line-height:1.5;word-break:break-word;">'+esc(r.routeText)+'</div>':"")
+        +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">'
+        +'<span style="font-size:.78rem;font-weight:700;color:'+(blocking?"#b91c1c":"#1e40af")+';">'
+        +(blocking?"—":(Number(r.km)+" km"))+'</span>'
+        +'</div>'
+        +(blocking&&MILEAGE_AUTO_HELP[r.status]
+          ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;line-height:1.5;">'+esc(MILEAGE_AUTO_HELP[r.status])+'</div>':"")
+        +'</div>';
+    }).join("")
+      +(autoRes.rows.length>myShown.length||mileage.myExpand&&autoRes.rows.length>MY_LIMIT
+        ?'<button onclick="mileageToggleMyExpand()" style="width:100%;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;border-radius:2px;padding:7px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:6px;">'
+          +(mileage.myExpand?'折りたたむ':'すべて表示（'+autoRes.rows.length+'日）')+'</button>':"")
+    :'<div style="font-size:.8rem;color:#64748b;padding:8px 2px;">この月の施設間の移動はありません</div>';
+
+  // ── 例外の手入力（打刻で拾えない移動のときだけ使う）──
   var listHtml=mileage.myLoading
     ?'<div style="font-size:.8rem;color:#64748b;padding:8px 2px;">読み込み中…</div>'
     :(mileage.myError
-      ?'<div style="font-size:.8rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:8px 10px;">申請一覧を読み込めませんでした。'
+      ?'<div style="font-size:.8rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:8px 10px;">手入力分を読み込めませんでした。'
         +'<button onclick="mileageLoadMy(mileage.myMonth)" style="margin-left:8px;background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:3px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button></div>'
       :mileage.myRequests.length
       ?mileage.myRequests.map(function(r){
@@ -8627,29 +9140,56 @@ function mileageStaffCardHtml(){
               +'</span>'
             :'')
           +'</div>'
+          +(r.status==="approved"?'<div style="font-size:.72rem;color:#3730a3;margin-top:3px;">上の集計に反映済みです</div>':"")
           +(r.note?'<div style="font-size:.72rem;color:#8496a7;margin-top:3px;">'+esc(r.note)+'</div>':"")
           +(r.status==="rejected"&&r.rejectReason?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;">却下理由：'+esc(r.rejectReason)+'</div>':"")
           +'</div>';
       }).join("")
-      :'<div style="font-size:.8rem;color:#64748b;padding:8px 2px;">この月の申請はまだありません</div>');
+      :'<div style="font-size:.78rem;color:#8496a7;padding:6px 2px;">手入力した移動はありません</div>');
 
+  var blockCount=autoRes.blockers.length;
+  // ★ 手入力分（myRequests）が未取得・取得失敗のときは、集計結果を確定値として見せない。
+  //   未処理の手入力がある日は本来「要確認」で金額に入らないため、未取得のまま数値を出すと
+  //   支給見込額が過大に見える（取得失敗時はそのまま残り続ける）。
+  var manualReady=!mileage.myLoading&&!mileage.myError;
+  // ★ 確定済みの月は確定時の金額を出す。確定後に打刻が直されても支給額は動かないため、
+  //   現在の打刻から計算し直した値を出すと、画面の金額と実際の支給額が食い違う。
+  var snap=(mileage.myClosed&&mileage.mySnapshot)?mileage.mySnapshot:null;
+  var totalTxt=snap?(mileageRound1(snap.totalKm)+' km'):(manualReady?(totalKm+' km'):'—');
+  var amountTxt=snap?(Number(snap.amount).toLocaleString()+' 円')
+    :(manualReady?(mileageAmount(totalKm,rate,mode).toLocaleString()+' 円'):'—');
+  var rateTxt=snap?(Number(snap.ratePerKm)+' 円/km'):(Number(rate)+' 円/km');
   return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #adb5bd;padding:12px 14px;">'
     +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-    +'<div style="font-size:.9rem;font-weight:700;color:#0f172a;">🚗 移動距離申請</div>'
+    +'<div style="font-size:.9rem;font-weight:700;color:#0f172a;">🚗 移動距離</div>'
     +monthSel
     +'</div>'
-    +(mileage.myClosed?'<div style="font-size:.74rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 9px;margin-bottom:8px;">この月は確定済みです。内容の変更はできません。</div>':"")
+    +'<div style="font-size:.72rem;color:#64748b;line-height:1.5;margin-bottom:8px;">応援（施設変更）の打刻から自動で集計しています。申請は不要です。</div>'
+    // ★ 打刻を読めていないときに 0km を「移動なし」として見せない（未取得と 0 を区別する）
+    +(!records.length?'<div style="font-size:.74rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:6px 9px;margin-bottom:8px;">打刻データを読み込めていないため、自動集計を表示できません。通信状態を確認して画面を再読み込みしてください。</div>':"")
+    +(mileage.myClosed?'<div style="font-size:.74rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 9px;margin-bottom:8px;">この月は確定済みです。内容の変更はできません。'
+      +(snap?'<br>下の金額は確定時のものです（日別の内訳は現在の打刻から表示しています）。'
+            :'<br>確定内容を取得できませんでした。下の金額は参考値です。')+'</div>':"")
+    +(!manualReady
+      ?'<div style="font-size:.74rem;color:'+(mileage.myError?"#b91c1c":"#92400e")+';background:'+(mileage.myError?"#fee2e2":"#fef3c7")+';border:1px solid '+(mileage.myError?"#fecaca":"#fde68a")+';border-radius:4px;padding:6px 9px;margin-bottom:8px;">'
+        +(mileage.myError?'手入力した移動を読み込めませんでした。下の集計には手入力分が反映されていません。':'読み込み中です。集計はまだ確定していません。')
+        +'</div>':"")
+    +(blockCount?'<div style="font-size:.74rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:6px 9px;margin-bottom:8px;font-weight:700;">要確認が '+blockCount+' 日あります（下の色付きの日）。管理者へ連絡してください。</div>':"")
+    +autoHtml
+    +'<div style="border-top:1px solid #e2e8f0;margin-top:8px;padding-top:8px;">'
+    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;"><span>月合計距離（確定対象）</span><span style="font-weight:700;">'+totalTxt+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;margin-top:2px;"><span>適用単価</span><span style="font-weight:700;">'+rateTxt+'</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:.86rem;color:#0f172a;margin-top:4px;"><span style="font-weight:700;">支給見込額</span><span style="font-weight:900;color:#1e40af;">'+amountTxt+'</span></div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-top:4px;">'
+    +(snap?'この月は確定済みです。':'金額は管理者の月次確定で確定します。要確認の日は含みません。')+'</div>'
+    +'</div>'
+    +'<div style="border-top:1px solid #e2e8f0;margin-top:10px;padding-top:8px;">'
+    +'<div style="font-size:.78rem;font-weight:700;color:#475569;margin-bottom:6px;">打刻に無い移動の手入力（例外）</div>'
     +formHtml
     +(!mileage.formOpen&&!mileage.myClosed
-      ?'<button onclick="mileageOpenForm(\'\')" style="width:100%;background:#eff6ff;color:#1e40af;border:1px solid #93c5fd;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:10px;">移動距離を申請する</button>'
+      ?'<button onclick="mileageOpenForm(\'\')" style="width:100%;background:#f8fafc;color:#475569;border:1px solid #cbd5e1;border-radius:2px;padding:9px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:8px;">＋ 手入力で追加する</button>'
       :"")
     +listHtml
-    +'<div style="border-top:1px solid #e2e8f0;margin-top:8px;padding-top:8px;">'
-    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;"><span>月合計距離（申請中を含む）</span><span style="font-weight:700;">'+totalKm+' km</span></div>'
-    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;margin-top:2px;"><span>うち承認済み</span><span style="font-weight:700;color:#166534;">'+approvedKm+' km</span></div>'
-    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;margin-top:2px;"><span>適用単価</span><span style="font-weight:700;">'+Number(rate)+' 円/km</span></div>'
-    +'<div style="display:flex;justify-content:space-between;font-size:.86rem;color:#0f172a;margin-top:4px;"><span style="font-weight:700;">支給予定額（承認済み分）</span><span style="font-weight:900;color:#1e40af;">'+mileageAmount(approvedKm,rate,mode).toLocaleString()+' 円</span></div>'
-    +'<div style="font-size:.72rem;color:#64748b;margin-top:4px;">金額は管理者の月次確定で確定します。</div>'
     +'</div></div>';
 }
 
@@ -8687,18 +9227,24 @@ async function mileageLoadAdmin(ym){
 }
 function mileageAdminSetYm(v){
   if(!/^\d{4}-\d{2}$/.test(v))return;
-  mileage.adminData=null;mileageLoadAdmin(v);
+  mileage.adminData=null;mileage.checkData=null;mileage.checkYm="";mileageLoadAdmin(v);
 }
 
 /** 管理者操作の共通処理。実行 → 結果表示 → 当月データ再取得。 */
-async function mileageAdminDo(action,params,okMsg,reloadMaster){
+async function mileageAdminDo(action,params,okMsg,reloadMaster,timeoutMs){
   if(mileage.busy)return false;
   var g=mileage.gen;
   mileage.busy=true;render();
-  var res=await mileageApi(action,params);
+  var res=await mileageApi(action,params,timeoutMs);
   if(mileageStale(g))return false;
   mileage.busy=false;
-  if(!res.ok){showAlert(mileageErrText(res));render();return false;}
+  if(!res.ok){
+    showAlert(mileageErrText(res));
+    // ★ 中断（タイムアウト）はサーバ側で完了している可能性がある。画面の状態を鵜呑みにせず取り直す。
+    if(res.status===0&&mileage.adminYm)await mileageLoadAdmin(mileage.adminYm);
+    else render();
+    return false;
+  }
   if(reloadMaster)await mileageBoot();
   if(mileage.adminYm)await mileageLoadAdmin(mileage.adminYm);
   else render();
@@ -8768,10 +9314,12 @@ function mileageSavePlaceFromForm(){
   var nameEl=document.getElementById("mlg-place-name");
   var idEl=document.getElementById("mlg-place-id");
   var ordEl=document.getElementById("mlg-place-order");
+  var facEl=document.getElementById("mlg-place-facility");
   var name=(nameEl&&nameEl.value||"").trim();
   if(!name){showAlert("地点名を入力してください");return;}
   mileageAdminDo("savePlace",{
     placeId:(idEl&&idEl.value)||"",name:name,
+    facility:(facEl&&facEl.value)||"",
     order:ordEl&&ordEl.value!==""?parseInt(ordEl.value,10):undefined,active:true
   },"地点を保存しました",true);
 }
@@ -8781,6 +9329,7 @@ function mileageEditPlace(id){
   var idEl=document.getElementById("mlg-place-id");if(idEl)idEl.value=p.id;
   var nameEl=document.getElementById("mlg-place-name");if(nameEl)nameEl.value=p.name;
   var ordEl=document.getElementById("mlg-place-order");if(ordEl)ordEl.value=String(p.order||"");
+  var facEl=document.getElementById("mlg-place-facility");if(facEl)facEl.value=String(p.facility||"");
   if(nameEl&&nameEl.scrollIntoView)nameEl.scrollIntoView({block:"center"});
 }
 function mileageDeletePlace(id){
@@ -8818,16 +9367,41 @@ function mileageSaveSettings(){
   if(!(rate>0)){showAlert("km単価は0より大きい数値を入力してください");return;}
   mileageAdminDo("setSettings",{ratePerKm:rate,roundMode:(m&&m.value)||"round"},"設定を保存しました",true);
 }
-function mileageCloseMonth(){
+/**
+ * 月次確定。
+ * ★ 自動集計には日ごとの承認工程が無い。そこで「サーバで再集計 → その内容を管理者が確認 →
+ *   確認した内容の指紋を添えて確定」という手順にして、人が見た数字だけが確定するようにする。
+ *   確認から確定までの間に打刻が変わっていればサーバが 409 stale_confirmation を返す。
+ */
+async function mileageCloseMonth(){
   var d=mileage.adminData;if(!d)return;
-  var pend=(d.byStaff||[]).reduce(function(a,s){return a+s.pendingCount;},0);
-  var msg=mileage.adminYm+" の移動距離を確定しますか？\n\n"
-    +"・承認済みの申請だけが給与計算用データになります\n"
+  if(mileage.busy)return;
+  var ym=mileage.adminYm;
+  mileage.busy=true;render();
+  var res=await mileageApi("autoCheck",{ym:ym},30000);
+  mileage.busy=false;
+  if(!res.ok||!res.data){showAlert("確定前の確認に失敗しました。\n\n"+mileageErrText(res));render();return;}
+  var chk=res.data;
+  mileage.checkData=chk;mileage.checkYm=ym;
+  if(chk.punchUnavailable){showAlert("打刻データを取得できなかったため確定できません。時間をおいてやり直してください。");render();return;}
+  if(chk.unresolved){
+    showAlert("要確認が "+chk.unresolved+" 件あるため確定できません。\n\n「自動集計」タブで内容を確認し、区間距離の登録・手入力の承認を済ませてください。\n\n※「起点未確定」は打刻修正の承認では解消しません。手入力（例外）で登録して承認してください。");
+    render();return;
+  }
+  var lines=(chk.staff||[]).filter(function(x){return x.totalKm>0;})
+    .map(function(x){return "・"+(x.staffName||x.employeeId)+"　"+mileageRound1(x.totalKm)+" km";});
+  var att=(chk.staff||[]).reduce(function(a,x){return a+(Number(x.attentionDays)||0);},0);
+  var msg=ym+" の移動距離を、次の内容で確定しますか？\n\n"
+    +(lines.length?lines.slice(0,20).join("\n")+(lines.length>20?"\n…ほか "+(lines.length-20)+" 名":"")
+                  :"（対象者なし）")
+    +"\n合計 "+mileageRound1(chk.totalKm)+" km\n\n"
+    +(att?"⚠ 打刻の後編集・複数出勤・退勤漏れがある日が "+att+" 件あります。内容を確認してください。\n\n":"")
+    +"・この内容は、いまサーバが打刻から集計し直したものです\n"
     +"・確定後は職員も管理者も内容を変更できません\n"
-    +"・確定時点の単価と金額が保存され、あとで単価を変えても金額は変わりません"
-    +(pend?"\n\n⚠ 未承認の申請が "+pend+" 件あります。この分は含まれません。":"");
+    +"・確定時点の単価と金額が保存され、あとで単価を変えても金額は変わりません";
+  render();
   showConfirm(msg,function(){
-    mileageAdminDo("closeMonth",{ym:mileage.adminYm},mileage.adminYm+" を確定しました");
+    mileageAdminDo("closeMonth",{ym:ym,confirmToken:chk.confirmToken},ym+" を確定しました",false,30000);
   });
 }
 function mileageReopenMonth(){
@@ -8837,6 +9411,60 @@ function mileageReopenMonth(){
 }
 
 /** 管理者タブ「移動距離」の中身。 */
+/**
+ * 管理画面用：対象月の全職員分を手元で集計する。
+ * ★ 表示のためだけの計算。確定（closeMonth）はサーバが打刻を読み直して同じ共有ロジックで
+ *   計算するため、画面の数値をそのまま確定させることはない。
+ */
+function mileageAutoAdminRows(){
+  var d=mileage.adminData;
+  var names=(d&&d.names)||{};
+  var enMap=(d&&d.enabledMap)||mileage.enabledMap||{};
+  var reqByEid={};
+  ((d&&d.byStaff)||[]).forEach(function(st){reqByEid[st.employeeId]=st.requests||[];});
+  var seen={},eids=[];
+  Object.keys(enMap).forEach(function(e){if(!seen[e]){seen[e]=1;eids.push(e);}});
+  Object.keys(reqByEid).forEach(function(e){if(!seen[e]){seen[e]=1;eids.push(e);}});
+  eids.sort(function(a,b){return String(a).localeCompare(String(b),"ja");});
+  // ★ 打刻の走査は全職員分をまとめて1回だけ行う（人数×全打刻件数の走査を避ける）
+  var nameSet={};
+  eids.forEach(function(e){if(enMap[e]===true&&names[e])nameSet[names[e]]=true;});
+  var recIdx=mileageAutoIndexRecords(mileage.adminYm,nameSet);
+  var corrIdx=mileageAutoIndexCorrections(mileage.adminYm);
+  var ctx=mileageAutoCtx();
+  var out=[],miss={},unresolved=0;
+  eids.forEach(function(eid){
+    var nm=names[eid]||"";
+    var isAuto=enMap[eid]===true;
+    var res=mileageAutoCompute(nm,mileage.adminYm,reqByEid[eid]||[],isAuto,recIdx[nm]||[],ctx,corrIdx);
+    mileageAutoMissingFacilities(res.rows).forEach(function(f){miss[f]=true;});
+    // ★ サーバの computeAutoMonth と判定を揃える。利用ONなのに氏名が無い職員は
+    //   打刻と突き合わせできず 0km になるため、要確認として数える（黙って支給漏れにしない）。
+    if(isAuto&&!nm)res.blockers.push({date:"",status:"name_unresolved"});
+    unresolved+=res.blockers.length;
+    out.push({employeeId:eid,staffName:nm,autoTarget:isAuto,nameResolved:!!nm,
+              rows:res.rows,totalKm:res.totalKm,blockers:res.blockers});
+  });
+  return {staff:out,unresolved:unresolved,missingFacilities:Object.keys(miss)};
+}
+function mileageAutoToggle(eid){
+  mileage.autoOpen[eid]=!mileage.autoOpen[eid];render();
+}
+function mileageAutoSetOnlyIssues(v){mileage.autoOnlyIssues=!!v;render();}
+function mileageToggleMyExpand(){mileage.myExpand=!mileage.myExpand;render();}
+/** サーバ側で集計し直して、要確認／確定後差異を確認する（読み取りのみ）。 */
+async function mileageAutoCheckRun(){
+  var ym=mileage.adminYm;
+  mileage.checkLoading=true;mileage.checkYm=ym;mileage.checkData=null;render();
+  var g=mileage.gen;
+  var res=await mileageApi("autoCheck",{ym:ym},20000);
+  if(mileageStale(g))return;
+  mileage.checkLoading=false;
+  if(res.ok&&res.data)mileage.checkData=res.data;
+  else{mileage.checkData=null;showAlert("サーバ側の確認に失敗しました。\n\n"+mileageErrText(res));}
+  render();
+}
+
 function mileageAdminCardHtml(){
   mileageBootForAdmin();
   // ★ 対象月の取得は boot（管理者役割トークンの確立）完了後に予約する。
@@ -8871,7 +9499,7 @@ function mileageAdminCardHtml(){
     return '<button onclick="mileageAdminSetTab(\''+k+'\')" style="background:none;border:none;border-bottom:3px solid '+(T===k?"#1e40af":"transparent")+';color:'+(T===k?"#1e40af":"#64748b")+';padding:8px 12px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">'+label+'</button>';
   }
   var tabs='<div style="display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid #cbd5e1;margin-bottom:10px;">'
-    +tb("requests","申請の承認")+tb("places","地点・区間距離")+tb("settings","単価・端数")
+    +tb("auto","自動集計")+tb("requests","手入力の承認")+tb("places","地点・区間距離")+tb("settings","単価・端数")
     +tb("close","月次確定")+tb("staff","利用職員")+'</div>';
 
   var d=mileage.adminData;
@@ -8879,6 +9507,112 @@ function mileageAdminCardHtml(){
     +mileageMonthOptions(mileage.adminYm,mileageRecentMonths())+'</select>';
   var closed=!!(d&&d.closing);
   var body="";
+  function wrapAdmin(b){
+    return '<div class="admin-card" style="padding-bottom:6px;">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+      +'<div class="admin-title" style="margin:0;">🚗 移動距離申請</div>'
+      +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+ymSel+'</div>'
+      +'</div>'+tabs+'</div>'+b;
+  }
+
+  // ── 自動集計（応援打刻から生成。管理者は「要確認」の日だけ見ればよい）──
+  if(T==="auto"){
+    // ★ 対象月のデータ（利用職員・氏名・手入力申請）が未取得の状態で判定を描画しない。
+    //   未取得だと集計が空になり「要確認はありません」（緑）や「氏名が登録されていません」を
+    //   事実と違う形で出してしまう（取得できていないことと、問題が無いことは別）。
+    if(!d){
+      body='<div class="admin-card"><div class="admin-title">自動集計（'+esc(mileageYmLabel(mileage.adminYm))+'）</div>'
+        +'<div style="font-size:.85rem;color:#64748b;">読み込み中…</div></div>';
+      return wrapAdmin(body);
+    }
+    var agg=mileageAutoAdminRows();
+    var onlyIssues=mileage.autoOnlyIssues;
+    var cards=agg.staff.filter(function(s){
+      if(onlyIssues)return s.blockers.length>0||s.rows.some(function(r){return r.attention;});
+      return s.rows.length>0||s.autoTarget;
+    }).map(function(s){
+      var open=!!mileage.autoOpen[s.employeeId];
+      // ★ 確定は止めないが不審な日（打刻の後編集・複数出勤・退勤漏れ）も絞り込みに含める。
+      //   展開しないと気づけない位置にあると、確認したことにならない。
+      var shown=s.rows.filter(function(r){return onlyIssues?(mileageAutoIsBlocking(r.status)||r.attention):true;});
+      var dayHtml=open
+        ?(shown.length?shown.map(function(r){
+            var bl=mileageAutoIsBlocking(r.status);
+            return '<div style="border-top:1px solid #e2e8f0;padding:6px 0;">'
+              +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">'
+              +'<span style="font-size:.8rem;font-weight:700;">'+esc(r.date)+'</span>'
+              +(MILEAGE_AUTO_BADGE[r.status]||"")
+              +'<span style="font-size:.8rem;font-weight:700;color:'+(bl?"#b91c1c":"#1e40af")+';margin-left:auto;">'+(bl?"—":(Number(r.km)+" km"))+'</span>'
+              +'</div>'
+              +(r.routeText?'<div style="font-size:.75rem;color:#475569;margin-top:2px;word-break:break-word;">'+esc(r.routeText)+'</div>':"")
+              +((r.missingLegs||[]).length
+                ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">距離未登録の区間：'
+                  +esc(r.missingLegs.map(function(l){return l.fromName+"→"+l.toName;}).join("、"))+'</div>':"")
+              +((r.missingPlaces||[]).length
+                ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">地点マスタに未対応の施設：'+esc(r.missingPlaces.join("、"))+'</div>':"")
+              +(bl&&MILEAGE_AUTO_HELP[r.status]?'<div style="font-size:.72rem;color:#92400e;margin-top:2px;">'+esc(MILEAGE_AUTO_HELP[r.status])+'</div>':"")
+              +((r.notes||[]).indexOf("multi_shift")>=0?'<div style="font-size:.72rem;color:#64748b;margin-top:2px;">同じ日に出勤が2回以上あります（勤務ごとに起点へ戻して計算）</div>':"")
+              +((r.notes||[]).indexOf("route_mismatch")>=0?'<div style="font-size:.72rem;color:#64748b;margin-top:2px;">施設変更の「変更前施設」が直前の施設と一致しません（打刻の後編集の可能性）</div>':"")
+              +((r.notes||[]).indexOf("no_clockout")>=0?'<div style="font-size:.72rem;color:#64748b;margin-top:2px;">退勤打刻がありません（帰りの移動は業務ルールどおり起点へ戻して計算）</div>':"")
+              +'</div>';
+          }).join("")
+          :'<div style="font-size:.76rem;color:#8496a7;padding:6px 0;">表示する日がありません</div>')
+        :"";
+      return '<div style="border:1px solid '+(s.blockers.length?"#fecaca":"#e2e8f0")+';border-radius:6px;padding:8px 10px;margin-bottom:6px;background:'+(s.blockers.length?"#fff7f7":"#fff")+';">'
+        +'<div onclick="mileageAutoToggle(\''+escJs(s.employeeId)+'\')" style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer;">'
+        +'<span style="font-size:.86rem;font-weight:700;color:#0f172a;">'+esc(s.staffName||"（氏名未解決）")+'<span style="font-size:.72rem;font-weight:400;color:#8496a7;margin-left:6px;">'+esc(s.employeeId)+'</span></span>'
+        +(s.blockers.length?'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">要確認 '+s.blockers.length+'日</span>':"")
+        +(!s.autoTarget?'<span style="background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">自動集計OFF</span>':"")
+        +'<span style="font-size:.82rem;font-weight:700;color:#1e40af;margin-left:auto;">'+s.totalKm+' km</span>'
+        +'<span style="font-size:.75rem;color:#64748b;">'+(open?"▲":"▼")+'</span>'
+        +'</div>'
+        +(!s.nameResolved&&s.autoTarget
+          ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;">氏名が登録されていないため打刻と突き合わせできません。「利用職員」タブで登録し直してください。</div>':"")
+        +dayHtml+'</div>';
+    }).join("");
+
+    var chk=mileage.checkData;
+    var chkFresh=chk&&chk.ym===mileage.adminYm;
+    body='<div class="admin-card">'
+      +'<div class="admin-title">自動集計（'+esc(mileageYmLabel(mileage.adminYm))+'）</div>'
+      +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;line-height:1.6;">'
+      +'応援（施設変更）の打刻から、その日の起点施設 → 応援先（時系列） → 起点施設 の順で経路を作り、区間距離を合計しています。'
+      +'職員の申請操作は不要です。<b>要確認</b>の日は距離も金額も確定しません。</div>'
+      +'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">'
+      +'<label style="font-size:.8rem;color:#475569;display:flex;align-items:center;gap:5px;cursor:pointer;">'
+      +'<input type="checkbox" '+(onlyIssues?"checked ":"")+'onchange="mileageAutoSetOnlyIssues(this.checked)">要確認の日だけ表示</label>'
+      +'<button onclick="mileageAutoCheckRun()" style="background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:2px;padding:7px 14px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">'
+      +(mileage.checkLoading?"確認中…":"サーバで再集計して確認")+'</button>'
+      +'</div>'
+      +(!records.length
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">打刻データを読み込めていません。この画面の集計は正しくありません（画面を再読み込みしてください）。</div>':"")
+      +(agg.unresolved
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">要確認が '+agg.unresolved+' 件あります。解消するまでこの月は確定できません。</div>'
+        :'<div style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">要確認はありません。</div>')
+      +(agg.missingFacilities.length
+        ?'<div style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:8px 12px;font-size:.8rem;margin-bottom:8px;">'
+          +'地点マスタに対応づけられていない施設があります：<b>'+esc(agg.missingFacilities.join("、"))+'</b><br>'
+          +'「地点・区間距離」タブで、その施設に対応する地点の<b>打刻の施設</b>を設定してください。</div>':"")
+      +(chkFresh&&chk.punchUnavailable
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">サーバが打刻データを1件も読み取れませんでした。「移動が無い月」と区別できないため、この月は確定できません。</div>':"")
+      +(chkFresh&&chk.closed&&(chk.drift||[]).length
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.8rem;margin-bottom:8px;">'
+          +'<b>確定後差異あり</b>（確定したあとに打刻が変わっています。金額は自動では変わりません）<br>'
+          +chk.drift.map(function(x){
+            return esc(x.staffName||x.employeeId)+'：'+(x.unknown?'日別内訳の無い旧方式の確定のため判定できません'
+              :(mileageRound1(x.beforeKm)+' km → '+mileageRound1(x.afterKm)+' km（'+esc((x.days||[]).map(function(y){return y.date;}).join("、"))+'）'));
+          }).join("<br>")
+          +'</div>':"")
+      // ★ 再集計の結果は「差異あり」のときだけでなく、実行したら必ず出す。
+      //   何も出ないと「押しても効かない」のか「確認できて差異が無い」のか区別できず、
+      //   確定後差異の唯一の検知手段を、確認したつもりで見落とす経路になる。
+      //   件数が残っているのに緑で出すと直上の赤バナーと矛盾するため、色も件数で切り替える。
+      +(chkFresh&&!(chk.closed&&(chk.drift||[]).length)
+        ?'<div style="font-size:.76rem;color:'+(Number(chk.unresolved)>0?"#b91c1c":"#166534")+';margin-bottom:8px;">'
+          +'サーバ側の再集計：'+(chk.closed?'確定後の差異はありません。':'要確認 '+Number(chk.unresolved)+' 件')+'</div>':"")
+      +(cards||'<div class="empty">対象の職員がいません</div>')
+      +'</div>';
+  }
 
   // ── 申請の承認 ──
   if(T==="requests"){
@@ -8920,7 +9654,10 @@ function mileageAdminCardHtml(){
     var placeRows=mileage.places.length?mileage.places.map(function(p){
       return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e2e8f0;">'
         +'<span style="font-size:.72rem;color:#94a3b8;width:32px;flex:0 0 auto;">'+(p.order||"")+'</span>'
-        +'<span style="flex:1;font-size:.88rem;font-weight:700;min-width:0;word-break:break-word;">'+esc(p.name)+'</span>'
+        +'<span style="flex:1;font-size:.88rem;font-weight:700;min-width:0;word-break:break-word;">'+esc(p.name)
+        +(p.facility?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.facility)+'</span>'
+          :(masterLocs.indexOf(p.name)>=0?'<span style="display:block;font-size:.7rem;font-weight:400;color:#64748b;">打刻の施設：'+esc(p.name)+'（地点名が一致）</span>':''))
+        +'</span>'
         +'<button onclick="mileageEditPlace(\''+escJs(p.id)+'\')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">編集</button>'
         +'<button onclick="mileageDeletePlace(\''+escJs(p.id)+'\')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
         +'</div>';
@@ -8959,9 +9696,19 @@ function mileageAdminCardHtml(){
       +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
       +'<input id="mlg-place-name" type="text" maxlength="40" placeholder="地点名（例：本社）" style="flex:1;min-width:160px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;">'
       +'<input id="mlg-place-order" type="number" placeholder="並び順" style="width:90px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;">'
+      +'<select id="mlg-place-facility" style="flex:1 1 160px;min-width:0;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'
+      +'<option value="">打刻の施設と対応づけない</option>'
+      +masterLocs.map(function(nm){return '<option value="'+esc(nm)+'">'+esc(nm)+'</option>';}).join("")
+      // ★ 施設マスタから消えた・改名された施設名も選択肢に残す。
+      //   選択肢に無いと編集時に値が黙って空になり、保存した瞬間に対応づけが消える。
+      +mileage.places.map(function(p){return String(p.facility||"");})
+        .filter(function(nm,i,arr){return nm&&masterLocs.indexOf(nm)<0&&arr.indexOf(nm)===i;})
+        .map(function(nm){return '<option value="'+esc(nm)+'">'+esc(nm)+'（施設マスタに無い）</option>';}).join("")
+      +'</select>'
       +'<button onclick="mileageSavePlaceFromForm()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
       +'</div>'
-      +'<div style="font-size:.74rem;color:#64748b;margin-top:5px;">「編集」を押すとこの欄に読み込まれます。新規登録するときは地点名だけ入れて保存してください。</div>'
+      +'<div style="font-size:.74rem;color:#64748b;margin-top:5px;">「編集」を押すとこの欄に読み込まれます。新規登録するときは地点名だけ入れて保存してください。<br>'
+      +'<b>打刻の施設</b>を選ぶと、応援（施設変更）打刻からの自動集計でこの地点として扱われます。地点名と施設名が完全に同じ場合は、選ばなくても自動で対応します。</div>'
       +'</div></div>'
       +'<div class="admin-card">'
       +'<div class="admin-title">区間距離（方向別）</div>'
@@ -9011,18 +9758,24 @@ function mileageAdminCardHtml(){
 
   // ── 月次確定 ──
   if(T==="close"){
+    // ★ 未取得のまま「要確認 0 件」と判断して確定ボタンを活性にしない（押しても無反応になる）
+    if(!d){
+      body='<div class="admin-card"><div class="admin-title">月次確定（'+esc(mileageYmLabel(mileage.adminYm))+'）</div>'
+        +'<div style="font-size:.85rem;color:#64748b;">読み込み中…</div></div>';
+      return wrapAdmin(body);
+    }
     var snap=(d&&d.snapshots)||{};
-    var stList=(d&&d.byStaff||[]);
-    var pendTotal=stList.reduce(function(a,s){return a+s.pendingCount;},0);
+    var agg2=mileageAutoAdminRows();
+    var pendTotal=agg2.unresolved;
     var rate2=(d&&d.closing&&d.closing.ratePerKm)||mileage.settings.ratePerKm;
     var mode2=(d&&d.closing&&d.closing.roundMode)||mileage.settings.roundMode;
     // km単価が一度も保存されていない状態では確定させない（サーバも 409 で拒否する）
     var rateReady=((d&&d.settings&&d.settings.configured===true)||mileage.settings.configured===true);
     var lines=(closed?Object.keys(snap).map(function(eid){return snap[eid];})
-                     :stList.filter(function(s){return s.approvedKm>0;}).map(function(s){
-                        return {employeeId:s.employeeId,staffName:s.staffName,totalKm:s.approvedKm,
+                     :agg2.staff.filter(function(s){return s.totalKm>0;}).map(function(s){
+                        return {employeeId:s.employeeId,staffName:s.staffName,totalKm:s.totalKm,
                                 ratePerKm:rate2,roundMode:mode2,
-                                amount:mileageAmount(s.approvedKm,rate2,mode2)};
+                                amount:mileageAmount(s.totalKm,rate2,mode2)};
                       }))
       .sort(function(a,b){return String(a.employeeId).localeCompare(String(b.employeeId),"ja");});
     var sumKm=0,sumYen=0;
@@ -9041,21 +9794,23 @@ function mileageAdminCardHtml(){
         +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumKm+' km</td><td style="border:1px solid #cbd5e1;padding:8px;"></td>'
         +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumYen.toLocaleString()+'</td></tr>'
         +'</table></div>'
-      :'<div class="empty">対象となる承認済みの申請がありません</div>';
+      :'<div class="empty">この月に確定できる移動がありません</div>';
     body='<div class="admin-card">'
       +'<div class="admin-title">月次確定（'+esc(mileageYmLabel(mileage.adminYm))+'）</div>'
       +(closed
         ?'<div style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:10px;">✓ 確定済み（労務士がこの月をダウンロードできます）<br>'
           +'<span style="font-weight:400;font-size:.76rem;">確定単価 '+esc(rate2)+' 円/km・端数処理 '+esc(MILEAGE_ROUND_LABEL[mode2]||mode2)+'</span></div>'
         :'<div style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:8px 12px;font-size:.82rem;margin-bottom:10px;">未確定です。確定するまで労務士はこの月をダウンロードできません。'
-          +(pendTotal?'<br><b>未承認の申請が '+pendTotal+' 件あります（確定しても含まれません）</b>':'')+'</div>')
+          +(pendTotal?'<br><b>要確認が '+pendTotal+' 件あります。解消するまで確定できません（「自動集計」タブで確認してください）。</b>':'')+'</div>')
       +tbl
       +'<div style="margin-top:12px;">'
       +(closed
         ?'<button onclick="mileageReopenMonth()" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">確定を解除する</button>'
-        :(rateReady
-          ?'<button onclick="mileageCloseMonth()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px 24px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">この月を確定する</button>'
-          :'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;">km単価が未設定のため確定できません。「単価・端数」タブで単価を保存してください。</div>'))
+        :(!rateReady
+          ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;">km単価が未設定のため確定できません。「単価・端数」タブで単価を保存してください。</div>'
+          :(pendTotal
+            ?'<button disabled style="background:#e2e8f0;color:#64748b;border:none;border-radius:2px;padding:10px 24px;font-size:.88rem;font-weight:700;cursor:not-allowed;font-family:inherit;">要確認が残っているため確定できません</button>'
+            :'<button onclick="mileageCloseMonth()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px 24px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">この月を確定する</button>')))
       +'</div></div>';
   }
 
@@ -9085,11 +9840,7 @@ function mileageAdminCardHtml(){
       +'</div>';
   }
 
-  return '<div class="admin-card" style="padding-bottom:6px;">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-    +'<div class="admin-title" style="margin:0;">🚗 移動距離申請</div>'
-    +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+ymSel+'</div>'
-    +'</div>'+tabs+'</div>'+body;
+  return wrapAdmin(body);
 }
 
 // ---- 労務士（閲覧用URL）側 ----
