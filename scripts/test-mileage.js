@@ -953,6 +953,124 @@ ok("旧施設名を保存時に送る", /aliases:aliases/.test(html));
 ok("単価未設定のときは標準値を提案するだけで自動保存しない",
   /function mileageFillStandardSettings\(/.test(html) && /内容を確認して「保存」を押してください/.test(html));
 
-console.log("\n================ 結果 ================");
-console.log("PASS: " + pass + " / FAIL: " + fail);
-if (fail > 0) process.exit(1);
+console.log("\n[23] 労務士・閲覧用（未確定月を「取得失敗」にしない）");
+// 関数を1本だけ切り出して評価する（ネットワーク・環境変数に触らない）。
+function extractFn(src, sig) {
+  const s = src.indexOf(sig);
+  if (s < 0) return "";
+  let depth = 0, started = false;
+  for (let j = src.indexOf("{", s); j < src.length; j++) {
+    const c = src[j];
+    if (c === "{") { depth++; started = true; }
+    else if (c === "}") { depth--; if (started && depth === 0) return src.slice(s, j + 1); }
+  }
+  return "";
+}
+const reportSrc = extractFn(apiSrc, "async function handleMonthlyReport(body) {");
+let reportTests = Promise.resolve();
+if (!reportSrc) {
+  fail++;
+  console.log("  FAIL  api/mileage.js から handleMonthlyReport を抽出できませんでした");
+} else {
+  const runReport = function (store, body) {
+    const calls = [];
+    const ctx = {
+      M: M, ROOT: "mileage", console: console,
+      G: { dbGet: async function (p) { calls.push(p); return Object.prototype.hasOwnProperty.call(store, p) ? store[p] : null; } },
+      H: { str: function (v, n) { return typeof v === "string" ? v.slice(0, n) : ""; } },
+      reqPath: function (ym) { return "mileage/requests/" + ym; },
+      listRequests: function () { return []; },
+    };
+    vm.createContext(ctx);
+    vm.runInContext(reportSrc, ctx);
+    return ctx.handleMonthlyReport(body).then(function (r) { return { r: r, calls: calls }; });
+  };
+  const closedStore = {
+    "mileage/closings": {
+      "2026-07": { closedAt: "2026-08-01T02:00:00.000Z", closedBy: "admin:0123456789abcdef", ratePerKm: 16, roundMode: "none", staffCount: 1, source: "auto" },
+    },
+    "mileage/monthly": {
+      "100022": {
+        "2026-07": {
+          employeeId: "100022", staffName: "テスト職員", totalKm: 6.4, ratePerKm: 16,
+          roundMode: "none", amount: 102.4, dayCount: 1,
+          days: [{ date: "2026-07-10", km: 6.4, source: "auto", sig: "ナナイロ>ハルイロ>ナナイロ", route: "ナナイロ → ハルイロ → ナナイロ" }],
+        },
+      },
+    },
+  };
+  // 未確定月（本番の 2026-08 と同じ状態）
+  reportTests = runReport(closedStore, { ym: "2026-08", withDetail: true }).then(function (o) {
+    eq("未確定月でも HTTP 200", o.r.status, 200);
+    eq("未確定月でも ok:true（エラーにしない）", o.r.ok, true);
+    eq("未確定月は closed:false", o.r.closed, false);
+    ok("未確定月は error を返さない", o.r.error === undefined, JSON.stringify(o.r.error));
+    ok("未確定月の rows は空（未確定の数値を出さない）", Array.isArray(o.r.rows) && o.r.rows.length === 0);
+    ok("未確定月でも確定済み月の一覧は返す", Array.isArray(o.r.closedMonths) && o.r.closedMonths.indexOf("2026-07") >= 0);
+    ok("未確定月は日別明細を返さない（ダウンロード対象にしない）", o.r.detail === undefined);
+  // 対象月なし（一覧取得だけ）
+  }).then(function () { return runReport(closedStore, { ym: "" }); }).then(function (o) {
+    eq("対象月なしでも 200 / ok", String(o.r.status) + ":" + String(o.r.ok), "200:true");
+    ok("対象月なしでは /mileage/monthly を読まない（無駄な取得をしない）", o.calls.indexOf("mileage/monthly") < 0, o.calls.join(","));
+  // 確定済み月
+  }).then(function () { return runReport(closedStore, { ym: "2026-07", withDetail: true }); }).then(function (o) {
+    eq("確定済み月は closed:true", o.r.closed, true);
+    eq("確定済み月の行数", o.r.rows.length, 1);
+    eq("確定済みスナップショットの金額をそのまま返す", o.r.rows[0].amount, 102.4);
+    eq("日別明細は確定済みスナップショットから作る", o.r.detail.length, 1);
+    eq("日別明細の経路", o.r.detail[0].route, "ナナイロ → ハルイロ → ナナイロ");
+    ok("closing に closedBy（監査用 actor）を含めない", o.r.closing.closedBy === undefined);
+  // 形式不正
+  }).then(function () { return runReport(closedStore, { ym: "2026-13" }); }).then(function (o) {
+    eq("年月の形式が不正なら 400 bad_ym", String(o.r.status) + ":" + String(o.r.error), "400:bad_ym");
+  }).catch(function (e) {
+    fail++;
+    console.log("  FAIL  handleMonthlyReport の評価に失敗しました → " + (e && e.message));
+  });
+}
+// 権限（緩めていないこと）
+ok("monthlyReport は管理者(a)と労務士(v)だけ", ACTIONS.monthlyReport.slice().sort().join(",") === "a,v",
+  JSON.stringify(ACTIONS.monthlyReport));
+ok("monthlyReport に職員(s)を含めない", ACTIONS.monthlyReport.indexOf("s") < 0);
+["d", "x", ""].forEach(function (r) {
+  ok("デモ/サンドボックス/匿名 role \"" + r + "\" はどの action にも含まれない",
+    Object.keys(ACTIONS).every(function (a) { return ACTIONS[a].indexOf(r) < 0; }));
+});
+ok("未認証・役割不一致はハンドラ入口で 403（フェイルクローズ）",
+  /if \(!ident \|\| allowed\.indexOf\(ident\.role\) < 0\)/.test(apiSrc) && /H\.fail\(res, 403, "forbidden"\)/.test(apiSrc));
+ok("労務士セッションは action ごとに有効性を引き直す",
+  /ident\.role === "v" && !\(await M\.isValidViewer\(ident\)\)/.test(apiSrc));
+
+// クライアント: 役割トークン（r:"v"）の確立を待ってから /api/mileage を呼ぶ
+ok("elevateShareSession が昇格 Promise を公開する", /_shareElevatePromise=\(async function\(\)\{/.test(html));
+const bootViewerSrc = extractFn(html, "function mileageBootForViewer(){");
+ok("mileageBootForViewer が共有URLの役割確立を待つ（匿名トークンで叩かない）",
+  /_shareElevatePromise/.test(bootViewerSrc), bootViewerSrc.slice(0, 200));
+ok("再試行では役割トークンから取り直す",
+  /function mileageViewerRetry\(\)/.test(html) && /_authRole!=="v"&&viewerParam/.test(html));
+
+// クライアント: 「未確定」と「取得失敗」を混同しない
+const viewCardSrc = extractFn(html, "function mileageViewerCardHtml(){");
+ok("閲覧用カードに未確定の表示がある", /の移動距離は未確定です/.test(viewCardSrc));
+ok("閲覧用カードに取得失敗の表示が別にある", /データを取得できませんでした。/.test(viewCardSrc));
+(function () {
+  const s = viewCardSrc.indexOf("if(mileage.viewData.closed!==true){");
+  const dl = viewCardSrc.indexOf("mileageDownloadCsv()");
+  ok("未確定の分岐はダウンロードボタンより前で return する（未確定月はダウンロードさせない）",
+    s > 0 && dl > s, "closed分岐=" + s + " download=" + dl);
+  const branch = s > 0 ? extractFn(viewCardSrc.slice(s), "if(mileage.viewData.closed!==true){") : "";
+  ok("未確定の分岐にダウンロードボタンを置かない", branch.length > 0 && branch.indexOf("mileageDownload") < 0);
+})();
+ok("ダウンロードは確定済み（closed）のみ",
+  (html.match(/if\(!d\|\|!d\.closed/g) || []).length === 2);
+ok("closed:false の応答を取得失敗として扱わない（viewData へ入れる）",
+  /if\(res\.ok&&res\.data\)\{\s*mileage\.viewData=res\.data;/.test(html));
+ok("未確定の月も対象月として選べる（当月を候補へ入れる）",
+  /if\(months\.indexOf\(curYm\)<0\)months\.push\(curYm\);/.test(html));
+
+// ★ [23] の一部は非同期（handleMonthlyReport は async）。集計はその完了後に行う。
+reportTests.then(function () {
+  console.log("\n================ 結果 ================");
+  console.log("PASS: " + pass + " / FAIL: " + fail);
+  if (fail > 0) process.exit(1);
+});

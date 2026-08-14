@@ -285,11 +285,17 @@ function elevateAdminSession(payload){
  *   ここでは同じ結果になる役割トークンを裏で取得するだけで、
  *   期限を12時間・24時間などに固定し直すことはしない。
  */
+// ★ 進行中の昇格を Promise で公開する（staff の _elevatePromise・admin の _adminElevatePromise と同じ扱い）。
+//   公開しないと、役割トークンを必要とする呼び出し（/api/mileage）が確立を待てず、
+//   匿名トークンのまま問い合わせて 403 になる。
+var _shareElevatePromise=null;
 function elevateShareSession(kind,token){
-  (async function(){
+  _shareElevatePromise=(async function(){
     var ok=await establishSession("share",{kind:kind,token:token||""});
     if(!ok)console.warn("[TC] share role token unavailable（現行セッションを継続）");
-  })().catch(function(){});
+    return ok;
+  })().catch(function(){return false;});
+  return _shareElevatePromise;
 }
 
 // ★ single-flight。起動時の一括読込は authFetch を20本以上同時に呼ぶため、
@@ -8342,12 +8348,27 @@ function mileageBootForAdmin(){
   })().catch(function(){mileage.booting=false;mileage.booted=true;});
 }
 
-/** 労務士（閲覧用URL）画面から呼ぶ。共有URLの役割確立は起動時に走っている。 */
+/**
+ * 労務士（閲覧用URL）画面から呼ぶ。
+ *
+ * ★ 閲覧用URLの役割トークン（r:"v"）の確立を必ず待つ。elevateShareSession は
+ *   起動時に走り始めるだけで、その完了を待たずに render() が閲覧画面を描く。
+ *   待たずに /api/mileage を呼ぶと匿名トークンのまま問い合わせることになり、
+ *   正しい閲覧用URLでも 403 forbidden になって「データを取得できませんでした。」になる
+ *   （staff は _elevatePromise、admin は _adminElevatePromise を待っており、ここだけ抜けていた）。
+ */
 function mileageBootForViewer(){
   if(mileage.booted||mileage.booting)return;
   var g=mileage.gen;
   mileage.booting=true;
   (async function(){
+    // 昇格の開始自体が遅れている場合に備えて、最大2秒だけ待ってから確立を待つ。
+    for(var i=0;i<10&&!_shareElevatePromise;i++){
+      await mileageSleep(200);
+      if(mileageStale(g))return;
+    }
+    if(_shareElevatePromise){try{await _shareElevatePromise;}catch(e){}}
+    if(mileageStale(g))return;
     var res=await mileageBootFetch();
     if(mileageStale(g))return;
     mileageBootApply(res);
@@ -10184,42 +10205,84 @@ function mileageViewSetYm(v){
   mileage.viewData=null;mileage.viewTried=false;mileageLoadReport(v);
 }
 
+/** 閲覧用カードの外枠（読み込み中・エラー・未確定で共通）。 */
+function mileageViewShell(inner){
+  return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+    +inner+'</div>';
+}
+/**
+ * 取得しなおす。
+ * ★ 役割トークン（r:"v"）が確立できていなければ、その取得からやり直す。
+ *   bootstrap だけ叩き直しても匿名トークンのままなら結果は変わらない。
+ */
+function mileageViewerRetry(){
+  mileage.booted=false;mileage.booting=false;mileage.bootFailed=false;
+  mileage.viewTried=false;mileage.viewLoading=false;mileage.viewData=null;
+  if(_authRole!=="v"&&viewerParam)elevateShareSession("viewer",viewerParam);
+  render();
+}
+
 function mileageViewerCardHtml(){
   mileageBootForViewer();
-  if(!mileage.booted){
-    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
+  var loading='<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div>';
+  var retryBtn='<button onclick="mileageViewerRetry()" style="margin-top:8px;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 16px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button>';
+  if(!mileage.booted)return mileageViewShell(loading);
+  // ★ 閲覧用URLの確認（bootstrap）自体に失敗した場合。「未確定」とは明確に区別する。
+  if(mileage.bootFailed){
+    return mileageViewShell('<div style="font-size:.85rem;color:#b91c1c;font-weight:700;">移動距離のデータを表示できませんでした。</div>'
+      +'<div style="font-size:.78rem;color:#64748b;margin-top:4px;">閲覧用URLの確認に失敗しました（通信状態、またはURLの有効期限をご確認ください）。</div>'
+      +retryBtn);
   }
   // ★ 一度だけ取得する。失敗しても再スケジュールしない（render→取得→render の無限ループ防止）
   if(!mileage.viewTried&&!mileage.viewLoading){
     setTimeout(function(){mileageLoadReport(mileage.viewYm||"");},0);
-    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
+    return mileageViewShell(loading);
   }
-  if(mileage.viewLoading&&!mileage.viewData){
-    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
-  }
+  if(mileage.viewLoading&&!mileage.viewData)return mileageViewShell(loading);
   if(!mileage.viewData){
-    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
-      +'<div style="font-size:.85rem;color:#b91c1c;">データを取得できませんでした。</div>'
-      +'<button onclick="mileage.viewTried=false;render();" style="margin-top:8px;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 16px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button></div>';
+    // ★ ここは「通信・権限の失敗」だけ。未確定はサーバが 200 で closed:false を返すため、ここへは来ない。
+    return mileageViewShell('<div style="font-size:.85rem;color:#b91c1c;font-weight:700;">データを取得できませんでした。</div>'
+      +'<div style="font-size:.78rem;color:#64748b;margin-top:4px;">通信状態をご確認のうえ、再試行してください。</div>'
+      +retryBtn);
   }
-  var months=mileage.viewClosedMonths||[];
-  if(!months.length){
-    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
-      +'<div style="font-size:.85rem;color:#8496a7;">ダウンロードできる確定済みの月がまだありません。</div></div>';
-  }
+  // 対象月の候補＝確定済みの月＋当月（当月が未確定でも選べるようにする）。
+  // ★ 未確定の月を「選べない」のではなく「未確定と表示する」。取得失敗と区別できるようにするため。
+  var closedMonths=mileage.viewClosedMonths||[];
+  var months=closedMonths.slice();
+  var curYm=mileageThisMonth();
+  if(months.indexOf(curYm)<0)months.push(curYm);
+  if(mileage.viewYm&&months.indexOf(mileage.viewYm)<0)months.push(mileage.viewYm);
+  months.sort();months.reverse();
   if(!mileage.viewYm){
-    mileage.viewYm=months[0];
+    mileage.viewYm=closedMonths.length?closedMonths[0]:curYm;
     setTimeout(function(){mileageLoadReport(mileage.viewYm);},0);
+    return mileageViewShell(loading);
   }
+  // ★ 応答が別の月のもの（初回の一覧取得直後など）の間は判定しない。
+  //   確定済みの月を一瞬「未確定」と表示してしまうため。
+  if(String(mileage.viewData.ym||"")!==mileage.viewYm)return mileageViewShell(loading);
   var rows=(mileage.viewData&&mileage.viewData.rows)||[];
   var sumKm=0,sumYen=0;
   rows.forEach(function(r){sumKm=mileageRound1(sumKm+Number(r.totalKm||0));sumYen+=Number(r.amount||0);});
   var monthSel='<select onchange="mileageViewSetYm(this.value)" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'
-    +months.map(function(m){return '<option value="'+esc(m)+'"'+(m===mileage.viewYm?" selected":"")+'>'+esc(mileageYmLabel(m))+'</option>';}).join("")
+    +months.map(function(m){
+      var lbl=mileageYmLabel(m)+(closedMonths.indexOf(m)<0?"（未確定）":"");
+      return '<option value="'+esc(m)+'"'+(m===mileage.viewYm?" selected":"")+'>'+esc(lbl)+'</option>';
+    }).join("")
     +'</select>';
+  var headRow='<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+    +'<div style="margin:0;font-size:1rem;font-weight:900;color:#0f172a;">🚗 移動距離（確定済みのみ）</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+monthSel+'</div>'
+    +'</div>';
+  // ★ 未確定の月。API取得は成功しているので「取得できませんでした」と混同させない。
+  //   ダウンロードボタンも出さない（確定前の数値を給与データとして持ち出させない）。
+  if(mileage.viewData.closed!==true){
+    return '<div class="admin-card">'+headRow
+      +'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px;">'
+      +'<div style="font-size:.9rem;font-weight:800;color:#9a3412;">'+esc(mileageYmLabel(mileage.viewYm))+'の移動距離は未確定です</div>'
+      +'<div style="font-size:.78rem;color:#7c2d12;margin-top:6px;line-height:1.6;">管理者が月次確定すると、確定した内容がここに表示され、CSVをダウンロードできるようになります。<br>（未確定の月はダウンロードできません）</div>'
+      +'</div></div>';
+  }
   var tbl=rows.length
     ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;"><table style="border-collapse:collapse;width:100%;font-size:.82rem;min-width:440px;">'
       +'<tr style="background:#f1f5f9;"><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">社員番号</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">氏名</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">合計距離</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">単価</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">支給額</th></tr>'
@@ -10236,11 +10299,7 @@ function mileageViewerCardHtml(){
       +'</table></div>'
     :(mileage.viewLoading?'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div>':'<div class="empty">この月のデータはありません</div>');
 
-  return '<div class="admin-card">'
-    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
-    +'<div style="margin:0;font-size:1rem;font-weight:900;color:#0f172a;">🚗 移動距離（確定済みのみ）</div>'
-    +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+monthSel+'</div>'
-    +'</div>'
+  return '<div class="admin-card">'+headRow
     +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">管理者が確定した月だけが表示されます。金額は確定時に保存された値で、あとから単価を変更しても変わりません。</div>'
     +tbl
     +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">'
