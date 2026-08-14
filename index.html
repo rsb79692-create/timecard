@@ -11478,12 +11478,23 @@ function savePaidLeaveGrantRecord(staffId,staffName,grantNum,grantDate,expiresAt
 // 変更するのは対象付与行の grantedDays と remainDays のみで、
 // 付与日・有効期限・消化済み日数(usedDays)・他の付与行・取得申請・承認状態・FIFOの消化順は変更しない。
 //
-// 残日数の再計算は正本の定義そのまま:
-//   remainDays = grantedDays - usedDays
-//   usedDays ＝ 承認時に applyFifoConsumption がこの付与行から消化した累計（正本の消化済み日数）。
-//   未来日の承認済み取得も承認時点で usedDays に入っているため、消化済みの判定に別計算を新設しない。
-// 画面の残表示（未来分を戻す buildFutureApprovedLeaveMap）は usedDays を上限に戻す実装なので、
-// usedDays を変えない本修正では戻し量が変化せず、表示・合計・取得予定の整合は保たれる。
+// ★ 残日数の再計算に「grantedDays - usedDays」を使ってはならない（2026-08-14 修正）。
+//   remainDays が正本であり、usedDays は「このシステムで承認して消化した累計」でしかない。
+//   有給付与登録モーダルは残日数を付与日数と別に入力できる（付与7日・残5日 のように、
+//   運用開始前にすでに取得済みの分を残日数だけ減らして登録する）。この登録時点の消化分は
+//   usedDays に入らないため、その付与行では常に
+//       grantedDays - usedDays - remainDays = 登録時点ですでに消化していた日数（carryIn）
+//   という差が残る。実データ（2026-08-14 実測）でも 40行中 14行がこの状態である。
+//   ここで remainDays = grantedDays - usedDays と再計算すると、その carryIn 日数が
+//   残日数として復活し、取得済みの有給が戻ってしまう。
+//
+// したがって再計算は「現在の残日数に、付与日数の増減分だけを加減する」:
+//   remainDays(新) = remainDays(現) + ( grantedDays(新) - grantedDays(現) )
+//   消化済み合計   = grantedDays(現) - remainDays(現)   （= usedDays + carryIn。これは変えない）
+//   付与日数は消化済み合計を下回れない（下回ると残日数が負になる）。
+//
+// usedDays は変更しない。画面の残表示（未来分を戻す buildFutureApprovedLeaveMap）は usedDays を
+// 上限に戻す実装なので、戻し量が変化せず、表示・合計・取得予定の整合は保たれる。
 function ensurePaidLeaveBalEditModal(){
   var wrap=document.getElementById("pl-bal-edit-modal-wrap");
   if(wrap)return wrap; // 既存なら再利用
@@ -11502,7 +11513,7 @@ function ensurePaidLeaveBalEditModal(){
     +'<span style="color:#475569;font-weight:700;white-space:nowrap;">付与日</span><span id="pl-bal-edit-gdate" style="font-family:monospace;color:#0f172a;"></span>'
     +'<span style="color:#475569;font-weight:700;white-space:nowrap;">有効期限</span><span style="color:#b45309;overflow-wrap:break-word;"><span id="pl-bal-edit-exp" style="font-family:monospace;"></span><span id="pl-bal-edit-exp-note" style="font-weight:700;"></span></span>'
     +'<span style="color:#475569;font-weight:700;white-space:nowrap;">現在の付与日数</span><span id="pl-bal-edit-cur-granted" style="font-weight:700;color:#1e40af;"></span>'
-    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">消化済み日数</span><span id="pl-bal-edit-used" style="font-weight:700;color:#0f172a;"></span>'
+    +'<span style="color:#475569;font-weight:700;white-space:nowrap;">消化済み合計</span><span id="pl-bal-edit-used" style="font-weight:700;color:#0f172a;"></span>'
     +'<span style="color:#475569;font-weight:700;white-space:nowrap;">現在の残日数</span><span id="pl-bal-edit-cur-remain" style="font-weight:700;color:#166534;"></span>'
     +'</div>'
     +'<div id="pl-bal-edit-note" style="display:none;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:7px 10px;font-size:.72rem;color:#713f12;line-height:1.6;margin-bottom:12px;"></div>'
@@ -11510,7 +11521,7 @@ function ensurePaidLeaveBalEditModal(){
     // font-size は 16px 未満にしない（iOSがフォーカス時にページズームするため）
     +'<input type="number" id="pl-bal-edit-granted" min="0" max="40" step="0.5" style="width:100%;font-size:16px;padding:8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></div>'
     +'<div id="pl-bal-edit-preview" style="font-size:.78rem;font-weight:700;color:#166534;min-height:1.4em;line-height:1.6;"></div>'
-    +'<div style="font-size:.7rem;color:#64748b;line-height:1.6;margin-top:6px;">付与日・消化済み日数・取得申請・承認状態は変更しません。残日数は「修正後の付与日数 − 消化済み日数」で再計算します。</div>'
+    +'<div style="font-size:.7rem;color:#64748b;line-height:1.6;margin-top:6px;">付与日・消化済み日数・取得申請・承認状態は変更しません。残日数は「現在の残日数 ＋ 付与日数の増減分」で再計算します（消化済みの分を残日数として復活させません）。</div>'
     +'</div>'
     +'<div style="display:flex;gap:8px;padding:12px 18px;border-top:1px solid #f3f4f6;">'
     +'<button id="btn-pl-bal-edit-save" style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">保存する</button>'
@@ -11556,19 +11567,37 @@ function openPaidLeaveBalEditModal(balId){
   set("pl-bal-edit-exp",bal.expiresAt||"—");
   // 「期限切れ」の注記は日付と別要素にする（日付側は monospace のため和文を混ぜない）
   set("pl-bal-edit-exp-note",(bal.expiresAt&&bal.expiresAt<todayDateStr())?"（期限切れ）":"");
+  // 消化済み合計＝付与日数 − 残日数。usedDays（システム上の消化）だけでは足りない付与行がある。
+  // 登録時に残日数を減らして登録された分（carryIn）も、すでに取得済みの有給である。
+  var consumedTotal=_plBalEditConsumedTotal(granted,remain);
+  var carryIn=Math.round((consumedTotal-used)*10)/10;
   set("pl-bal-edit-cur-granted",granted+"日");
-  set("pl-bal-edit-used",used+"日");
+  set("pl-bal-edit-used",consumedTotal+"日"+(carryIn>0?"（うちシステム上の消化 "+used+"日）":""));
   set("pl-bal-edit-cur-remain",remain+"日");
-  // 未来日の承認済み取得分（画面の残表示で戻している分）がある付与行は、内訳を明示する。
-  // 「消化済み日数」に未来分が含まれていることを管理者が誤解しないようにするための表示のみ。
+  // 内訳の注記。管理者が「消化済み合計」の中身を誤解しないようにするための表示のみ。
   var backDays=0;
   try{ backDays=(buildFutureApprovedLeaveMap().byLot||{})[balId]||0; }catch(e){ backDays=0; }
   var noteEl=document.getElementById("pl-bal-edit-note");
   if(noteEl){
+    var notes=[];
+    if(carryIn>0){
+      notes.push("この付与行は登録時点ですでに "+carryIn+"日 が消化済みです（運用開始前の取得分。"
+        +"付与日数と別に残日数を入力して登録されたため、システム上の消化 "+used+"日 には含まれません）。"
+        +"付与日数を修正しても、この "+carryIn+"日 を残日数として復活させません。");
+    }
+    if(carryIn<0){
+      // remainDays と usedDays の整合が崩れている（通常の操作では起きない）。黙って計算を進めない。
+      notes.push("⚠ この付与行はデータの整合が崩れています（付与 "+granted+"日 / 残 "+remain+"日 に対し"
+        +"システム上の消化が "+used+"日）。付与日数の修正は残日数の増減分だけを反映しますが、"
+        +"先に付与日数・残日数が正しいか確認してください。");
+    }
     if(backDays>0){
-      noteEl.textContent="消化済み "+used+"日 のうち "+backDays+"日 は明日以降の取得予定（承認済み）です。"
+      notes.push("システム上の消化 "+used+"日 のうち "+backDays+"日 は明日以降の取得予定（承認済み）です。"
         +"一覧の「第"+grantNo+"回」欄はこの分を戻して "+Math.round((remain+backDays)*10)/10+"日 と表示しています。"
-        +"修正では消化済み日数を変更しないため、この表示ルールは変わりません。";
+        +"修正では消化済み日数を変更しないため、この表示ルールは変わりません。");
+    }
+    if(notes.length){
+      noteEl.textContent=notes.join(" ");
       noteEl.style.display="block";
     }else{
       noteEl.textContent="";
@@ -11580,17 +11609,20 @@ function openPaidLeaveBalEditModal(balId){
   var btn=document.getElementById("btn-pl-bal-edit-save");
   // プレビューは保存と同じ判定関数を使う（画面の可否と保存の可否を食い違わせない）
   var renderPreview=function(){
-    var v=_plBalEditValidate((inp&&inp.value)||"",used,granted);
+    var v=_plBalEditValidate((inp&&inp.value)||"",granted,remain);
     if(prev){
       prev.style.color=v.ok?"#166534":(v.same?"#64748b":"#dc2626");
       prev.textContent=v.ok
-        ?"修正後の残日数：付与"+v.granted+"日 − 消化済み"+used+"日 = "+v.remain+"日"
+        ?"修正後の残日数：現在の残"+remain+"日 "+(v.delta>=0?"＋":"−")+" 付与の増減"+Math.abs(v.delta)+"日 = "+v.remain+"日"
+          +"（消化済み合計 "+consumedTotal+"日 は変更しません）"
         :(v.empty?"修正後の残日数：—":(v.same?v.msg:"⚠ "+v.msg)); // 色に依存せず文字でも判別できるようにする
     }
     if(btn)btn.disabled=!v.ok; // 保存できない入力のうちは押させない
   };
   if(inp){
-    inp.min=String(used>0?used:0.5); // 0日への変更は不可（消化済みがある場合はその日数が下限）
+    // 消化済み合計を下回る変更は不可（残日数が負になる）。step="0.5" の基点が min になるため、
+    // 0.5の倍数へ切り上げる（スピナーが 4.7 / 5.2 のような保存できない値を出さないようにする）。
+    inp.min=String(_plBalEditMinGranted(consumedTotal));
     inp.value=String(granted);
     inp.oninput=renderPreview;
     inp.onchange=renderPreview;
@@ -11613,18 +11645,37 @@ function closePaidLeaveBalEditModal(){
   _plBalEditModalOpen=false;
   _plBalEditId="";
 }
+// この付与行で「すでに消化されている合計日数」＝ 付与日数 − 残日数。
+// usedDays（システム上の消化）だけでは、運用開始前の取得分（登録時に残日数を減らして
+// 登録された分）が抜け落ちる。残日数の再計算・下限判定はこの合計を使う。
+// 残日数が付与日数を超える異常行（remain>granted）では負になるため 0 で止める。
+// 負のままだと下限の案内文が「-1日未満には変更できません」になり、判定として意味を持たない。
+// （クランプの有無で受理される入力は変わらない。0以下の下限はどちらも常に満たされるため）
+function _plBalEditConsumedTotal(curGranted,curRemain){
+  return Math.max(0,Math.round((curGranted-curRemain)*10)/10);
+}
+// 実際に入力できる最小の付与日数。下限（消化済み合計）を 0.5日単位へ切り上げる。
+// 案内文と input の min を同じ値にして、「入力できない値を下限として案内する」状態を作らない。
+function _plBalEditMinGranted(consumedTotal){
+  return Math.max(0.5,Math.ceil(consumedTotal*2)/2);
+}
 // 付与日数の入力値検証。プレビューと保存の両方から呼び、判定と文言を1箇所に集約する。
-// 戻り値: {ok:true,granted,remain} / {ok:false,msg,empty?,same?}
-function _plBalEditValidate(raw,used,curGranted){
+// 残日数は「現在の残日数 ＋ 付与日数の増減分」で求める（grantedDays - usedDays では計算しない）。
+// 戻り値: {ok:true,granted,remain,delta} / {ok:false,msg,empty?,same?}
+function _plBalEditValidate(raw,curGranted,curRemain){
   var v=parseFloat(raw);
   if(isNaN(v))return {ok:false,empty:true,msg:"付与日数を数値で入力してください。"};
   var g=Math.round(v*10)/10;
   if(g<=0)return {ok:false,msg:"付与日数は0より大きい値で入力してください。"};
   if(g>40)return {ok:false,msg:"付与日数が大きすぎます（40日以下で入力してください）。"};
-  if(g<used)return {ok:false,msg:"すでに"+used+"日取得済みのため、付与日数を"+used+"日未満には変更できません。"};
+  // 0.5日単位の判定を先に行う。消化済み合計が0.5の倍数でない付与行で、
+  // 「4.7日未満には変更できません」のように入力できない値を下限として案内しないため。
   if(Math.round(g*2)/2!==g)return {ok:false,msg:"付与日数は0.5日単位で入力してください。"};
+  var consumed=_plBalEditConsumedTotal(curGranted,curRemain);
+  if(g<consumed)return {ok:false,msg:"すでに"+consumed+"日取得済みのため、付与日数を"+_plBalEditMinGranted(consumed)+"日未満には変更できません。"};
   if(g===curGranted)return {ok:false,same:true,msg:"付与日数が変わっていません。"};
-  return {ok:true,granted:g,remain:Math.round((g-used)*10)/10};
+  var delta=Math.round((g-curGranted)*10)/10;
+  return {ok:true,granted:g,delta:delta,remain:Math.round((curRemain+delta)*10)/10};
 }
 // 付与日数の修正を保存する。
 // ★ 検証・再計算・書き込みは「確認ダイアログのOKを押した後」に、対象1行だけを Firebase から
@@ -11645,14 +11696,15 @@ function savePaidLeaveBalGrantedDays(){
   var shownGranted=Math.round((shown.grantedDays||0)*10)/10;
   var shownRemain=Math.round((shown.remainDays!=null?shown.remainDays:(shownGranted-shownUsed))*10)/10;
   var raw=(document.getElementById("pl-bal-edit-granted")||{}).value||"";
-  var v=_plBalEditValidate(raw,shownUsed,shownGranted);
+  var v=_plBalEditValidate(raw,shownGranted,shownRemain);
   if(!v.ok){showAlert(v.msg);return;}
+  var shownConsumed=_plBalEditConsumedTotal(shownGranted,shownRemain);
   // 確認ダイアログを出す前にボタンを止める（連打で確認が積み重なるのを防ぐ）
   var confBtn=document.getElementById("btn-pl-bal-edit-save");
   if(confBtn)confBtn.disabled=true;
   showConfirm("付与日数を "+shownGranted+"日 → "+v.granted+"日に変更します。\n"
-    +"残日数は "+shownRemain+"日 → "+v.remain+"日 になります（消化済み "+shownUsed+"日 は変更しません）。\n\nよろしいですか？",function(){
-    _plBalEditCommit(balId,raw,{used:shownUsed,granted:shownGranted});
+    +"残日数は "+shownRemain+"日 → "+v.remain+"日 になります（消化済み合計 "+shownConsumed+"日 は変更しません）。\n\nよろしいですか？",function(){
+    _plBalEditCommit(balId,raw,{used:shownUsed,granted:shownGranted,remain:shownRemain});
   },function(){
     if(confBtn)confBtn.disabled=false; // キャンセルで元に戻す
   });
@@ -11685,23 +11737,26 @@ function _plBalEditCommit(balId,raw,shown){
       var fresh=normalizePaidLeaveBalance(row);
       var used=Math.round((fresh.usedDays||0)*10)/10;
       var granted=Math.round((fresh.grantedDays||0)*10)/10;
+      var remain=Math.round((fresh.remainDays!=null?fresh.remainDays:(granted-used))*10)/10;
       // 表示時と正本が食い違う＝別の操作が入った。書き込まずに最新値で再表示する。
-      if(used!==shown.used||granted!==shown.granted){
+      // remainDays は再計算の入力そのものなので、必ず突き合わせる（承認・引戻しで動く）。
+      if(used!==shown.used||granted!==shown.granted||remain!==shown.remain){
         var i0=(paidLeaveBalances||[]).findIndex(function(b){return normalizePaidLeaveBalance(b).id===balId;});
         if(i0>=0)paidLeaveBalances[i0]=fresh; // ローカルを最新へ
         unlock();
         // 再描画・再表示はアラートのコールバックに任せない（背景クリックで閉じても最新値に揃える）
         _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
         openPaidLeaveBalEditModal(balId);
-        showAlert("表示中に別の操作でこの付与行が更新されました（消化済み "+shown.used+"日 → "+used+"日 / 付与 "+shown.granted+"日 → "+granted+"日）。\n保存は行っていません。最新の値で開き直しました。");
+        showAlert("表示中に別の操作でこの付与行が更新されました（残 "+shown.remain+"日 → "+remain+"日 / 消化済み "+shown.used+"日 → "+used+"日 / 付与 "+shown.granted+"日 → "+granted+"日）。\n保存は行っていません。最新の値で開き直しました。");
         return;
       }
-      var v2=_plBalEditValidate(raw,used,granted);
+      var v2=_plBalEditValidate(raw,granted,remain);
       if(!v2.ok){unlock();showAlert(v2.msg);return;}
       var patch={
         grantedDays:v2.granted,
         remainDays:v2.remain,
         grantedDaysBefore:granted,                                 // 直前の値（追跡用。計算には使わない）
+        remainDaysBefore:remain,                                   // 直前の残日数（追跡用。計算には使わない）
         grantedDaysUpdatedAt:new Date().toISOString(),
         grantedDaysUpdatedVia:(typeof uiMode!=="undefined"?String(uiMode||""):"") // UIモード（normal/adminDemo等）。個人を特定する操作者IDは本アプリに存在しない
       };
@@ -11721,7 +11776,7 @@ function _plBalEditCommit(balId,raw,shown){
           _paidLeaveRenderGuard=true;
           console.error("[PaidLeave] granted days edit post-save error",e2);
         }
-        showAlert("付与日数を"+v2.granted+"日に修正しました（残 "+v2.remain+"日 / 消化済み "+used+"日）");
+        showAlert("付与日数を"+v2.granted+"日に修正しました（残 "+v2.remain+"日 / 消化済み合計 "+_plBalEditConsumedTotal(granted,remain)+"日）");
       });
     }).catch(function(e){
       unlock();

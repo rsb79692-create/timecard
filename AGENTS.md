@@ -560,6 +560,7 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
   - JSON 構文: `node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8'))"`（`database.rules.json` も同様）
   - **移動距離申請の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-mileage.js`。金額計算・端数処理・未登録区間・権限マトリクス（労務士に書込系が入らないこと）・クライアント/サーバの計算一致・CSV形式を検証する。**移動距離申請（`api/mileage.js` / `api/_lib/mileage.js` / `index.html` の移動距離モジュール）に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **管理者トークン状態の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-admin-token-state.js`。`index.html` の管理者URLトークン「設定状態」判定ブロックを抽出して検証する。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
+  - **有給「付与日数の修正」の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-paid-leave-grant-edit.js`。`index.html` の付与日数修正ブロックを抽出し、残日数の再計算式・下限判定・確認表示と保存値の一致・`usedDays` と他の付与行を変更しないことを検証する。**有給の付与日数修正・残日数の計算に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
   - アプリ本体: `git push origin main` → **GitHub Pages が自動デプロイ**（`https://rsb79692-create.github.io/timecard/`）。本リポジトリに Pages 用ワークフローや `CNAME` は無く、ブランチ配信前提（Pages 設定自体はリポジトリ設定側で管理＝リポジトリ内からは設定値まで未確認）。
@@ -601,6 +602,29 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 
 - **打刻 / 打刻修正申請**: `tc5_records` / `tc5_correction_requests` / `tc5_approvals` は**本番の勤怠データ**。Agent はこれらのデータを変更・削除しない（読み取り・コードレビューのみ）。
 - **有給**: `tc5_paid_leave_requests` / `tc5_paid_leave_balances`。付与・残数の計算は給与に直結するため、ロジック変更は必ず analyst → review を通し、データ自体は触らない。
+
+  ★ **残日数の正本は `remainDays` であり、`grantedDays - usedDays` で再計算してはならない**（2026-08-14 実測で確定）。
+  `usedDays` は「このシステムで承認して消化した累計」でしかない。有給付与登録モーダルは
+  **付与日数と別に残日数を入力できる**ため（運用開始前にすでに取得済みの分を残日数だけ減らして登録する）、
+  その付与行では恒久的に
+
+  ```
+  grantedDays − usedDays − remainDays = 登録時点ですでに消化していた日数（carryIn）
+  ```
+
+  という差が残る。**本番実測（2026-08-14）では 40 付与行中 14 行がこの状態**で、最大 10日 の差がある。
+  例: 付与7日 / `usedDays`3日 / `remainDays`2日 ＝ 登録時点で 2日 消化済み（消化済み合計 5日）。
+
+  ・したがって **「消化済み合計」は `grantedDays − remainDays`** であり、`usedDays` ではない。
+  ・付与日数を修正するときの残日数は **`remainDays(現) + (grantedDays(新) − grantedDays(現))`** で求める。
+  　`grantedDays − usedDays` で再計算すると **carryIn が残日数として復活し、取得済みの有給が戻る**
+  　（2026-08-14 に確認モーダルの表示・保存の両方で発生していた不具合。修正済み）。
+  ・`usedDays` は **`applyFifoConsumption` / `reverseFifoConsumption` 以外から書き換えない**。
+  　表示用残日数（`buildFutureApprovedLeaveMap`）が「未来日の取得予定を戻す上限」に `usedDays` を使っており、
+  　ここを動かすと一覧の「第N回」表示と残日数合計が崩れる。
+  ・`normalizePaidLeaveBalance` の `remainDays` 欠落時フォールバック（`granted - used`）は、
+  　**値が無い行の既定値補完**であって再計算式ではない。再計算に流用しないこと。
+  ・回帰テスト: `node scripts/test-paid-leave-grant-edit.js`
 - **月別出勤日数**: `tc5_monthly_days_import`。`scripts/fix-monthly-days-year.js` は**データ補正系の保守スクリプトで副作用がある**ため、Agent から実行しない（人間が確認のうえ実行）。
 - **移動距離申請**: `/mileage` 配下（ルート直下）は**給与に直結する本番データ**。Agent はデータを変更・削除しない。特に `/mileage/monthly` と `/mileage/closings` は確定済みの支給額スナップショットであり、書き換えると過去月の給与計算が変わる。`/mileage/settings`（km単価・端数処理）の変更も金額に直結するため、コードからの既定値変更を含め人間の確認が必要。
 - **通知機能**: 誤送信は実利用者（管理者・スタッフ）に届くため、検証は dryRun 限定。送信先 ID・Webhook・トークンは Secrets/環境変数で管理されており、値を表示しない。
@@ -653,8 +677,9 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 4. **Service Worker 整合**: `sw.js` の `CACHE_NAME` がファイル変更に合わせて更新されているか、`OFFLINE_URLS` の参照ファイルが存在するか
 5. **移動距離申請の回帰テスト**: `node scripts/test-mileage.js`（全件 PASS / 0 FAIL を確認）。**移動距離申請に関係する変更では実行必須**。関係しない変更では実施不要（その旨を報告する）
 6. **管理者トークン状態の回帰テスト**: `node scripts/test-admin-token-state.js`（全件 PASS / 0 FAIL を確認）。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
-7. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
-8. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
+7. **有給付与日数修正の回帰テスト**: `node scripts/test-paid-leave-grant-edit.js`（全件 PASS / 0 FAIL を確認）。**有給の付与日数修正・残日数の計算に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+8. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
+9. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 
 総合判定は「出荷可 / 要修正」。要修正なら ship に進まない。
 
