@@ -827,7 +827,7 @@ function listenFirebase() {
       .then(function(val){if(writePolicy==="sandbox")return;
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
-          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
         }
       }).catch(function(){});
     // 精査完了フラグ(tc5_monthly_review_status)を画面を問わず常時同期。
@@ -838,7 +838,7 @@ function listenFirebase() {
       .then(function(val){if(writePolicy==="sandbox")return;
         if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
           reviewStatus=val;
-          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
         }
       }).catch(function(){});
     // 打刻画面でも修正申請を同期（管理者の承認/却下で pending から外れた申請を「申請中の修正」表示から即時に消す。
@@ -854,7 +854,7 @@ function listenFirebase() {
               correctionRequests=newReqs;
               _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
               // 修正申請フォーム・有給フォーム入力中は再描画しない（入力状態のリセット防止）
-              if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
+              if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
             }
           }
         }).catch(function(){});
@@ -874,7 +874,7 @@ function listenFirebase() {
               Object.keys(cur).forEach(function(k){if(!val[k])val[k]=cur[k];});
               staffNotifications[_snPollSid]=val;
               // 他 polling と同じガード（打刻保存中・修正入力中・有給フォーム入力中は再描画しない）
-              if(savingCount===0&&!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!_paidLeaveRenderGuard) render();
+              if(savingCount===0&&!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
             }
           }).catch(function(){});
       }
@@ -888,7 +888,7 @@ function listenFirebase() {
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
             _lsSet("tc5_records",JSON.stringify(records));
-            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }
       }).catch(function(){});
@@ -898,7 +898,7 @@ function listenFirebase() {
         if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           _lsSet("tc5_approvals",JSON.stringify(approvals));
-          if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
         }
       }).catch(function(){});
     authFetch(FB_URL + "/tc5_correction_requests.json")
@@ -910,7 +910,7 @@ function listenFirebase() {
           if(JSON.stringify(newReqs)!==JSON.stringify(correctionRequests)){
             correctionRequests=newReqs;
             _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
-            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }
       }).catch(function(){});
@@ -926,7 +926,7 @@ function listenFirebase() {
             if(JSON.stringify(next)!==JSON.stringify(paidLeaveRequests)){
               paidLeaveRequests=next;
               // 残日数入力フォーム編集中・タブ閲覧中・月別出勤日数入力中はrenderをスキップ（UI状態リセット防止）
-              if(!document.querySelector('.time-edit-wrap')&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
             }
           }
         }).catch(function(){});
@@ -942,7 +942,7 @@ function listenFirebase() {
             if(val&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_plBalEditModalOpen){
               var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
               paidLeaveBalances=(arr||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});
-              if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
             }
           }).catch(function(){});
       }
@@ -954,7 +954,7 @@ function listenFirebase() {
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
             mealsData=val;
-            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
       // 月初確認状況もスタッフ本人の回答を反映（read-only表示のため再描画は安全）
@@ -963,7 +963,7 @@ function listenFirebase() {
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealConfData)){
             mealConfData=val;
-            if(!document.querySelector('.time-edit-wrap')&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
     }
@@ -2745,6 +2745,8 @@ function _renderInner(){
       +'<tbody>'+vMealRowsHtml+'</tbody>'
       +'</table></div>'
       +'</div>'
+      // 移動距離（確定済み月のみ・完全読み取り専用。書込系APIは role 判定でサーバが拒否する）
+      +'<div style="margin-top:20px;">'+mileageViewerCardHtml()+'</div>'
       +'<div style="margin-top:20px;padding:0 4px;">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">'
       +'<div style="font-size:1rem;font-weight:900;color:#0f172a;">資料</div>'
@@ -3171,6 +3173,10 @@ function _renderInner(){
       }
     }
     // ── 今月の打刻状況（当月・自分の打刻時刻のみの軽量一覧。表示専用＝集計/実働/残業/修正履歴は出さない・データは書き換えない） ──
+    // ── 移動距離申請（利用ONの職員だけ。判定はサーバの bootstrap 結果に従う）──
+    // ★ 起動をブロックしない。未取得なら空文字を返し、取得できた時点で1回だけ再描画する。
+    mileageBootForStaff();
+    var _mileageHtml=mileageStaffCardHtml();
     var _monthHtml=(function(){
       var _curYm=getJSTMonthRange().first.slice(0,7); // JST基準の当月 "YYYY-MM"
       // 当月かつ本人の打刻のみ（既存の本日履歴と同じく氏名キーで突き合わせ／論理削除は除外）
@@ -3396,6 +3402,7 @@ function _renderInner(){
       )
       +_mealConfHtml
       +_mealHtml
+      +_mileageHtml
       +_monthHtml
       +'</div>';
     if(showPaidLeaveForm){
@@ -4217,6 +4224,13 @@ function _renderInner(){
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-meal-required" style="width:16px;height:16px;cursor:pointer;">'
         +'賄い 要（打刻画面に賄い入力欄を表示）</label></div>'
+        // 移動距離申請の利用可否。★ tc5_staff には保存しない（/honomi は誰でも書けるため）。
+        //   サーバ側の /mileage/enabled が正本で、保存時に /api/mileage 経由で更新する。
+        +'<div style="grid-column:1/-1;">'
+        +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
+        +'<input type="checkbox" id="modal-mileage-enabled" style="width:16px;height:16px;cursor:pointer;">'
+        +'移動距離申請：使用する（初期値は使用しない）</label>'
+        +'<div id="modal-mileage-note" style="font-size:11px;color:#8496a7;margin-left:24px;margin-top:2px;"></div></div>'
         +'</div>'
         +'<div id="modal-pin-area" style="padding:0 24px 16px;font-size:13px;color:#475569;display:flex;align-items:center;gap:8px;min-height:36px;"></div>'
         +'<div style="display:flex;gap:10px;padding:16px 24px;border-top:1px solid #f3f4f6;">'
@@ -5666,6 +5680,11 @@ function _renderInner(){
         +'</div>';
     }
 
+    // 移動距離申請（独立モジュール。既存タブのデータには一切触れない）
+    if(adminTab==="mileage"){
+      tc=mileageAdminCardHtml();
+    }
+
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
@@ -5709,6 +5728,7 @@ function _renderInner(){
       +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
       +'<button class="tab-btn '+(adminTab==="leavePlan"?"tab-on":"tab-off")+'" onclick="setTab(\'leavePlan\')">有給取得計画</button>'
       +'<button class="tab-btn '+(adminTab==="meals"?"tab-on":"tab-off")+'" onclick="setTab(\'meals\')">賄い一覧</button>'
+      +'<button class="tab-btn '+(adminTab==="mileage"?"tab-on":"tab-off")+'" onclick="setTab(\'mileage\')">移動距離</button>'
       +'</div>'
       +'</div>'+tc;
 
@@ -6400,7 +6420,12 @@ function _renderInner(){
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
       }
-      saveData("tc5_staff",staffList);closeHrmModal();render();
+      // 移動距離申請の利用可否だけはサーバ（/mileage/enabled）へ反映する。
+      // ★ tc5_staff には保存しない。既存スタッフ項目の保存とは独立で、失敗しても既存保存は成立する。
+      // ★ 既存項目の保存を先に確定させる（移動距離側だけ新氏名へ移って食い違うのを避ける）。
+      saveData("tc5_staff",staffList);
+      mileageSaveStaffModal(newN);
+      closeHrmModal();render();
     };
     // モーダル内IME
     function attachModalIME(nEl,yEl){
@@ -6930,6 +6955,7 @@ function openHrmEdit(nm){
   if(cswEl)cswEl.checked=!!(s&&s.canSupportWork);
   var mrEl=document.getElementById("modal-meal-required");
   if(mrEl)mrEl.checked=!!(s&&s.mealRequired); // 既存スタッフ（mealRequired未設定）は初期値=不要
+  mileageFillStaffModal(s); // 移動距離申請の利用可否（サーバの値を反映）
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
     var _msp=nm?getStoredPin(nm):{hash:null,plain:null};
@@ -6958,7 +6984,9 @@ function closeHrmModal(){
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
 function goHome(){
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
-  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;screen="home";render();
+  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;
+  mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
+  screen="home";render();
 }
 function cancelPin(){
   // ★ 照合中はキャンセルさせない。ここで screen を変えると、
@@ -7052,6 +7080,7 @@ function selStaff(s){
   if(!firebaseReady){alert("読込中です。数秒お待ちください");return;}
   staffName=s;
   staffNotifOpen=false; // 別スタッフ選択時は通知履歴の展開状態をリセット
+  mileageResetSession(); // 別スタッフの移動距離データ・利用可否を持ち越さない
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
     screen="staffPin"; // PIN認証画面へ
@@ -7458,7 +7487,10 @@ async function sOk(){
     match=((await hashPin(inputStr))===sp.hash);
   }
   // ★ 画面遷移は現行どおり即時。サーバ側の役割トークン取得は裏で並行実行する。
-  if(match){staffPinError=false;screen="punch";render();elevateStaffSession(staffName,inputStr);}
+  // ★ 役割トークンの取得を render() より先に始める。elevateStaffSession は即座に
+  //   _elevatePromise をセットして裏で走るだけなので、画面遷移は今までどおり待たされない。
+  //   先に render() すると、打刻画面の移動距離カードが匿名トークンで判定してしまう。
+  if(match){staffPinError=false;screen="punch";elevateStaffSession(staffName,inputStr);render();}
   else{staffPinError=true;staffPinInput="";render();}
 }
 
@@ -8034,6 +8066,1253 @@ function dlCSV(csv,fname){
   var url=URL.createObjectURL(blob);
   var a=document.createElement("a");a.href=url;a.download=fname;a.click();
   URL.revokeObjectURL(url);
+}
+
+// ===== 移動距離申請（独立モジュール）=====
+//
+// ★ このモジュールは既存機能（打刻・出退勤計算・有給・賄い・スタッフ管理・管理者PIN・
+//   Firebase認証・Service Worker）のデータには一切書き込まない。
+//   データは RTDB ルート直下 /mileage（Rules 未定義＝デフォルト拒否）にあり、
+//   読み書きはすべて /api/mileage 経由。authFetch（=/honomi 直アクセス）は使わない。
+//
+// ★ 画面の出し分けはサーバの判定結果に従うだけ。UI で隠すこと自体は権限ではない。
+//   利用OFFの職員は bootstrap が enabled:false を返し、以降のAPIも 403 になる。
+var MILEAGE_API="https://timecard-rho.vercel.app/api/mileage";
+var MILEAGE_ROUND_LABEL={round:"四捨五入",floor:"切り捨て",ceil:"切り上げ",none:"丸めない（現行Excelと同じ）"};
+
+var mileage={
+  // 共通
+  gen:0,                  // スタッフ切替のたびに増やす世代番号（進行中の非同期を無効化する）
+  booted:false,booting:false,bootFailed:false,bootStatus:0,
+  role:"",enabled:false,employeeId:"",staffName:"",
+  settings:{ratePerKm:0,roundMode:"round",configured:false},
+  places:[],legs:{},
+  // 職員側
+  myMonth:"",myRequests:[],myLoading:false,myClosed:false,myError:false,
+  draft:{date:"",placeIds:[],note:"",editingId:""},
+  formOpen:false,
+  // 管理者側
+  adminTab:"requests",adminYm:"",adminData:null,adminLoading:false,
+  enabledMap:{},          // 社員番号 → true（管理者の bootstrap で取得。正本はサーバ）
+  modalEid:"",modalName:"",modalWas:false, // スタッフ管理モーダルで開いている職員と、開いた時点のON/OFF
+  syncFailed:{},          // 社員番号 → true（利用設定の送信に失敗した職員。次回保存で必ず再送する）
+  // 労務士側
+  viewYm:"",viewData:null,viewLoading:false,viewClosedMonths:[],viewTried:false,
+  busy:false
+};
+
+/** /api/mileage を呼ぶ。失敗しても例外は投げず {ok:false,...} を返す。 */
+async function mileageApi(action,params,timeoutMs){
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort();},timeoutMs||12000):null;
+  try{
+    var tok=await getAuthToken().catch(function(){return "";});
+    if(!tok)return {ok:false,status:0,data:null};
+    var payload=Object.assign({idToken:tok,action:action},params||{});
+    var r=await fetch(MILEAGE_API,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload),signal:ctl?ctl.signal:undefined
+    });
+    var d=null;try{d=await r.json();}catch(e){d=null;}
+    return {ok:r.ok,status:r.status,data:d};
+  }catch(e){return {ok:false,status:0,data:null};}
+  finally{if(timer)clearTimeout(timer);}
+}
+
+/** APIエラーを利用者向けの文言にする。内部コードをそのまま見せない。 */
+function mileageErrText(res){
+  var c=(res&&res.data&&res.data.error)||"";
+  if(res&&res.status===0)return "通信できませんでした。電波の良い場所で、もう一度お試しください。";
+  if(c==="feature_disabled")return "移動距離申請は現在ご利用いただけません。管理者に連絡してください。";
+  if(c==="no_employee_id")return "社員番号が未登録のため利用できません。管理者に連絡してください。";
+  if(c==="session_revoked")return "この管理画面のセッションは無効化されています。新しい管理者PIN（またはURL）で入り直してください。";
+  if(c==="forbidden")return "権限がありません。";
+  if(c==="month_closed")return "この月は確定済みのため変更できません。";
+  if(c==="already_approved")return "承認済みのため変更できません。管理者に連絡してください。";
+  if(c==="already_closed")return "この月はすでに確定済みです。";
+  if(c==="duplicate_name")return "同じ名前の地点がすでに登録されています。";
+  if(c==="duplicate_consecutive_place")return "同じ地点が続けて選ばれています。";
+  if(c==="route_too_short")return "地点を2つ以上選んでください。";
+  if(c==="route_too_long")return "1日に登録できる地点数の上限を超えています。";
+  if(c==="unknown_place")return "選択された地点が見つかりません。画面を再読み込みしてください。";
+  if(c==="staff_not_found")return "該当のスタッフが見つかりません。";
+  if(c==="identity_conflict")return "この氏名は既に別の社員番号（"+((res.data&&res.data.conflictWith)||"?")+"）へ割り当てられています。\n\n"
+    +"・同じ人の社員番号を訂正する場合は、スタッフ管理の編集画面から社員番号を変更して保存してください。\n"
+    +"・別人であれば、同姓同名です。氏名の登録を分けてください（同じ氏名では区別できません）。";
+  if(c==="pin_not_registered")return "この職員はまだPINを登録していません。\n本人がPINを登録してから、もう一度設定してください。\n（氏名を変更した直後の場合は、数秒おいてもう一度保存してください）";
+  if(c==="employee_id_retired")return "この社員番号は過去に別の番号（"+((res.data&&res.data.replacedBy)||"?")+"）へ付け替えられているため、再利用できません。\n\n"
+    +"前任者の申請データがこの番号に残っており、別の職員へ割り当てると内容が混ざるためです。\n"
+    +"付け替えを元に戻す場合は、現在の社員番号から元の番号へ戻す形で保存してください。";
+  if(c==="rate_not_configured")return "km単価が未設定です。「単価・端数」タブで単価を保存してから確定してください。";
+  if(c==="bad_staff_name")return "氏名が正しくありません。";
+  if(c==="rate_limited")return "操作が短時間に集中したため、一時的に受け付けられません。しばらく待ってからお試しください。";
+  if(c==="not_found")return "対象のデータが見つかりません。画面を再読み込みしてください。";
+  if(c==="bad_rate")return "km単価の値が正しくありません。";
+  if(c==="bad_km")return "距離の値が正しくありません（0より大きい数値）。";
+  if(c==="bad_date")return "日付が正しくありません。";
+  if(c==="date_out_of_range")return "申請できるのは過去12か月〜翌月までです。日付を確認してください。";
+  return "処理に失敗しました。時間をおいて、もう一度お試しください。";
+}
+
+function mileageSleep(ms){return new Promise(function(r){setTimeout(r,ms);});}
+
+/**
+ * 世代番号。スタッフ切替のたびに増やす。
+ * ★ 進行中の非同期処理は「開始時の世代」と一致するときだけ状態へ反映する。
+ *   これをしないと、切替直前に投げた取得が切替後に着弾し、
+ *   前のスタッフの申請一覧が次のスタッフの画面に残る（共有端末で必ず起きる）。
+ */
+function mileageStale(g){return g!==mileage.gen;}
+
+/** bootstrap を叩いて応答を返す（状態は書き換えない）。 */
+async function mileageBootFetch(){
+  return await mileageApi("bootstrap",{},10000);
+}
+
+/** bootstrap の応答を状態へ反映する。 */
+function mileageBootApply(res){
+  mileage.booting=false;
+  mileage.booted=true;
+  mileage.bootStatus=res.status;
+  if(!res.ok||!res.data){
+    mileage.bootFailed=true;mileage.enabled=false;
+    return;
+  }
+  var d=res.data;
+  mileage.bootFailed=false;
+  mileage.role=d.role||"";
+  mileage.enabled=d.enabled===true;
+  mileage.employeeId=d.employeeId||"";
+  mileage.staffName=d.staffName||"";
+  if(d.settings)mileage.settings={
+    ratePerKm:Number(d.settings.ratePerKm)||0,
+    roundMode:d.settings.roundMode||"round",
+    configured:d.settings.configured===true   // 管理者が一度も単価を保存していないと false
+  };
+  if(Array.isArray(d.places))mileage.places=d.places;
+  if(d.legs&&typeof d.legs==="object")mileage.legs=d.legs;
+  if(d.enabledMap&&typeof d.enabledMap==="object")mileage.enabledMap=d.enabledMap;   // 管理者のみ返る
+}
+
+/** 管理者・労務士の再取得用（画面から明示的に呼ぶ）。 */
+async function mileageBoot(){
+  var g=mileage.gen;
+  mileage.booting=true;
+  var res=await mileageBootFetch();
+  if(mileageStale(g))return;
+  mileageBootApply(res);
+}
+
+/**
+ * スタッフ切替・打刻画面終了時に呼ぶ。
+ * ★ 共有端末では次のスタッフが同じ画面を使う。前のスタッフの利用可否・申請内容を
+ *   キャッシュに残すと、一瞬でも他人のデータが見えてしまう。必ず捨てる。
+ * ★ 世代を進めることで、進行中の取得の結果も反映されなくなる。
+ */
+function mileageResetSession(){
+  mileage.gen++;
+  mileage.booted=false;mileage.booting=false;mileage.bootFailed=false;mileage.bootStatus=0;
+  mileage.role="";mileage.enabled=false;mileage.employeeId="";mileage.staffName="";
+  mileage.places=[];mileage.legs={};
+  mileage.myMonth="";mileage.myRequests=[];mileage.myLoading=false;mileage.myClosed=false;mileage.myError=false;
+  mileage.draft={date:"",placeIds:[],note:"",editingId:""};
+  mileage.formOpen=false;mileage.busy=false;
+  mileage.enabledMap={};mileage.modalEid="";mileage.modalName="";mileage.modalWas=false;mileage.syncFailed={};
+  mileage.viewYm="";mileage.viewData=null;mileage.viewTried=false;mileage.viewClosedMonths=[];
+  mileage.adminYm="";mileage.adminData=null;
+}
+
+/**
+ * 打刻画面から呼ぶ。取得できたら1回だけ再描画する（起動をブロックしない）。
+ *
+ * ★ スタッフ役割トークンの確立（elevateStaffSession）を待つ。待たずに呼ぶと
+ *   匿名トークンで bootstrap して 403 になり、利用ONの職員にもメニューが出ない。
+ * ★★ さらに「サーバが解決した本人」と「いま画面に出ているスタッフ」の一致を必ず確認する。★★
+ *   共有端末では、前のスタッフAの役割トークンがまだ生きている間に次のスタッフBの
+ *   打刻画面が描かれうる（PIN新規登録経路では昇格の開始自体が render より遅い。
+ *   昇格が失敗した場合も既存セッションは意図的に維持される仕様）。
+ *   一致を見ないと、Bの画面にAの申請一覧が出て、Bの操作がA名義で保存される。
+ */
+function mileageBootForStaff(){
+  if(mileage.booted||mileage.booting)return;
+  var g=mileage.gen,who=staffName;
+  mileage.booting=true;
+  (async function(){
+    var p0=_elevatePromise;
+    for(var attempt=0;attempt<6;attempt++){
+      // 役割トークンの確立を待つ（最大約4秒×試行）。確立しなくても必ず1回は問い合わせる。
+      for(var i=0;i<20;i++){
+        if(_elevatePromise){try{await _elevatePromise;}catch(e){}}
+        if(mileageStale(g))return;
+        if(_authRole!=="anon"||screen!=="punch")break;
+        await mileageSleep(200);
+      }
+      if(mileageStale(g))return;
+      var res=await mileageBootFetch();
+      if(mileageStale(g))return;
+      // 失敗（通信断・403）はその場で確定させる（無限に粘らない）。
+      // ★ ただし「未許可の職員は 403」なので、共有端末で前の職員の 403 を
+      //   次の職員の結論にしてしまうことがある。boot 開始後に別のスタッフ昇格が
+      //   始まっていた場合だけ、1回だけ取り直す（全員が6回叩くことはしない）。
+      if(!res.ok||!res.data){
+        if(res.status===403&&who&&_elevatePromise!==p0&&attempt===0){
+          p0=_elevatePromise;await mileageSleep(400);
+          if(mileageStale(g))return;
+          continue;
+        }
+        mileageBootApply(res);return;
+      }
+      var got=res.data.staffName||"";
+      // ★ who があるのに氏名が返らない場合は「未解決」として扱い、一致扱いにしない。
+      //   一致扱いにすると、前の職員の未許可応答をそのまま採用して
+      //   次の職員のカードが出なくなる（再読込みまで直らない）。
+      if(!who||(res.data.role!=="s")||got===who){mileageBootApply(res);break;}
+      // 別スタッフのトークンだった → 少し待って取り直す
+      if(attempt===5){mileage.booting=false;mileage.booted=true;mileage.enabled=false;return;}
+      await mileageSleep(400);
+      if(mileageStale(g))return;
+    }
+    if(mileageStale(g))return;
+    if(mileage.enabled&&screen==="punch")render();
+  })().catch(function(){mileage.booting=false;mileage.booted=true;});
+}
+
+/** 管理画面から呼ぶ。管理者役割トークンの確立を待つ。 */
+function mileageBootForAdmin(){
+  if(mileage.booted||mileage.booting)return;
+  var g=mileage.gen;
+  mileage.booting=true;
+  (async function(){
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    if(mileageStale(g))return;
+    var res=await mileageBootFetch();
+    if(mileageStale(g))return;
+    mileageBootApply(res);
+    if(screen==="admin"&&adminTab==="mileage")render();
+  })().catch(function(){mileage.booting=false;mileage.booted=true;});
+}
+
+/** 労務士（閲覧用URL）画面から呼ぶ。共有URLの役割確立は起動時に走っている。 */
+function mileageBootForViewer(){
+  if(mileage.booted||mileage.booting)return;
+  var g=mileage.gen;
+  mileage.booting=true;
+  (async function(){
+    var res=await mileageBootFetch();
+    if(mileageStale(g))return;
+    mileageBootApply(res);
+    if(viewerMode)render();
+  })().catch(function(){mileage.booting=false;mileage.booted=true;});
+}
+
+/**
+ * 管理者が移動距離のマスタ・設定を入力中か。
+ * ★ 管理画面は他人の打刻が入るたびにポーリング由来の再描画が走る。
+ *   入力中の地点名・km・単価は DOM 上にしか無いため、守らないと黙って消える。
+ */
+function mileageAdminEditing(){
+  if(screen!=="admin"||adminTab!=="mileage")return false;
+  var ids=["mlg-place-name","mlg-place-order","mlg-leg-km","mlg-rate"];
+  for(var i=0;i<ids.length;i++){
+    var el=document.getElementById(ids[i]);
+    if(el&&String(el.value||"").trim()!=="")return true;
+  }
+  var f=document.getElementById("mlg-leg-from"),t=document.getElementById("mlg-leg-to");
+  if((f&&f.value)||(t&&t.value))return true;
+  return false;
+}
+
+/** ポーリング由来の再描画を止めるべきか（移動距離モジュールの都合）。 */
+function mileageBlocksRerender(){
+  return mileage.formOpen||mileageAdminEditing();
+}
+
+// ---- 計算（表示用。金額の正本はサーバのスナップショット）----
+function mileageRound1(v){var n=Number(v);return isFinite(n)?Math.round(n*10)/10:0;}
+function mileageApplyRound(v,mode){
+  var n=Number(v);if(!isFinite(n))return 0;
+  if(mode==="floor")return Math.floor(n);
+  if(mode==="ceil")return Math.ceil(n);
+  if(mode==="none")return mileageRound1(n);
+  return Math.round(n);
+}
+function mileageAmount(km,rate,mode){return mileageApplyRound(mileageRound1(km)*Number(rate||0),mode);}
+function mileagePlaceName(id){
+  for(var i=0;i<mileage.places.length;i++)if(mileage.places[i].id===id)return mileage.places[i].name;
+  return "";
+}
+/** 地点IDの並びから区間と距離を組み立てる。未登録区間は km=null（0km にしない）。 */
+function mileageBuildRoute(ids){
+  var legs=[],total=0,missing=[];
+  for(var i=0;i+1<ids.length;i++){
+    var k=ids[i]+"__"+ids[i+1];
+    var km=Object.prototype.hasOwnProperty.call(mileage.legs,k)?mileage.legs[k]:null;
+    legs.push({from:ids[i],to:ids[i+1],km:km});
+    if(km==null)missing.push(i);else total=mileageRound1(total+km);
+  }
+  return {legs:legs,totalKm:mileageRound1(total),missing:missing};
+}
+/** 職員がよく使う地点（自分の申請履歴から算出）。選択肢の上位に出す。 */
+function mileageFrequentPlaceIds(){
+  var cnt={};
+  mileage.myRequests.forEach(function(r){
+    (r.placeIds||[]).forEach(function(id){cnt[id]=(cnt[id]||0)+1;});
+  });
+  return Object.keys(cnt).sort(function(a,b){return cnt[b]-cnt[a];});
+}
+function mileagePlaceOptions(selected){
+  var freq=mileageFrequentPlaceIds();
+  var byId={};mileage.places.forEach(function(p){byId[p.id]=p;});
+  var top=[],rest=[];
+  freq.forEach(function(id){if(byId[id])top.push(byId[id]);});
+  mileage.places.forEach(function(p){if(freq.indexOf(p.id)<0)rest.push(p);});
+  function opt(p){return '<option value="'+esc(p.id)+'"'+(p.id===selected?" selected":"")+'>'+esc(p.name)+'</option>';}
+  var html='<option value=""'+(selected?"":" selected")+'>選択してください</option>';
+  if(top.length){
+    html+='<optgroup label="よく使う地点">'+top.map(opt).join("")+'</optgroup>';
+    if(rest.length)html+='<optgroup label="そのほか">'+rest.map(opt).join("")+'</optgroup>';
+  }else{
+    html+=mileage.places.map(opt).join("");
+  }
+  return html;
+}
+
+// ---- 職員側 ----
+
+function mileageThisMonth(){var t=getTodayJSTStr();return t.slice(0,7);}
+/** "2026-08" → "2026年8月"（既存の月セレクトと同じくゼロ埋めを外す）。 */
+function mileageYmLabel(m){
+  var p=String(m||"").split("-");
+  return p.length===2?(p[0]+"年"+parseInt(p[1],10)+"月"):String(m||"");
+}
+function mileageMonthOptions(sel,months){
+  return months.map(function(m){
+    return '<option value="'+esc(m)+'"'+(m===sel?" selected":"")+'>'+esc(mileageYmLabel(m))+'</option>';
+  }).join("");
+}
+/** 翌月＋直近12か月の選択肢（新しい順）。サーバが受け付ける範囲と合わせる。 */
+function mileageRecentMonths(){
+  var out=[],t=getTodayJSTStr(),y=parseInt(t.slice(0,4),10),m=parseInt(t.slice(5,7),10);
+  var ny=y,nm=m+1;if(nm>12){nm=1;ny++;}
+  out.push(ny+"-"+pad(nm));   // 翌月（サーバは翌月末まで申請を受け付ける）
+  for(var i=0;i<12;i++){
+    out.push(y+"-"+pad(m));
+    m--;if(m<1){m=12;y--;}
+  }
+  return out;
+}
+
+async function mileageLoadMy(ym){
+  var g=mileage.gen;
+  mileage.myLoading=true;mileage.myMonth=ym;mileage.myError=false;
+  var res=await mileageApi("myMonth",{ym:ym});
+  // ★ スタッフが切り替わった後に着弾した応答は捨てる（前の人の一覧を残さない）
+  if(mileageStale(g))return;
+  // ★ 表示中の月が変わっていたら、この応答は古い（月切替の取りこぼし防止）
+  if(mileage.myMonth!==ym)return;
+  mileage.myLoading=false;
+  if(res.ok&&res.data){
+    mileage.myRequests=Array.isArray(res.data.requests)?res.data.requests:[];
+    mileage.myClosed=res.data.closed===true;
+  }else{
+    // ★ 取得失敗を「0件」として見せない（申請したのに消えたように見える）
+    mileage.myRequests=[];mileage.myClosed=false;mileage.myError=true;
+  }
+  if(screen==="punch")render();
+}
+function mileageSetMyMonth(v){
+  if(!/^\d{4}-\d{2}$/.test(v))return;
+  if(v===mileage.myMonth&&!mileage.myError)return;
+  mileage.myRequests=[];mileage.myError=false;
+  mileageLoadMy(v);
+}
+
+function mileageOpenForm(reqId){
+  mileage.formOpen=true;
+  var r=reqId?mileage.myRequests.find(function(x){return x.id===reqId;}):null;
+  if(r){
+    mileage.draft={date:r.date,placeIds:(r.placeIds||[]).slice(),note:r.note||"",editingId:r.id};
+  }else{
+    mileage.draft={date:getTodayJSTStr(),placeIds:["",""],note:"",editingId:""};
+  }
+  render();
+}
+function mileageCancelForm(){
+  mileage.formOpen=false;
+  mileage.draft={date:"",placeIds:[],note:"",editingId:""};
+  render();
+}
+function mileageSetDate(v){mileage.draft.date=v;render();}
+function mileageSetNote(v){mileage.draft.note=v;}   // 再描画しない（入力を妨げない）
+function mileageSetPlace(i,v){mileage.draft.placeIds[i]=v;render();}
+function mileageAddPlace(){
+  if(mileage.draft.placeIds.length>=20){showAlert("1日に登録できる地点は20か所までです");return;}
+  mileage.draft.placeIds.push("");render();
+}
+function mileageRemovePlace(i){
+  if(mileage.draft.placeIds.length<=2){showAlert("地点は2つ以上必要です");return;}
+  mileage.draft.placeIds.splice(i,1);render();
+}
+/** 直近の申請ルートをそのままコピーする（同じ移動が多いので再入力させない）。 */
+function mileageCopyLastRoute(){
+  var list=mileage.myRequests.slice().sort(function(a,b){return a.date<b.date?1:-1;});
+  if(!list.length){showAlert("コピーできる過去の申請がありません");return;}
+  mileage.draft.placeIds=(list[0].placeIds||[]).slice();
+  render();
+}
+
+async function mileageSubmit(){
+  if(mileage.busy)return;
+  var d=mileage.draft;
+  if(!d.date){showAlert("日付を選んでください");return;}
+  var ids=d.placeIds.filter(function(v){return !!v;});
+  if(ids.length!==d.placeIds.length){showAlert("すべての地点を選んでください");return;}
+  if(ids.length<2){showAlert("地点を2つ以上選んでください");return;}
+  var route=mileageBuildRoute(ids);
+  if(route.missing.length){
+    showAlert("この区間の距離が登録されていません。\n\n"
+      +route.missing.map(function(i){return "・"+mileagePlaceName(ids[i])+" → "+mileagePlaceName(ids[i+1]);}).join("\n")
+      +"\n\n管理者が距離を登録すると申請できます。");
+    return;
+  }
+  var g=mileage.gen;
+  mileage.busy=true;render();
+  var res=await mileageApi("saveRequest",{date:d.date,placeIds:ids,note:d.note||""});
+  if(mileageStale(g))return;   // スタッフが切り替わっていたら結果を反映しない
+  mileage.busy=false;
+  if(!res.ok){
+    if(res.data&&res.data.error==="missing_leg"&&Array.isArray(res.data.missing)){
+      showAlert("この区間の距離が登録されていません。\n\n"
+        +res.data.missing.map(function(m){return "・"+(m.fromName||"?")+" → "+(m.toName||"?");}).join("\n")
+        +"\n\n管理者が距離を登録すると申請できます。");
+      // マスタがずれている可能性があるので取り直す
+      mileageBoot();
+    }else{
+      showAlert(mileageErrText(res));
+    }
+    render();return;
+  }
+  mileage.formOpen=false;
+  mileage.draft={date:"",placeIds:[],note:"",editingId:""};
+  var ym=d.date.slice(0,7);
+  await mileageLoadMy(ym);
+  showAlert("申請しました");
+}
+
+function mileageDeleteReq(id){
+  var r=mileage.myRequests.find(function(x){return x.id===id;});
+  if(!r)return;
+  showConfirm(r.date+" の移動距離申請を取り消しますか？",function(){
+    (async function(){
+      if(mileage.busy)return;
+      var g=mileage.gen;
+      mileage.busy=true;
+      var res=await mileageApi("deleteRequest",{ym:mileage.myMonth,requestId:id});
+      if(mileageStale(g))return;
+      mileage.busy=false;
+      if(!res.ok){showAlert(mileageErrText(res));render();return;}
+      await mileageLoadMy(mileage.myMonth);
+    })();
+  });
+}
+
+var MILEAGE_STATUS_BADGE={
+  pending:'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">承認待ち</span>',
+  approved:'<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">承認済み</span>',
+  rejected:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">却下</span>'
+};
+
+/** 経路の表示文字列（ナナイロ → ハルイロ → 本社）。名称はスナップショット優先。 */
+function mileageRouteText(r){
+  if(Array.isArray(r.legs)&&r.legs.length){
+    var names=r.legs.map(function(l){return l.fromName||mileagePlaceName(l.from);});
+    names.push(r.legs[r.legs.length-1].toName||mileagePlaceName(r.legs[r.legs.length-1].to));
+    return names.join(" → ");
+  }
+  return (r.placeIds||[]).map(function(id){return mileagePlaceName(id);}).join(" → ");
+}
+
+/**
+ * 打刻画面の移動距離カード。ON の職員にだけ描画する。
+ * ★ ここで false を返しても権限にはならない（権限はサーバ側）。表示の出し分けだけ。
+ */
+function mileageStaffCardHtml(){
+  if(!mileage.booted||!mileage.enabled)return "";
+  if(!mileage.myMonth){
+    // 初回だけ当月を読みに行く（描画は待たない）
+    mileage.myMonth=mileageThisMonth();
+    setTimeout(function(){mileageLoadMy(mileage.myMonth);},0);
+  }
+  var rate=mileage.settings.ratePerKm,mode=mileage.settings.roundMode;
+  var approvedKm=0,totalKm=0;
+  mileage.myRequests.forEach(function(r){
+    totalKm=mileageRound1(totalKm+r.totalKm);
+    if(r.status==="approved")approvedKm=mileageRound1(approvedKm+r.totalKm);
+  });
+
+  var monthSel='<select onchange="mileageSetMyMonth(this.value)" style="padding:5px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;background:#fff;">'
+    +mileageMonthOptions(mileage.myMonth,mileageRecentMonths())+'</select>';
+
+  // ── 入力フォーム ──
+  var formHtml="";
+  if(mileage.formOpen){
+    var ids=mileage.draft.placeIds;
+    var route=mileageBuildRoute(ids.filter(function(v){return !!v;}));
+    var allChosen=ids.every(function(v){return !!v;})&&ids.length>=2;
+    var rows=ids.map(function(id,i){
+      var legHtml="";
+      if(i>0&&ids[i-1]&&id){
+        var k=ids[i-1]+"__"+id;
+        var km=Object.prototype.hasOwnProperty.call(mileage.legs,k)?mileage.legs[k]:null;
+        legHtml=(km==null)
+          ?'<div style="font-size:.72rem;color:#b91c1c;font-weight:700;padding:2px 0 4px 2px;">⚠ この区間の距離が登録されていません</div>'
+          :'<div style="font-size:.72rem;color:#1e40af;font-weight:700;padding:2px 0 4px 2px;">↓ '+km+' km</div>';
+      }else if(i>0){
+        legHtml='<div style="font-size:.72rem;color:#94a3b8;padding:2px 0 4px 2px;">↓</div>';
+      }
+      return legHtml
+        +'<div style="display:flex;gap:6px;align-items:center;margin-bottom:2px;">'
+        +'<span style="font-size:.72rem;color:#64748b;width:28px;flex:0 0 auto;white-space:nowrap;">'+(i===0?"出発":i+1)+'</span>'
+        +'<select onchange="mileageSetPlace('+i+',this.value)" style="flex:1;min-width:0;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;background:#fff;">'+mileagePlaceOptions(id)+'</select>'
+        +(ids.length>2?'<button onclick="mileageRemovePlace('+i+')" style="flex:0 0 auto;background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:6px 9px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>':'')
+        +'</div>';
+    }).join("");
+
+    var canSubmit=allChosen&&route.missing.length===0&&!mileage.busy;
+    formHtml='<div style="border:1px solid #93c5fd;background:#eff6ff;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
+      +'<div style="font-size:.82rem;font-weight:700;color:#1e3a8a;margin-bottom:8px;">'+(mileage.draft.editingId?"移動距離の申請を修正":"移動距離を申請")+'</div>'
+      +'<label style="font-size:.74rem;font-weight:700;color:#475569;">日付</label>'
+      +'<input type="date" value="'+esc(mileage.draft.date)+'" onchange="mileageSetDate(this.value)" style="width:100%;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;margin:3px 0 10px;">'
+      +'<div style="font-size:.74rem;font-weight:700;color:#475569;margin-bottom:4px;">移動した地点を順番に選んでください</div>'
+      +rows
+      +'<div style="display:flex;gap:6px;margin:8px 0;flex-wrap:wrap;">'
+      +'<button onclick="mileageAddPlace()" style="background:#fff;color:#1e40af;border:1px solid #93c5fd;border-radius:2px;padding:8px 12px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">＋ 移動先を追加</button>'
+      +'<button onclick="mileageCopyLastRoute()" style="background:#fff;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:8px 12px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">前回のルートをコピー</button>'
+      +'</div>'
+      +'<div style="background:#fff;border:1px solid #bfdbfe;border-radius:4px;padding:8px 10px;margin-bottom:8px;">'
+      +'<div style="display:flex;justify-content:space-between;font-size:.85rem;font-weight:700;color:#0f172a;"><span>この日の合計距離</span><span style="color:#1e40af;">'+route.totalKm+' km</span></div>'
+      +(route.missing.length
+        ?'<div style="font-size:.74rem;color:#b91c1c;font-weight:700;margin-top:4px;">距離が未登録の区間があるため申請できません</div>'
+        :'<div style="display:flex;justify-content:space-between;font-size:.78rem;color:#475569;margin-top:3px;"><span>参考金額（'+Number(rate)+'円/km）</span><span>'+mileageAmount(route.totalKm,rate,mode).toLocaleString()+' 円</span></div>')
+      +'</div>'
+      +'<label style="font-size:.74rem;font-weight:700;color:#475569;">備考（任意）</label>'
+      +'<input type="text" value="'+esc(mileage.draft.note)+'" oninput="mileageSetNote(this.value)" maxlength="100" placeholder="例：会議のため" style="width:100%;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;margin:3px 0 10px;">'
+      +'<div style="display:flex;gap:8px;">'
+      +'<button '+(canSubmit?"":"disabled ")+'onclick="mileageSubmit()" style="flex:1;background:'+(mileage.busy?"#1e40af":(canSubmit?"#1e40af":"#e2e8f0"))+';color:'+(mileage.busy||canSubmit?"#fff":"#64748b")+';border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:'+(canSubmit?"pointer":"not-allowed")+';font-family:inherit;">'+(mileage.busy?"送信中…":"申請する")+'</button>'
+      +'<button onclick="mileageCancelForm()" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+      +'</div></div>';
+  }
+
+  // ── 当月の一覧 ──
+  var listHtml=mileage.myLoading
+    ?'<div style="font-size:.8rem;color:#64748b;padding:8px 2px;">読み込み中…</div>'
+    :(mileage.myError
+      ?'<div style="font-size:.8rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:8px 10px;">申請一覧を読み込めませんでした。'
+        +'<button onclick="mileageLoadMy(mileage.myMonth)" style="margin-left:8px;background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:3px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button></div>'
+      :mileage.myRequests.length
+      ?mileage.myRequests.map(function(r){
+        var canEdit=r.status!=="approved"&&!mileage.myClosed;
+        return '<div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;margin-bottom:6px;background:#fff;">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:3px;">'
+          +'<span style="font-size:.82rem;font-weight:700;color:#0f172a;">'+esc(r.date)+'</span>'
+          +(MILEAGE_STATUS_BADGE[r.status]||"")
+          +'</div>'
+          +'<div style="font-size:.78rem;color:#475569;line-height:1.5;word-break:break-word;">'+esc(mileageRouteText(r))+'</div>'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;">'
+          +'<span style="font-size:.78rem;font-weight:700;color:#1e40af;">'+Number(r.totalKm)+' km</span>'
+          +(canEdit
+            ?'<span style="display:flex;gap:6px;">'
+              +'<button onclick="mileageOpenForm(\''+escJs(r.id)+'\')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">修正</button>'
+              +'<button onclick="mileageDeleteReq(\''+escJs(r.id)+'\')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">取消</button>'
+              +'</span>'
+            :'')
+          +'</div>'
+          +(r.note?'<div style="font-size:.72rem;color:#8496a7;margin-top:3px;">'+esc(r.note)+'</div>':"")
+          +(r.status==="rejected"&&r.rejectReason?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;">却下理由：'+esc(r.rejectReason)+'</div>':"")
+          +'</div>';
+      }).join("")
+      :'<div style="font-size:.8rem;color:#64748b;padding:8px 2px;">この月の申請はまだありません</div>');
+
+  return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #adb5bd;padding:12px 14px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+    +'<div style="font-size:.9rem;font-weight:700;color:#0f172a;">🚗 移動距離申請</div>'
+    +monthSel
+    +'</div>'
+    +(mileage.myClosed?'<div style="font-size:.74rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 9px;margin-bottom:8px;">この月は確定済みです。内容の変更はできません。</div>':"")
+    +formHtml
+    +(!mileage.formOpen&&!mileage.myClosed
+      ?'<button onclick="mileageOpenForm(\'\')" style="width:100%;background:#eff6ff;color:#1e40af;border:1px solid #93c5fd;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;margin-bottom:10px;">移動距離を申請する</button>'
+      :"")
+    +listHtml
+    +'<div style="border-top:1px solid #e2e8f0;margin-top:8px;padding-top:8px;">'
+    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;"><span>月合計距離（申請中を含む）</span><span style="font-weight:700;">'+totalKm+' km</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;margin-top:2px;"><span>うち承認済み</span><span style="font-weight:700;color:#166534;">'+approvedKm+' km</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:.8rem;color:#475569;margin-top:2px;"><span>適用単価</span><span style="font-weight:700;">'+Number(rate)+' 円/km</span></div>'
+    +'<div style="display:flex;justify-content:space-between;font-size:.86rem;color:#0f172a;margin-top:4px;"><span style="font-weight:700;">支給予定額（承認済み分）</span><span style="font-weight:900;color:#1e40af;">'+mileageAmount(approvedKm,rate,mode).toLocaleString()+' 円</span></div>'
+    +'<div style="font-size:.72rem;color:#64748b;margin-top:4px;">金額は管理者の月次確定で確定します。</div>'
+    +'</div></div>';
+}
+
+// ---- CSV ----
+/**
+ * CSV 1セル。カンマ・引用符・改行を安全に扱い、CSVインジェクション（=,+,-,@ 始まり）も無効化する。
+ * ★ dlCSV が BOM を付けるので Windows 版 Excel でそのまま開いても日本語は化けない。
+ */
+function mileageCsvCell(v){
+  var s=String(v==null?"":v);
+  if(/^[=+\-@]/.test(s))s="'"+s;
+  return '"'+s.replace(/"/g,'""')+'"';
+}
+function mileageCsvRows(rows){
+  return rows.map(function(r){return r.map(mileageCsvCell).join(",");}).join("\r\n");
+}
+
+// ---- 管理者側 ----
+
+function mileageAdminSetTab(t){mileage.adminTab=t;render();}
+
+async function mileageLoadAdmin(ym){
+  var g=mileage.gen;
+  mileage.adminLoading=true;mileage.adminYm=ym;
+  var res=await mileageApi("adminMonth",{ym:ym});
+  if(mileageStale(g))return;
+  if(mileage.adminYm!==ym)return;   // 読み込み中に月が切り替わったら古い応答は捨てる
+  mileage.adminLoading=false;
+  if(res.ok&&res.data){
+    mileage.adminData=res.data;
+    if(res.data.enabledMap&&typeof res.data.enabledMap==="object")mileage.enabledMap=res.data.enabledMap;
+  }
+  else{mileage.adminData=null;if(res.status!==0)showAlert(mileageErrText(res));}
+  if(screen==="admin"&&adminTab==="mileage")render();
+}
+function mileageAdminSetYm(v){
+  if(!/^\d{4}-\d{2}$/.test(v))return;
+  mileage.adminData=null;mileageLoadAdmin(v);
+}
+
+/** 管理者操作の共通処理。実行 → 結果表示 → 当月データ再取得。 */
+async function mileageAdminDo(action,params,okMsg,reloadMaster){
+  if(mileage.busy)return false;
+  var g=mileage.gen;
+  mileage.busy=true;render();
+  var res=await mileageApi(action,params);
+  if(mileageStale(g))return false;
+  mileage.busy=false;
+  if(!res.ok){showAlert(mileageErrText(res));render();return false;}
+  if(reloadMaster)await mileageBoot();
+  if(mileage.adminYm)await mileageLoadAdmin(mileage.adminYm);
+  else render();
+  if(okMsg)showAlert(okMsg);
+  return true;
+}
+
+function mileageApprove(eid,id){mileageAdminDo("approveRequest",{ym:mileage.adminYm,employeeId:eid,requestId:id},"");}
+function mileageReopenReq(eid,id){mileageAdminDo("reopenRequest",{ym:mileage.adminYm,employeeId:eid,requestId:id},"");}
+function mileageReject(eid,id){
+  showPrompt2("却下の理由を入力してください（任意）",function(reason){
+    mileageAdminDo("rejectRequest",{ym:mileage.adminYm,employeeId:eid,requestId:id,reason:reason||""},"");
+  });
+}
+/** 却下理由の入力。既存のカスタムモーダルが prompt を持たないため最小実装で用意する。 */
+function showPrompt2(msg,cb){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10050;display:flex;align-items:center;justify-content:center;padding:20px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:24px;max-width:340px;width:100%;";
+  card.innerHTML='<div style="font-size:.9rem;font-weight:700;color:#0f172a;margin-bottom:10px;">'+esc(msg)+'</div>'
+    +'<input id="mlg-prompt-input" type="text" maxlength="60" style="width:100%;padding:9px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;margin-bottom:12px;">'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button id="mlg-prompt-cancel" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+    +'<button id="mlg-prompt-ok" style="flex:1;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">OK</button>'
+    +'</div>';
+  ov.appendChild(card);document.body.appendChild(ov);
+  function close(){if(ov.parentNode)ov.parentNode.removeChild(ov);}
+  card.querySelector("#mlg-prompt-cancel").onclick=close;
+  card.querySelector("#mlg-prompt-ok").onclick=function(){
+    var v=card.querySelector("#mlg-prompt-input").value;close();cb(v);
+  };
+  ov.onclick=function(e){if(e.target===ov)close();};
+  var inp=card.querySelector("#mlg-prompt-input");if(inp)inp.focus();
+}
+
+/**
+ * 職員単位の一括承認。
+ * ★ 1件ずつ HTTP を往復させない。月末は1人あたり20件前後になるため、
+ *   往復数が数百になって遅く、書込上限にも当たる（承認の途中で止まるのが最悪）。
+ *   サーバ側で1リクエスト＝1書込にまとめる。
+ */
+async function mileageApproveAll(eid){
+  if(mileage.busy)return;
+  var g=mileage.gen;
+  mileage.busy=true;render();
+  var res=await mileageApi("approveAll",{ym:mileage.adminYm,employeeId:eid},30000);
+  if(mileageStale(g))return;
+  mileage.busy=false;
+  if(!res.ok){showAlert(mileageErrText(res));render();return;}
+  await mileageLoadAdmin(mileage.adminYm);
+  var sk=(res.data&&res.data.skipped)||[];
+  if(sk.length){
+    showAlert((res.data.approved||0)+"件を承認しました。\n\n"
+      +"次の"+sk.length+"件は承認できませんでした（区間距離が未登録などのため）：\n"
+      +sk.map(function(x){return "・"+(x.date||"");}).join("\n"));
+  }
+}
+
+// ★ 氏名も必ず送る。サーバは「認証サブジェクト（氏名ハッシュ）→ 社員番号」の対応表を
+//   /mileage 側へ作るため、どの氏名でログインする人かが必要になる。
+function mileageSetEnabledFor(eid,nm,on){
+  mileageAdminDo("setEnabled",{employeeId:eid,staffName:nm,enabled:!!on},"");
+}
+
+function mileageSavePlaceFromForm(){
+  var nameEl=document.getElementById("mlg-place-name");
+  var idEl=document.getElementById("mlg-place-id");
+  var ordEl=document.getElementById("mlg-place-order");
+  var name=(nameEl&&nameEl.value||"").trim();
+  if(!name){showAlert("地点名を入力してください");return;}
+  mileageAdminDo("savePlace",{
+    placeId:(idEl&&idEl.value)||"",name:name,
+    order:ordEl&&ordEl.value!==""?parseInt(ordEl.value,10):undefined,active:true
+  },"地点を保存しました",true);
+}
+function mileageEditPlace(id){
+  var p=mileage.places.find(function(x){return x.id===id;});
+  if(!p)return;
+  var idEl=document.getElementById("mlg-place-id");if(idEl)idEl.value=p.id;
+  var nameEl=document.getElementById("mlg-place-name");if(nameEl)nameEl.value=p.name;
+  var ordEl=document.getElementById("mlg-place-order");if(ordEl)ordEl.value=String(p.order||"");
+  if(nameEl&&nameEl.scrollIntoView)nameEl.scrollIntoView({block:"center"});
+}
+function mileageDeletePlace(id){
+  var p=mileage.places.find(function(x){return x.id===id;});
+  if(!p)return;
+  showConfirm("地点「"+p.name+"」を削除しますか？\nこの地点を含む区間距離もあわせて削除されます。\n（過去の申請に記録済みの経路・距離は変わりません）",function(){
+    mileageAdminDo("deletePlace",{placeId:id},"削除しました",true);
+  });
+}
+function mileageSaveLegFromForm(){
+  var f=document.getElementById("mlg-leg-from"),t=document.getElementById("mlg-leg-to"),
+      k=document.getElementById("mlg-leg-km"),rv=document.getElementById("mlg-leg-rev");
+  var from=f&&f.value,to=t&&t.value,km=k&&k.value;
+  if(!from||!to){showAlert("出発地点と到着地点を選んでください");return;}
+  if(from===to){showAlert("出発地点と到着地点が同じです");return;}
+  var kmN=parseFloat(km);
+  if(!(kmN>0)){showAlert("距離は0より大きい数値を入力してください");return;}
+  mileageAdminDo("saveLeg",{fromId:from,toId:to,km:kmN,alsoReverse:!!(rv&&rv.checked)},"区間距離を保存しました",true);
+}
+function mileageEditLeg(from,to){
+  var f=document.getElementById("mlg-leg-from"),t=document.getElementById("mlg-leg-to"),k=document.getElementById("mlg-leg-km");
+  if(f)f.value=from;if(t)t.value=to;
+  var key=from+"__"+to;
+  if(k)k.value=Object.prototype.hasOwnProperty.call(mileage.legs,key)?String(mileage.legs[key]):"";
+  if(f&&f.scrollIntoView)f.scrollIntoView({block:"center"});
+}
+function mileageDeleteLeg(from,to){
+  showConfirm(mileagePlaceName(from)+" → "+mileagePlaceName(to)+" の距離を削除しますか？",function(){
+    mileageAdminDo("deleteLeg",{fromId:from,toId:to},"削除しました",true);
+  });
+}
+function mileageSaveSettings(){
+  var r=document.getElementById("mlg-rate"),m=document.getElementById("mlg-round");
+  var rate=parseFloat(r&&r.value);
+  if(!(rate>0)){showAlert("km単価は0より大きい数値を入力してください");return;}
+  mileageAdminDo("setSettings",{ratePerKm:rate,roundMode:(m&&m.value)||"round"},"設定を保存しました",true);
+}
+function mileageCloseMonth(){
+  var d=mileage.adminData;if(!d)return;
+  var pend=(d.byStaff||[]).reduce(function(a,s){return a+s.pendingCount;},0);
+  var msg=mileage.adminYm+" の移動距離を確定しますか？\n\n"
+    +"・承認済みの申請だけが給与計算用データになります\n"
+    +"・確定後は職員も管理者も内容を変更できません\n"
+    +"・確定時点の単価と金額が保存され、あとで単価を変えても金額は変わりません"
+    +(pend?"\n\n⚠ 未承認の申請が "+pend+" 件あります。この分は含まれません。":"");
+  showConfirm(msg,function(){
+    mileageAdminDo("closeMonth",{ym:mileage.adminYm},mileage.adminYm+" を確定しました");
+  });
+}
+function mileageReopenMonth(){
+  showConfirm(mileage.adminYm+" の確定を解除しますか？\n\n確定済みの金額スナップショットは削除され、労務士はこの月をダウンロードできなくなります。",function(){
+    mileageAdminDo("reopenMonth",{ym:mileage.adminYm},"確定を解除しました");
+  });
+}
+
+/** 管理者タブ「移動距離」の中身。 */
+function mileageAdminCardHtml(){
+  mileageBootForAdmin();
+  // ★ 対象月の取得は boot（管理者役割トークンの確立）完了後に予約する。
+  //   先に投げると昇格前の 403 で adminData=null のまま adminYm だけ埋まり、
+  //   二度と再取得されず「申請はありません」で固定されてしまう。
+  if(!mileage.booted){
+    return '<div class="admin-card"><div class="admin-title">移動距離申請</div>'
+      +'<div style="font-size:.85rem;color:#64748b;">読み込み中…</div></div>';
+  }
+  if(mileage.bootFailed){
+    // デモ／サンドボックスURLは役割トークンが d / x のため、サーバ側で必ず拒否される。
+    // 「通信できません」ではなく、権限の話であることを伝える。
+    var denied=(mileage.bootStatus===403);
+    return '<div class="admin-card"><div class="admin-title">移動距離申請</div>'
+      +'<div style="font-size:.85rem;color:'+(denied?"#92400e":"#b91c1c")+';background:'+(denied?"#fef3c7":"#fee2e2")+';border:1px solid '+(denied?"#fde68a":"#fecaca")+';border-radius:4px;padding:9px 12px;">'
+      +(denied
+        ?'この画面（デモ／閲覧用URL）では移動距離申請を操作できません。管理者URLまたは管理者PINで入り直してください。'
+        :'移動距離申請のサーバに接続できませんでした。通信状態を確認して画面を再読み込みしてください。')
+      +'</div>'
+      +(denied?''
+        :'<button onclick="mileageBoot().then(render)" style="margin-top:10px;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 16px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button>')
+      +'</div>';
+  }
+
+  if(!mileage.adminYm){
+    mileage.adminYm=mileageThisMonth();
+    setTimeout(function(){mileageLoadAdmin(mileage.adminYm);},0);
+  }
+
+  var T=mileage.adminTab;
+  function tb(k,label){
+    return '<button onclick="mileageAdminSetTab(\''+k+'\')" style="background:none;border:none;border-bottom:3px solid '+(T===k?"#1e40af":"transparent")+';color:'+(T===k?"#1e40af":"#64748b")+';padding:8px 12px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">'+label+'</button>';
+  }
+  var tabs='<div style="display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid #cbd5e1;margin-bottom:10px;">'
+    +tb("requests","申請の承認")+tb("places","地点・区間距離")+tb("settings","単価・端数")
+    +tb("close","月次確定")+tb("staff","利用職員")+'</div>';
+
+  var d=mileage.adminData;
+  var ymSel='<select onchange="mileageAdminSetYm(this.value)" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'
+    +mileageMonthOptions(mileage.adminYm,mileageRecentMonths())+'</select>';
+  var closed=!!(d&&d.closing);
+  var body="";
+
+  // ── 申請の承認 ──
+  if(T==="requests"){
+    var rows=(d&&d.byStaff||[]).map(function(st){
+      var reqs=st.requests.map(function(r){
+        var act=closed?'<span style="font-size:.72rem;color:#94a3b8;">確定済み</span>'
+          :(r.status==="pending"
+            ?'<span style="display:flex;gap:6px;">'
+              +'<button onclick="mileageApprove(\''+escJs(st.employeeId)+'\',\''+escJs(r.id)+'\')" style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">承認</button>'
+              +'<button onclick="mileageReject(\''+escJs(st.employeeId)+'\',\''+escJs(r.id)+'\')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">却下</button>'
+              +'</span>'
+            :'<button onclick="mileageReopenReq(\''+escJs(st.employeeId)+'\',\''+escJs(r.id)+'\')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">取消（未処理へ）</button>');
+        return '<div style="border-top:1px solid #e2e8f0;padding:7px 0;">'
+          +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">'
+          +'<span style="font-size:.82rem;font-weight:700;">'+esc(r.date)+'</span>'
+          +(MILEAGE_STATUS_BADGE[r.status]||"")
+          +'<span style="font-size:.82rem;font-weight:700;color:#1e40af;margin-left:auto;">'+Number(r.totalKm)+' km</span>'
+          +act+'</div>'
+          +'<div style="font-size:.76rem;color:#475569;margin-top:2px;word-break:break-word;">'+esc(mileageRouteText(r))+'</div>'
+          +(r.note?'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">備考：'+esc(r.note)+'</div>':"")
+          +(r.status==="rejected"&&r.rejectReason?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">却下理由：'+esc(r.rejectReason)+'</div>':"")
+          +'</div>';
+      }).join("");
+      return '<div class="admin-card" style="margin-bottom:10px;">'
+        +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">'
+        +'<span style="font-size:.92rem;font-weight:900;">'+esc(st.staffName||st.employeeId)+'<span style="font-size:.72rem;color:#8496a7;font-weight:400;margin-left:6px;">'+esc(st.employeeId)+'</span></span>'
+        +'<span style="font-size:.8rem;color:#166534;font-weight:700;">承認済み '+st.approvedKm+' km</span>'
+        +(st.pendingCount&&!closed
+          ?'<button onclick="mileageApproveAll(\''+escJs(st.employeeId)+'\')" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:5px 12px;font-size:.76rem;font-weight:700;cursor:pointer;font-family:inherit;">未処理'+st.pendingCount+'件をまとめて承認</button>'
+          :'')
+        +'</div>'+reqs+'</div>';
+    }).join("");
+    body=(mileage.adminLoading?'<div style="font-size:.85rem;color:#8496a7;padding:6px 2px;">読み込み中…</div>'
+      :(rows||'<div class="admin-card"><div class="empty">この月の申請はありません</div></div>'));
+  }
+
+  // ── 地点・区間距離 ──
+  if(T==="places"){
+    var placeRows=mileage.places.length?mileage.places.map(function(p){
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e2e8f0;">'
+        +'<span style="font-size:.72rem;color:#94a3b8;width:32px;flex:0 0 auto;">'+(p.order||"")+'</span>'
+        +'<span style="flex:1;font-size:.88rem;font-weight:700;min-width:0;word-break:break-word;">'+esc(p.name)+'</span>'
+        +'<button onclick="mileageEditPlace(\''+escJs(p.id)+'\')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">編集</button>'
+        +'<button onclick="mileageDeletePlace(\''+escJs(p.id)+'\')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:4px 10px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
+        +'</div>';
+    }).join(""):'<div class="empty">地点が未登録です</div>';
+
+    var placeOpts=mileage.places.map(function(p){return '<option value="'+esc(p.id)+'">'+esc(p.name)+'</option>';}).join("");
+    // 距離マトリクス（行=出発地／列=到着地）。方向別が正本なので上下三角を別々に表示する。
+    var missingCount=0;
+    var matrix="";
+    if(mileage.places.length>=2){
+      matrix='<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;">'
+        +'<table style="border-collapse:collapse;font-size:.76rem;min-width:100%;">'
+        +'<tr><th class="sticky-name-col" style="position:sticky;left:0;z-index:3;background:#f1f5f9;border:1px solid #cbd5e1;padding:7px 8px;white-space:nowrap;box-shadow:2px 0 5px rgba(0,0,0,.08);">出発＼到着</th>'
+        +mileage.places.map(function(p){return '<th style="border:1px solid #cbd5e1;background:#f1f5f9;padding:5px 8px;white-space:nowrap;">'+esc(p.name)+'</th>';}).join("")
+        +'</tr>'
+        +mileage.places.map(function(pf){
+          return '<tr><th class="sticky-name-col" style="position:sticky;left:0;z-index:1;background:#f8fafc;border:1px solid #cbd5e1;padding:7px 8px;white-space:nowrap;text-align:left;box-shadow:2px 0 5px rgba(0,0,0,.08);">'+esc(pf.name)+'</th>'
+            +mileage.places.map(function(pt){
+              if(pf.id===pt.id)return '<td style="border:1px solid #cbd5e1;background:#e2e8f0;padding:5px 8px;text-align:center;color:#94a3b8;">—</td>';
+              var key=pf.id+"__"+pt.id;
+              var has=Object.prototype.hasOwnProperty.call(mileage.legs,key);
+              if(!has)missingCount++;
+              return '<td onclick="mileageEditLeg(\''+escJs(pf.id)+'\',\''+escJs(pt.id)+'\')" onmouseover="this.style.outline=\'2px solid #93c5fd\';this.style.outlineOffset=\'-2px\'" onmouseout="this.style.outline=\'\'" style="border:1px solid #cbd5e1;padding:8px;text-align:right;cursor:pointer;white-space:nowrap;background:'+(has?"#fff":"#fef3c7")+';color:'+(has?"#0f172a":"#92400e")+';">'
+                +(has?Number(mileage.legs[key]):'未登録')+'</td>';
+            }).join("")+'</tr>';
+        }).join("")
+        +'</table></div>';
+    }
+
+    body='<div class="admin-card">'
+      +'<div class="admin-title">地点マスタ</div>'
+      +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">職員はここに登録された地点から選ぶだけです。地点数に上限はありません。</div>'
+      +placeRows
+      +'<div style="margin-top:12px;border-top:2px solid #e2e8f0;padding-top:10px;">'
+      +'<input type="hidden" id="mlg-place-id" value="">'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+      +'<input id="mlg-place-name" type="text" maxlength="40" placeholder="地点名（例：本社）" style="flex:1;min-width:160px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;">'
+      +'<input id="mlg-place-order" type="number" placeholder="並び順" style="width:90px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.88rem;font-family:inherit;">'
+      +'<button onclick="mileageSavePlaceFromForm()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+      +'</div>'
+      +'<div style="font-size:.74rem;color:#64748b;margin-top:5px;">「編集」を押すとこの欄に読み込まれます。新規登録するときは地点名だけ入れて保存してください。</div>'
+      +'</div></div>'
+      +'<div class="admin-card">'
+      +'<div class="admin-title">区間距離（方向別）</div>'
+      +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">'
+      +'現行Excelの距離表には <b>ハーベスト→貝塚 5.3km / 貝塚→ハーベスト 11.9km</b> のように方向で違う区間があるため、方向別を正本にしています。'
+      +'往復が同じ距離のときは「逆方向にも同じ距離を登録」にチェックしてください。<br>表のマスを押すと、その区間が上の入力欄へ読み込まれます。</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
+      +'<select id="mlg-leg-from" style="flex:1 1 140px;min-width:0;max-width:100%;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;"><option value="">出発地点</option>'+placeOpts+'</select>'
+      +'<span style="color:#8496a7;">→</span>'
+      +'<select id="mlg-leg-to" style="flex:1 1 140px;min-width:0;max-width:100%;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;"><option value="">到着地点</option>'+placeOpts+'</select>'
+      +'<input id="mlg-leg-km" type="number" step="0.1" min="0.1" placeholder="km" style="width:90px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;">'
+      +'<label style="font-size:.78rem;color:#475569;display:flex;align-items:center;gap:4px;"><input type="checkbox" id="mlg-leg-rev">逆方向にも同じ距離を登録</label>'
+      +'<button onclick="mileageSaveLegFromForm()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+      +'</div>'
+      +(missingCount?'<div style="font-size:.78rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 10px;margin-bottom:8px;">未登録の区間が '+missingCount+' 組あります。職員はその区間を含む申請を確定できません（0kmでは保存されません）。</div>':"")
+      +matrix
+      +'</div>';
+  }
+
+  // ── 単価・端数 ──
+  if(T==="settings"){
+    var st2=mileage.settings;
+    var modeOpts=Object.keys(MILEAGE_ROUND_LABEL).map(function(k){
+      return '<option value="'+k+'"'+(k===st2.roundMode?" selected":"")+'>'+esc(MILEAGE_ROUND_LABEL[k])+'</option>';
+    }).join("");
+    body='<div class="admin-card">'
+      +'<div class="admin-title">km単価・端数処理</div>'
+      +'<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px;">'
+      +'<label style="font-size:.78rem;font-weight:700;color:#475569;">km単価（円/km）<br>'
+      +'<input id="mlg-rate" type="number" step="0.1" min="0.1" value="'+esc(st2.ratePerKm)+'" style="width:120px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;margin-top:3px;"></label>'
+      +'<label style="font-size:.78rem;font-weight:700;color:#475569;">支給額の端数処理<br>'
+      +'<select id="mlg-round" style="padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:.9rem;font-family:inherit;background:#fff;margin-top:3px;">'+modeOpts+'</select></label>'
+      +'<button onclick="mileageSaveSettings()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 18px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">保存</button>'
+      +'</div>'
+      +'<div style="font-size:.76rem;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:4px;padding:8px 10px;line-height:1.7;">'
+      +'<b>現行Excelの実測値</b>：km単価は <b>16円/km</b>（月次シート J5）。<br>'
+      +'金額は「日別 = 単価×その日の距離」を合計しているだけで、<b>1円未満を丸めていません</b>。'
+      +'実際に日別 105.6円・198.4円・390.4円、月合計 1,379.2円・2,590.4円・2,604.8円 といった小数がそのまま保存されています。<br>'
+      +'そのため既定は「<b>丸めない</b>」＝現行Excelと同じ結果です。'
+      +'円単位で支給したい場合だけ、四捨五入・切り捨て・切り上げへ変更してください。<br>'
+      +'丸める場合は「月合計距離 × 単価」に対して1回だけ丸めます（日ごとに丸めると同じ距離でも日の分け方で金額が変わるため）。'
+      +'</div>'
+      +'<div style="font-size:.76rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:8px 10px;margin-top:8px;">'
+      +'ここを変更しても<b>確定済みの月の金額は変わりません</b>。確定時の単価・端数処理・距離・金額を保存しているためです。'
+      +'</div></div>';
+  }
+
+  // ── 月次確定 ──
+  if(T==="close"){
+    var snap=(d&&d.snapshots)||{};
+    var stList=(d&&d.byStaff||[]);
+    var pendTotal=stList.reduce(function(a,s){return a+s.pendingCount;},0);
+    var rate2=(d&&d.closing&&d.closing.ratePerKm)||mileage.settings.ratePerKm;
+    var mode2=(d&&d.closing&&d.closing.roundMode)||mileage.settings.roundMode;
+    // km単価が一度も保存されていない状態では確定させない（サーバも 409 で拒否する）
+    var rateReady=((d&&d.settings&&d.settings.configured===true)||mileage.settings.configured===true);
+    var lines=(closed?Object.keys(snap).map(function(eid){return snap[eid];})
+                     :stList.filter(function(s){return s.approvedKm>0;}).map(function(s){
+                        return {employeeId:s.employeeId,staffName:s.staffName,totalKm:s.approvedKm,
+                                ratePerKm:rate2,roundMode:mode2,
+                                amount:mileageAmount(s.approvedKm,rate2,mode2)};
+                      }))
+      .sort(function(a,b){return String(a.employeeId).localeCompare(String(b.employeeId),"ja");});
+    var sumKm=0,sumYen=0;
+    lines.forEach(function(l){sumKm=mileageRound1(sumKm+Number(l.totalKm||0));sumYen+=Number(l.amount||0);});
+    var tbl=lines.length
+      ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;"><table style="border-collapse:collapse;width:100%;font-size:.82rem;min-width:420px;">'
+        +'<tr style="background:#f1f5f9;"><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">社員番号</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">氏名</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">合計距離</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">単価</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">支給額</th></tr>'
+        +lines.map(function(l){
+          return '<tr><td style="border:1px solid #cbd5e1;padding:8px;">'+esc(l.employeeId)+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:8px;">'+esc(l.staffName)+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+mileageRound1(l.totalKm)+' km</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+Number(l.ratePerKm)+'</td>'
+            +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;font-weight:700;">'+Number(l.amount).toLocaleString()+'</td></tr>';
+        }).join("")
+        +'<tr style="background:#f8fafc;font-weight:700;"><td colspan="2" style="border:1px solid #cbd5e1;padding:8px;">合計</td>'
+        +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumKm+' km</td><td style="border:1px solid #cbd5e1;padding:8px;"></td>'
+        +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumYen.toLocaleString()+'</td></tr>'
+        +'</table></div>'
+      :'<div class="empty">対象となる承認済みの申請がありません</div>';
+    body='<div class="admin-card">'
+      +'<div class="admin-title">月次確定（'+esc(mileageYmLabel(mileage.adminYm))+'）</div>'
+      +(closed
+        ?'<div style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:10px;">✓ 確定済み（労務士がこの月をダウンロードできます）<br>'
+          +'<span style="font-weight:400;font-size:.76rem;">確定単価 '+esc(rate2)+' 円/km・端数処理 '+esc(MILEAGE_ROUND_LABEL[mode2]||mode2)+'</span></div>'
+        :'<div style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:8px 12px;font-size:.82rem;margin-bottom:10px;">未確定です。確定するまで労務士はこの月をダウンロードできません。'
+          +(pendTotal?'<br><b>未承認の申請が '+pendTotal+' 件あります（確定しても含まれません）</b>':'')+'</div>')
+      +tbl
+      +'<div style="margin-top:12px;">'
+      +(closed
+        ?'<button onclick="mileageReopenMonth()" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:2px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">確定を解除する</button>'
+        :(rateReady
+          ?'<button onclick="mileageCloseMonth()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:10px 24px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">この月を確定する</button>'
+          :'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;">km単価が未設定のため確定できません。「単価・端数」タブで単価を保存してください。</div>'))
+      +'</div></div>';
+  }
+
+  // ── 利用職員 ──
+  if(T==="staff"){
+    var enabledMap=(d&&d.enabledMap)||mileage.enabledMap||{};
+    var listSrc=staffList.filter(function(s){return s.status!=="退職";})
+      .sort(function(a,b){return (a.yomi||a.name||"").localeCompare(b.yomi||b.name||"","ja");});
+    var onCount=listSrc.filter(function(s){return enabledMap[(s.employeeId||"").trim()]===true;}).length;
+    body='<div class="admin-card">'
+      +'<div class="admin-title">移動距離申請の利用職員（'+onCount+'名）</div>'
+      +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">初期値は全員「使用しない」です。OFFの職員には申請メニューが出ず、URLを直接開いてもサーバ側で拒否されます。<br>スタッフ管理画面の各職員設定からも変更できます。</div>'
+      +listSrc.map(function(s){
+        var eid=(s.employeeId||"").trim();
+        var on=enabledMap[eid]===true;
+        if(!eid){
+          return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e2e8f0;">'
+            +'<span style="flex:1;font-size:.86rem;">'+esc(s.name)+'</span>'
+            +'<span style="font-size:.74rem;color:#b45309;">社員番号が未設定のため利用できません</span></div>';
+        }
+        return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #e2e8f0;">'
+          +'<span style="flex:1;font-size:.86rem;min-width:0;word-break:break-word;">'+esc(s.name)+'<span style="font-size:.72rem;color:#8496a7;margin-left:6px;">'+esc(eid)+'</span></span>'
+          +'<span style="font-size:.74rem;font-weight:700;color:'+(on?"#166534":"#8496a7")+';width:64px;text-align:right;">'+(on?"使用する":"使用しない")+'</span>'
+          +'<button onclick="mileageSetEnabledFor(\''+escJs(eid)+'\',\''+escJs(s.name)+'\','+(on?"false":"true")+')" style="background:'+(on?"#fee2e2":"#dcfce7")+';color:'+(on?"#b91c1c":"#166534")+';border:1px solid '+(on?"#fecaca":"#86efac")+';border-radius:2px;padding:4px 12px;font-size:.74rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(on?"OFFにする":"ONにする")+'</button>'
+          +'</div>';
+      }).join("")
+      +'</div>';
+  }
+
+  return '<div class="admin-card" style="padding-bottom:6px;">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+    +'<div class="admin-title" style="margin:0;">🚗 移動距離申請</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+ymSel+'</div>'
+    +'</div>'+tabs+'</div>'+body;
+}
+
+// ---- 労務士（閲覧用URL）側 ----
+
+async function mileageLoadReport(ym){
+  var g=mileage.gen;
+  mileage.viewLoading=true;mileage.viewTried=true;mileage.viewYm=ym||"";
+  var res=await mileageApi("monthlyReport",{ym:ym||"",withDetail:true});
+  if(mileageStale(g))return;
+  if(mileage.viewYm!==(ym||""))return;   // 読み込み中に月が切り替わったら古い応答は捨てる
+  mileage.viewLoading=false;
+  if(res.ok&&res.data){
+    mileage.viewData=res.data;
+    if(Array.isArray(res.data.closedMonths))mileage.viewClosedMonths=res.data.closedMonths;
+  }else{
+    mileage.viewData=null;
+    if(res.status!==0)showAlert(mileageErrText(res));
+  }
+  if(viewerMode)render();
+}
+function mileageViewSetYm(v){
+  if(!/^\d{4}-\d{2}$/.test(v))return;
+  mileage.viewData=null;mileage.viewTried=false;mileageLoadReport(v);
+}
+
+function mileageViewerCardHtml(){
+  mileageBootForViewer();
+  if(!mileage.booted){
+    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
+  }
+  // ★ 一度だけ取得する。失敗しても再スケジュールしない（render→取得→render の無限ループ防止）
+  if(!mileage.viewTried&&!mileage.viewLoading){
+    setTimeout(function(){mileageLoadReport(mileage.viewYm||"");},0);
+    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
+  }
+  if(mileage.viewLoading&&!mileage.viewData){
+    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div></div>';
+  }
+  if(!mileage.viewData){
+    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+      +'<div style="font-size:.85rem;color:#b91c1c;">データを取得できませんでした。</div>'
+      +'<button onclick="mileage.viewTried=false;render();" style="margin-top:8px;background:#1e40af;color:#fff;border:none;border-radius:2px;padding:8px 16px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">再試行</button></div>';
+  }
+  var months=mileage.viewClosedMonths||[];
+  if(!months.length){
+    return '<div class="admin-card"><div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">🚗 移動距離</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;">ダウンロードできる確定済みの月がまだありません。</div></div>';
+  }
+  if(!mileage.viewYm){
+    mileage.viewYm=months[0];
+    setTimeout(function(){mileageLoadReport(mileage.viewYm);},0);
+  }
+  var rows=(mileage.viewData&&mileage.viewData.rows)||[];
+  var sumKm=0,sumYen=0;
+  rows.forEach(function(r){sumKm=mileageRound1(sumKm+Number(r.totalKm||0));sumYen+=Number(r.amount||0);});
+  var monthSel='<select onchange="mileageViewSetYm(this.value)" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'
+    +months.map(function(m){return '<option value="'+esc(m)+'"'+(m===mileage.viewYm?" selected":"")+'>'+esc(mileageYmLabel(m))+'</option>';}).join("")
+    +'</select>';
+  var tbl=rows.length
+    ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;"><table style="border-collapse:collapse;width:100%;font-size:.82rem;min-width:440px;">'
+      +'<tr style="background:#f1f5f9;"><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">社員番号</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:left;">氏名</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">合計距離</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">単価</th><th style="border:1px solid #cbd5e1;padding:7px 8px;text-align:right;">支給額</th></tr>'
+      +rows.map(function(r){
+        return '<tr><td style="border:1px solid #cbd5e1;padding:8px;">'+esc(r.employeeId)+'</td>'
+          +'<td style="border:1px solid #cbd5e1;padding:8px;">'+esc(r.staffName)+'</td>'
+          +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+mileageRound1(r.totalKm)+' km</td>'
+          +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+Number(r.ratePerKm)+'</td>'
+          +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;font-weight:700;">'+Number(r.amount).toLocaleString()+'</td></tr>';
+      }).join("")
+      +'<tr style="background:#f8fafc;font-weight:700;"><td colspan="2" style="border:1px solid #cbd5e1;padding:8px;">合計</td>'
+      +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumKm+' km</td><td style="border:1px solid #cbd5e1;padding:8px;"></td>'
+      +'<td style="border:1px solid #cbd5e1;padding:8px;text-align:right;">'+sumYen.toLocaleString()+'</td></tr>'
+      +'</table></div>'
+    :(mileage.viewLoading?'<div style="font-size:.85rem;color:#8496a7;">読み込み中…</div>':'<div class="empty">この月のデータはありません</div>');
+
+  return '<div class="admin-card">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">'
+    +'<div style="margin:0;font-size:1rem;font-weight:900;color:#0f172a;">🚗 移動距離（確定済みのみ）</div>'
+    +'<div style="display:flex;align-items:center;gap:6px;"><span style="font-size:.78rem;color:#475569;font-weight:700;">対象月</span>'+monthSel+'</div>'
+    +'</div>'
+    +'<div style="font-size:.76rem;color:#64748b;margin-bottom:8px;">管理者が確定した月だけが表示されます。金額は確定時に保存された値で、あとから単価を変更しても変わりません。</div>'
+    +tbl
+    +'<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px;">'
+    +'<button onclick="mileageDownloadCsv()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 月次CSV</button>'
+    +'<button onclick="mileageDownloadDetailCsv()" style="background:#1e40af;color:#fff;border:none;border-radius:2px;padding:9px 20px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">📥 日別明細CSV</button>'
+    +'</div></div>';
+}
+
+// ---- スタッフ管理モーダルの「移動距離申請：使用する」 ----
+
+/**
+ * モーダルを開いたときに現在のON/OFFを反映する。
+ * ★ 値はサーバ（/mileage/enabled）が正本。tc5_staff には保存しない。
+ *   tc5_staff は /honomi 配下で誰でも書けるため、そこに置くと職員が自分でONにできてしまう。
+ */
+function mileageFillStaffModal(s){
+  var cb=document.getElementById("modal-mileage-enabled");
+  var note=document.getElementById("modal-mileage-note");
+  if(!cb)return;
+  var eid=(s&&typeof s.employeeId==="string")?s.employeeId.trim():"";
+  mileage.modalEid=eid;
+  mileage.modalName=(s&&s.name)||"";
+  mileage.modalWas=false;
+  cb.checked=false;
+  function apply(){
+    var on=eid?(mileage.enabledMap[eid]===true):false;
+    cb.checked=on;cb.disabled=false;mileage.modalWas=on;
+    if(note){
+      note.textContent=!eid
+        ? "社員番号の入力が必要です。社員番号を入れて保存すると有効になります。"
+        : (on?"この職員は移動距離申請を利用できます。":"OFFの職員には申請メニューが表示されず、サーバ側でも拒否されます。");
+    }
+  }
+  if(mileage.booted&&mileage.role==="a"){apply();return;}
+  cb.disabled=true;
+  if(note)note.textContent="読み込み中…";
+  mileage.booting=true;
+  (async function(){
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    await mileageBoot();
+    // モーダルが閉じた／別の職員に切り替わった後の遅延反映を防ぐ
+    if(mileage.modalEid!==eid)return;
+    if(mileage.role==="a"){apply();}
+    else if(note){note.textContent="設定を読み込めませんでした。通信状態を確認してください。";}
+  })().catch(function(){
+    mileage.booting=false;
+    if(note&&mileage.modalEid===eid)note.textContent="設定を読み込めませんでした。";
+  });
+}
+
+/**
+ * スタッフ保存時に、変更があったときだけサーバへ反映する。
+ * ★ 既存のスタッフ保存（tc5_staff）とは独立。失敗しても既存項目の保存は成立させ、
+ *   利用可否だけが未反映であることを利用者へ知らせる（黙って成功扱いにしない）。
+ */
+function mileageSaveStaffModal(newName){
+  var cb=document.getElementById("modal-mileage-enabled");
+  if(!cb||cb.disabled)return;
+  var want=!!cb.checked;
+  var oldEid=mileage.modalEid;
+  var oldName=mileage.modalName;
+  // ★ 社員番号も氏名もこのモーダルで変更されうる。保存対象は「保存される値」。
+  var empEl=document.getElementById("modal-empid");
+  var eid=((empEl&&empEl.value)||"").trim();
+  var nm=String(newName||"").trim();
+  if(!eid){
+    if(want)showAlert("移動距離申請を有効にするには社員番号の登録が必要です。\n社員番号を入力してから、もう一度保存してください。");
+    return;
+  }
+  if(!nm)return;
+  var rebind=(oldEid&&oldEid!==eid)?oldEid:"";
+  // ★ 移動距離を「今も使わない・以前も使っていない」職員には何も送らない。
+  //   改名しただけで対応表の行が生えるのを防ぐ。
+  if(!want&&!mileage.modalWas)return;
+  var changed=!!rebind||(oldName&&oldName!==nm);
+  // ★ 前回の送信が失敗していたら、差分が無くても必ず送り直す。
+  //   失敗を放置すると tc5_staff（新氏名）とサーバの対応表（旧氏名）が食い違ったまま、
+  //   モーダルを開き直しても「差分なし」で再送されず、当人が 403 のままになる。
+  var mustResend=!!mileage.syncFailed[eid];
+  if(!changed&&want===mileage.modalWas&&!mustResend)return;
+  var g=mileage.gen;
+  (async function(){
+    // ★ 社員番号の付け替えは1回の呼び出しで完結させる。
+    //   「旧番号をOFF → 新番号をON」の2段にすると、片方だけ成功したときに
+    //   「OFFにはなったが新番号では有効化できない」復旧不能な状態が残る。
+    var res=await mileageApi("setEnabled",{
+      employeeId:eid,staffName:nm,enabled:want,rebindFrom:rebind||undefined
+    });
+    if(mileageStale(g))return;
+    if(!res.ok){
+      mileage.syncFailed[eid]=true;   // 次回の保存で必ず送り直す
+      showAlert("移動距離申請の利用設定を保存できませんでした。\n"+mileageErrText(res)
+        +"\n\n（そのほかのスタッフ情報は保存されています）");
+      return;
+    }
+    delete mileage.syncFailed[eid];
+    if(rebind)delete mileage.enabledMap[rebind];
+    if(want)mileage.enabledMap[eid]=true;else delete mileage.enabledMap[eid];
+    mileage.modalEid=eid;mileage.modalName=nm;mileage.modalWas=want;
+    var d2=res.data||{};
+    var msgs=[];
+    if(d2.previousEmployeeId&&d2.previousEmployeeId!==eid){
+      msgs.push("社員番号を "+d2.previousEmployeeId+" から "+eid+" へ付け替えました。\n"
+        +"過去の申請・確定済みデータは旧番号のまま残ります。\n"
+        +"旧番号は他の職員へ再利用できないようにしました。");
+    }
+    if(d2.reboundSubjects>0&&!d2.previousEmployeeId){
+      msgs.push("以前の登録名に紐づいていた利用許可を "+d2.reboundSubjects+" 件外しました。");
+    }
+    // ★ 直前に登録されたPINは、第三者が氏名を細工して先にPINを取った可能性がある。
+    //   管理者がその場で気づけるように、登録が新しいときだけ知らせる。
+    if(want&&d2.created&&typeof d2.pinUpdatedAt==="number"&&d2.pinUpdatedAt>0){
+      var ageH=(Date.now()-d2.pinUpdatedAt)/3600000;
+      if(ageH<48){
+        msgs.push("⚠ この職員のPINは "+isoToJSTDateTime(new Date(d2.pinUpdatedAt).toISOString())+" に登録されています。\n"
+          +"心当たりがない場合は、本人が登録したものか確認してください。\n"
+          +"（本人が最近PINを変更した場合や、久しぶりにログインした場合にも表示されます）");
+      }
+    }
+    if(msgs.length)showAlert(msgs.join("\n\n"));
+    if(screen==="admin"&&adminTab==="mileage")render();
+  })().catch(function(){});
+}
+
+function mileageDownloadCsv(){
+  var d=mileage.viewData;
+  if(!d||!d.closed||!Array.isArray(d.rows)||!d.rows.length){showAlert("ダウンロードできるデータがありません");return;}
+  var out=[["社員番号","氏名","対象年月","合計距離(km)","単価(円/km)","支給額(円)"]];
+  d.rows.forEach(function(r){
+    out.push([r.employeeId,r.staffName,r.ym,mileageRound1(r.totalKm),r.ratePerKm,r.amount]);
+  });
+  dlCSV(mileageCsvRows(out),"移動距離_月次_"+d.ym+".csv");
+}
+function mileageDownloadDetailCsv(){
+  var d=mileage.viewData;
+  if(!d||!d.closed||!Array.isArray(d.detail)||!d.detail.length){showAlert("ダウンロードできる明細がありません");return;}
+  var out=[["社員番号","氏名","対象年月","日付","経路","距離(km)","備考"]];
+  d.detail.forEach(function(r){
+    out.push([r.employeeId,r.staffName,d.ym,r.date,r.route,mileageRound1(r.totalKm),r.note||""]);
+  });
+  dlCSV(mileageCsvRows(out),"移動距離_日別明細_"+d.ym+".csv");
 }
 
 // ===== \u6709\u7D66\u7533\u8ACB\u30E6\u30FC\u30C6\u30A3\u30EA\u30C6\u30A3 =====
