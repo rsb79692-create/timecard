@@ -460,7 +460,9 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
   - アプリ本体: `git push origin main` → **GitHub Pages が自動デプロイ**（`https://rsb79692-create.github.io/timecard/`）。本リポジトリに Pages 用ワークフローや `CNAME` は無く、ブランチ配信前提（Pages 設定自体はリポジトリ設定側で管理＝リポジトリ内からは設定値まで未確認）。
-  - 通知 API: `api/*.js` は Vercel（`timecard-rho.vercel.app`）。**Vercel が本リポジトリから自動デプロイされるか否かは未確認**（`vercel.json` / `.vercel` はリポジトリ内に無い）。Agent から `vercel --prod` 等の手動デプロイはしない。
+  - API: `api/*.js` は Vercel（`timecard-rho.vercel.app`）。**`git push origin main` で Production へ自動デプロイされる**（2026-08-14 実測で確定。旧記載の「未確認」を訂正）。`vercel.json` は無いが `.vercel/`（プロジェクトリンク）は存在する。Agent から `vercel --prod` 等の手動デプロイはしない。
+    - 確認方法: `vercel ls --prod` で最新 Production が `● Ready`、`vercel inspect <deployment>` または Vercel MCP の `get_deployment` で `meta.githubCommitSha` が push した commit と一致することを確認する（実測時は `source: "git"` / `githubDeployment: "1"` / alias に `timecard-rho.vercel.app` を含むことも確認済み）。
+    - ⚠ **GitHub Pages（アプリ本体）と Vercel（API）は別系統で、同じ push から独立に反映される。** 出荷確認は両方を見ること。
   - GitHub Actions のワークフローは push で反映されるが、**ワークフローや Secrets は Agent から変更しない**。
 
 ---
@@ -475,7 +477,7 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 | Firebase Storage | `storage.rules` あり（書類/写真アップロード用と推測されるが詳細は**未確認**） |
 | Firebase Hosting | **不使用**（`firebase.json` に `hosting` 定義なし） |
 | GitHub Pages | アプリ本体の配信先。`https://rsb79692-create.github.io/timecard/`（コード内 URL から確認） |
-| Vercel | 通知 API（`api/*.js`）の配信先 `timecard-rho.vercel.app`。本リポジトリとの自動デプロイ連携の有無は**未確認** |
+| Vercel | API（`api/*.js`：通知・認証・移動距離）の配信先 `timecard-rho.vercel.app`。**本リポジトリの `main` push から Production へ自動デプロイされる**（2026-08-14 実測。`source: "git"` / `githubDeployment: "1"`） |
 
 ---
 
