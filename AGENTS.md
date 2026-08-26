@@ -65,7 +65,7 @@
 
 ## 主要機能
 
-- **打刻**: Realtime Database `tc5_records`（`index.html`）。
+- **打刻**: Realtime Database `tc5_records`（`index.html`）。送信はオフラインキュー経由（下記「打刻のオフラインキュー」）。
 - **打刻修正申請**: `tc5_correction_requests`。承認は `tc5_approvals`。未対応申請は FCM Push で通知（`scripts/fcm-check.js`）。
 - **有給**: 申請 `tc5_paid_leave_requests`、残数 `tc5_paid_leave_balances`。付与・承認時にスタッフ本人へアプリ内通知（直近コミットで実装）。
 - **月別出勤日数**: `tc5_monthly_days_import`（`scripts/fix-monthly-days-year.js` は年度補正用の保守スクリプト）。関連: ルートの `勤務日数管理.xlsx`。
@@ -532,6 +532,122 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 
 ---
 
+## 打刻のオフラインキュー（2026-08-26 追加）
+
+打刻は**押した瞬間に端末側で確定**し、Firebase への送信結果を待たない。
+送信できなくても打刻は端末に残り、通信が戻った時点で自動的に送り直される。
+実装は `index.html` の `// ===== PUNCH-OUTBOX-BEGIN =====` 〜 `END` ブロック。
+
+### 経路
+
+```
+打刻ボタン → doPunch()（既存の重複・順序チェック）
+           → _execPunch()  eventId 採番・打刻時刻確定
+           → records.push(nr)                     … メモリ（画面はここで即「打刻済み」）
+           → punchOutboxSave(nr)
+                ├ localStorage "tc5_records"      … 従来どおりの打刻キャッシュ
+                ├ localStorage "tc5_punch_outbox" … 未送信分だけ（同期・小容量）
+                ├ IndexedDB  timecard_punch_outbox … 未送信分の主保存先（非同期）
+                └ punchOutboxFlush()              … 送信（結果を待たない）
+```
+
+★ **`_execPunch` から `saveRecord()` を直接呼ぶ形に戻してはならない。**
+戻すと送信失敗時に打刻が端末から消え、再送もされない。
+管理者の修正・追加（`saveRecord` / `patchRecord`）は従来どおりで、キューを通さない
+（既にサーバにあるノードを編集する操作なので、存在確認つき再送とは意味が違う）。
+
+### 二重登録が起きない理由
+
+送信先は必ず `/tc5_records/{eventId}.json` への **PUT**。`eventId` は打刻時に端末が採番した
+一意キーで、RTDB では「キー＝ノード」なので、同じ `eventId` を何度 PUT しても
+1ノードを上書きするだけで行は増えない（キーによる冪等性）。
+★ **`POST`（push）でサーバ採番させてはならない。** 再送のたびに別ノードができて支給に直結する。
+★ **`eventId` を送信のたびに採り直してはならない。**
+
+2回目以降の送信は **GET で存在確認してから書く**。これにより
+「サーバには保存されたがクライアントは失敗扱い（タイムアウト・電波断）」の打刻を再送しても、
+上書きせず完了扱いにする。**管理者がその直後に時刻を修正していた場合も、再送で巻き戻さない。**
+
+RTDB に UNIQUE 制約に相当する機能は無く、`database.rules.json` は変更していない
+（変更は人間の確認が必要）。冪等性は上記のキー設計で担保している。
+
+### 時刻の区別
+
+| フィールド | 意味 | 備考 |
+|---|---|---|
+| `timestamp` / `time` / `date` | **実際に打刻ボタンを押した時刻（端末時刻）** | 正本。既存の勤怠集計はこれを見る。**再送しても絶対に変えない** |
+| `sentAt` | 送信を実行した時刻（端末時刻） | 追加フィールド |
+| `serverReceivedAt` | サーバ（RTDB）が受け取った時刻 | `{".sv":"timestamp"}` でサーバ側が入れる |
+| `eventId` | 打刻イベントの一意キー（`id` と同値） | 保存先ノード名と同じ |
+
+8:03 に打刻して 10:15 に送信できた場合でも、打刻時刻は **8:03** のまま。
+`serverReceivedAt` の PUT が 4xx で拒否された場合だけ、`serverReceivedAt` を外して1回だけ書き直す
+（サーバ受信時刻は付加情報であり、打刻本体を落としてまで守らない）。
+
+追加したのはこの3フィールドだけで、既存の打刻・修正・管理者操作・勤怠集計・移動距離自動集計の
+データ構造は変えていない。
+
+### 再送の契機
+
+・アプリ起動時（`initFirebase`）
+・通信復旧（`online`）
+・画面復帰（`visibilitychange` / `pageshow`）
+・打刻画面の表示
+・10秒ポーリング（`listenFirebase`）
+
+失敗時のバックオフは 5s → 10s → 20s …（上限5分）。
+ただし **通信復旧・起動・画面復帰は「状況が変わった契機」なのでバックオフを待たない**（最低3秒だけあける）。
+
+### 警告
+
+通常の一時的な通信断では**何も表示しない**（送信中・送信待ち・同期中の表示は出さない）。
+**最古の未送信が5分以上経過、または送信失敗が5回以上**になったときだけ、
+打刻画面とスタッフ選択画面に「⚠ 未送信の打刻があります（N件）」を表示する。
+（再送間隔が 5s→10s→20s→40s→80s なので、5回失敗＝約2.5分。5分は「一時的な断ではない」の目安）
+
+### 未送信打刻を消さないための約束
+
+サーバから `tc5_records` を取り直す箇所では、必ず `punchOutboxMergeInto(arr)` を通す。
+通さないと**サーバ応答で `records` を差し替えた瞬間に未送信打刻が画面から消える**。
+現在の該当箇所は3つ（起動時 `initFirebase`／10秒ポーリング／管理画面「朝出勤確認 — 最新状態に更新」）。
+**`tc5_records` の再取得を新しく足すときは、同じ処理を必ず入れること。**
+
+### スタッフテスト画面・管理者デモ・閲覧用URLでは動かさない
+
+`punchOutboxEnabled()` は `writePolicy==="full" && !viewerMode` のときだけ真。
+テスト打刻を端末へ残して本番へ再送しないための境界であり、**緩めてはならない**。
+無効時は従来どおり `saveRecord()` へ委譲する（sandbox の擬似成功・デモの遮断がそのまま働く）。
+
+### 起動が通信断で止まらないようにした変更（同時に実施）
+
+・`initFirebase` 冒頭の `await getAuthToken()` を try/catch で包んだ。
+　以前は通信断で例外になり `firebaseError=true` → **「通信エラーです」画面でスタッフを選べず、打刻自体ができなかった**。
+・上記で通信断時もスタッフ選択へ到達できるようになるため、`staffPinsLoaded` を追加した。
+　`tc5_pins` を**取得できていない状態では「PIN未登録」と断定できない**ため、PIN新規登録へ進めず案内だけ出す。
+　★ これが無いと、PIN未取得のまま新規登録して `staffPins={本人だけ}` を `/tc5_pins` へ全置換PUTし、
+　**他スタッフのPINを全消しする**（`saveData("tc5_pins", …)` は全体PUT）。この経路は変更前から存在した。
+
+### 既知の制限（未解消・運用で認識しておくこと）
+
+1. **完全オフラインでの「アプリ再起動後の新規ログイン」はできない。**
+   PIN照合材料（`tc5_pins`）は仕様上 localStorage へ保存しない。4桁PINのハッシュは総当たりで復元できるため、
+   端末保存は認可の後退になる。したがってオフライン時は上記の案内を出して止める。
+   **すでにログイン済み（打刻画面を開いたまま）の打刻・ページ更新後の未送信打刻の保持・復旧後の自動送信は動作する。**
+2. **端末時刻がずれていると打刻時刻もずれる。** 打刻時刻は端末時刻で確定するため（変更前から同じ）。
+   `serverReceivedAt` と突き合わせれば事後に検出できる。
+3. **未送信のまま端末を初期化・ブラウザデータを削除すると打刻は失われる。** 端末保存の性質上避けられない。
+   警告表示（5分／5回）が唯一の検知手段なので、**警告条件を緩める変更をしてはならない**。
+4. **`tc5_records` の localStorage キャッシュは従来どおり全件を持つ**（本変更では触っていない）。
+   未送信キュー（`tc5_punch_outbox`）は未送信分だけで、通常0〜数件。
+
+### テスト
+
+`node scripts/test-punch-outbox.js`（依存パッケージなし・送信なし・本番データ非アクセス）。
+**打刻に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。
+テスト件数は増減するため固定値を規範にしない。
+
+---
+
 ## 使用技術
 
 - **フロントエンド**: 単一 `index.html`（バニラ JS、ビルドなし）。Firebase JS SDK 10.12.0（`firebase-app-compat` / `firebase-messaging-compat`、CDN）。
@@ -561,6 +677,7 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
   - **移動距離申請の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-mileage.js`。金額計算・端数処理・未登録区間・権限マトリクス（労務士に書込系が入らないこと）・クライアント/サーバの計算一致・CSV形式を検証する。**移動距離申請（`api/mileage.js` / `api/_lib/mileage.js` / `index.html` の移動距離モジュール）に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **管理者トークン状態の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-admin-token-state.js`。`index.html` の管理者URLトークン「設定状態」判定ブロックを抽出して検証する。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **有給「付与日数の修正」の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-paid-leave-grant-edit.js`。`index.html` の付与日数修正ブロックを抽出し、残日数の再計算式・下限判定・確認表示と保存値の一致・`usedDays` と他の付与行を変更しないことを検証する。**有給の付与日数修正・残日数の計算に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
+  - **打刻オフラインキューの回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-punch-outbox.js`。`index.html` の `PUNCH-OUTBOX-BEGIN/END` ブロックを抽出し、端末保存・自動再送・二重登録防止・打刻時刻の不変性・警告条件・sandbox/デモ/閲覧用での無効化・`index.html` 側の結線を検証する。**打刻に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
   - アプリ本体: `git push origin main` → **GitHub Pages が自動デプロイ**（`https://rsb79692-create.github.io/timecard/`）。本リポジトリに Pages 用ワークフローや `CNAME` は無く、ブランチ配信前提（Pages 設定自体はリポジトリ設定側で管理＝リポジトリ内からは設定値まで未確認）。
@@ -678,8 +795,9 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 5. **移動距離申請の回帰テスト**: `node scripts/test-mileage.js`（全件 PASS / 0 FAIL を確認）。**移動距離申請に関係する変更では実行必須**。関係しない変更では実施不要（その旨を報告する）
 6. **管理者トークン状態の回帰テスト**: `node scripts/test-admin-token-state.js`（全件 PASS / 0 FAIL を確認）。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 7. **有給付与日数修正の回帰テスト**: `node scripts/test-paid-leave-grant-edit.js`（全件 PASS / 0 FAIL を確認）。**有給の付与日数修正・残日数の計算に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
-8. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
-9. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
+8. **打刻オフラインキューの回帰テスト**: `node scripts/test-punch-outbox.js`（全件 PASS / 0 FAIL を確認）。**打刻・`_execPunch`・`tc5_records` への書き込み・起動時／polling の打刻取得に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+9. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
+10. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 
 総合判定は「出荷可 / 要修正」。要修正なら ship に進まない。
 

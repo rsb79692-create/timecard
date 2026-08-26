@@ -762,6 +762,341 @@ function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
 }
 
+// ===== PUNCH-OUTBOX-BEGIN =====
+// 打刻の端末保存と自動再送（オフラインキュー）
+//
+// 目的: 打刻は押した瞬間に端末側で確定させ、Firebase への送信結果を待たない。
+//       送信に失敗しても打刻を失わず、通信が戻った時点で自動的に送り直す。
+//
+// ★ 二重登録が起きない理由（設計の核）
+//   送信先は必ず /tc5_records/{eventId}.json であり、eventId は打刻時に端末が採番した
+//   一意キーである。RTDB は「キー＝ノード」なので、同じ eventId を何度 PUT しても
+//   同じ1ノードを上書きするだけで、行が増えることはない（キーによる冪等性）。
+//   POST（push）で採番させると再送のたびに別ノードができるため、絶対に使わない。
+//   さらに2回目以降の送信は GET で存在確認してから書くため、
+//   「サーバには保存されたがクライアントは失敗扱い」の場合は書き直さずに完了扱いにする
+//   （管理者が直後に修正していた場合でも、その修正を再送で巻き戻さない）。
+//
+// ★ 時刻の区別
+//   timestamp / time / date … 実際に打刻ボタンを押した時刻（端末時刻）。正本。再送しても変えない。
+//   sentAt                  … 送信を実行した時刻（端末時刻）。
+//   serverReceivedAt        … サーバ（RTDB）が受け取った時刻。{".sv":"timestamp"} でサーバ側が入れる。
+//   送信時刻を打刻時刻として使うことは無い。
+//
+// ★ 保存先
+//   主保存 = IndexedDB（timecard_punch_outbox）。ページ更新・アプリ再起動・通信断で消えない。
+//   併用   = localStorage（未送信分のみの小さな配列）。IndexedDB は非同期のため、
+//            押した瞬間に同期的に残す退避先として使う。IndexedDB が使えない端末では
+//            こちらが唯一の保存先になる。打刻データ本体（tc5_records 全件）は従来どおりで、
+//            このキーには未送信の打刻だけを入れる。
+//   両方に同じ eventId で入るため、起動時は eventId で突き合わせて統合する（重複しない）。
+var PUNCH_OUTBOX_DB_NAME="timecard_punch_outbox";
+var PUNCH_OUTBOX_STORE="punches";
+var PUNCH_OUTBOX_LS_KEY="tc5_punch_outbox";
+// 警告の条件。通常の一時的な通信断（数十秒〜数分）では出さない。
+// 再送間隔は 5s→10s→20s→40s→80s… なので、5回失敗＝およそ2.5分経過に相当する。
+// 「5分以上未送信」または「5回以上失敗」を、一時的な断ではない状態として扱う。
+var PUNCH_OUTBOX_WARN_MS=5*60*1000;
+var PUNCH_OUTBOX_WARN_ATTEMPTS=5;
+var PUNCH_OUTBOX_BACKOFF_BASE_MS=5000;
+var PUNCH_OUTBOX_BACKOFF_MAX_MS=5*60*1000;
+var PUNCH_OUTBOX_OPEN_TIMEOUT_MS=1500; // 他タブが握っている等で open が返らない場合の打ち切り
+var punchOutbox={};                     // eventId → {eventId,rec,queuedAt,attempts,lastAttemptAt,lastError}
+var _punchOutboxDb=null;
+var _punchOutboxDbPromise=null;
+var _punchOutboxFlushing=false;
+var _punchOutboxWarnState=false;
+var _punchOutboxTriggersInstalled=false;
+
+// 本番の打刻画面でだけ有効にする。
+// スタッフテスト画面（sandbox）・管理者デモ・閲覧用URLでは、テスト打刻を端末へ残して
+// 本番へ再送してしまうことが無いよう、キュー自体を動かさない。
+function punchOutboxEnabled(){
+  return writePolicy==="full"&&!viewerMode;
+}
+
+function _punchOutboxOpenDb(){
+  if(_punchOutboxDbPromise)return _punchOutboxDbPromise;
+  _punchOutboxDbPromise=new Promise(function(resolve){
+    var done=false;
+    function fin(db){if(done)return;done=true;_punchOutboxDb=db||null;resolve(_punchOutboxDb);}
+    var idb=null;
+    try{idb=(typeof indexedDB!=="undefined"&&indexedDB)?indexedDB:null;}catch(e){idb=null;}
+    if(!idb){fin(null);return;}
+    setTimeout(function(){fin(null);},PUNCH_OUTBOX_OPEN_TIMEOUT_MS);
+    try{
+      var req=idb.open(PUNCH_OUTBOX_DB_NAME,1);
+      req.onupgradeneeded=function(){
+        try{
+          var db=req.result;
+          if(!db.objectStoreNames.contains(PUNCH_OUTBOX_STORE))db.createObjectStore(PUNCH_OUTBOX_STORE,{keyPath:"eventId"});
+        }catch(e){}
+      };
+      // 打ち切り後に開けた場合も、以後の書き込みでは使えるよう参照だけ入れておく
+      req.onsuccess=function(){if(done){_punchOutboxDb=req.result;return;}fin(req.result);};
+      req.onerror=function(){fin(null);};
+      req.onblocked=function(){fin(null);};
+    }catch(e){fin(null);}
+  });
+  return _punchOutboxDbPromise;
+}
+// IndexedDB が使えない端末では常に false / [] を返す（localStorage 側だけで動く）
+function _punchOutboxIdbPut(entry){
+  return _punchOutboxOpenDb().then(function(){
+    var db=_punchOutboxDb;if(!db)return false;
+    return new Promise(function(resolve){
+      try{
+        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readwrite");
+        tx.objectStore(PUNCH_OUTBOX_STORE).put(JSON.parse(JSON.stringify(entry)));
+        tx.oncomplete=function(){resolve(true);};
+        tx.onerror=function(){resolve(false);};
+        tx.onabort=function(){resolve(false);};
+      }catch(e){resolve(false);}
+    });
+  }).catch(function(){return false;});
+}
+function _punchOutboxIdbDelete(id){
+  return _punchOutboxOpenDb().then(function(){
+    var db=_punchOutboxDb;if(!db)return false;
+    return new Promise(function(resolve){
+      try{
+        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readwrite");
+        tx.objectStore(PUNCH_OUTBOX_STORE)["delete"](id);
+        tx.oncomplete=function(){resolve(true);};
+        tx.onerror=function(){resolve(false);};
+        tx.onabort=function(){resolve(false);};
+      }catch(e){resolve(false);}
+    });
+  }).catch(function(){return false;});
+}
+function _punchOutboxIdbAll(){
+  return _punchOutboxOpenDb().then(function(){
+    var db=_punchOutboxDb;if(!db)return [];
+    return new Promise(function(resolve){
+      try{
+        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readonly");
+        var rq=tx.objectStore(PUNCH_OUTBOX_STORE).getAll();
+        rq.onsuccess=function(){resolve(rq.result||[]);};
+        rq.onerror=function(){resolve([]);};
+        tx.onerror=function(){resolve([]);};
+        tx.onabort=function(){resolve([]);};
+      }catch(e){resolve([]);}
+    });
+  }).catch(function(){return [];});
+}
+// 同期の退避先。未送信分だけなので通常は0〜数件で、巨大化しない。
+function _punchOutboxLsSave(){
+  try{
+    var list=punchOutboxPending();
+    if(!list.length){try{localStorage.removeItem(PUNCH_OUTBOX_LS_KEY);}catch(e){}return;}
+    _lsSet(PUNCH_OUTBOX_LS_KEY,JSON.stringify(list));
+  }catch(e){}
+}
+function _punchOutboxLsLoad(){
+  try{
+    var raw=localStorage.getItem(PUNCH_OUTBOX_LS_KEY);
+    if(!raw)return [];
+    var a=JSON.parse(raw);
+    return Array.isArray(a)?a:[];
+  }catch(e){return [];}
+}
+// 未送信の打刻を打刻時刻の昇順で返す（オフライン中に複数打刻しても順序が入れ替わらない）
+function punchOutboxPending(){
+  return Object.keys(punchOutbox).map(function(k){return punchOutbox[k];})
+    .filter(function(e){return e&&e.eventId&&e.rec;})
+    .sort(function(a,b){
+      var ta=Date.parse(a.rec.timestamp||a.queuedAt||"")||0;
+      var tb=Date.parse(b.rec.timestamp||b.queuedAt||"")||0;
+      if(ta!==tb)return ta-tb;
+      return a.eventId<b.eventId?-1:a.eventId>b.eventId?1:0;
+    });
+}
+function punchOutboxEnqueue(rec){
+  if(!punchOutboxEnabled())return false;
+  var id=rec&&rec.id;
+  if(!id)return false;
+  var entry={eventId:String(id),rec:rec,queuedAt:new Date().toISOString(),attempts:0,lastAttemptAt:null,lastError:""};
+  punchOutbox[entry.eventId]=entry;
+  _punchOutboxLsSave();        // 同期。ここまでで打刻は端末に残る
+  _punchOutboxIdbPut(entry);   // 非同期。主保存先
+  return true;
+}
+function punchOutboxAck(id){
+  if(!punchOutbox[id])return;
+  delete punchOutbox[id];
+  _punchOutboxLsSave();
+  _punchOutboxIdbDelete(id);
+}
+// 再送間隔（指数バックオフ）。初回は待たずに送る。
+function punchOutboxBackoffMs(attempts){
+  if(!attempts)return 0;
+  return Math.min(PUNCH_OUTBOX_BACKOFF_BASE_MS*Math.pow(2,attempts-1),PUNCH_OUTBOX_BACKOFF_MAX_MS);
+}
+// 状況が変わった契機（通信復旧・起動・画面復帰）はバックオフを待たずに送る。
+// ただし連打を避けるため最低3秒はあける。
+var PUNCH_OUTBOX_FORCE_MIN_MS=3000;
+var PUNCH_OUTBOX_FORCE_REASONS=["online","startup","pageshow","visible"];
+function _punchOutboxDue(e,nowMs,force){
+  if(!e.attempts)return true;
+  var last=Date.parse(e.lastAttemptAt||"");
+  if(isNaN(last))return true;
+  var wait=force?Math.min(punchOutboxBackoffMs(e.attempts),PUNCH_OUTBOX_FORCE_MIN_MS):punchOutboxBackoffMs(e.attempts);
+  return (nowMs-last)>=wait;
+}
+// 1件送信する。
+// 2回目以降は GET で存在確認し、既にサーバにあれば書かずに完了扱いにする。
+// 戻り値: {ok:true} / {ok:true,already:true} / {ok:false,http:...}。通信断は reject。
+function _punchOutboxSendOne(entry){
+  var url=FB_URL+"/tc5_records/"+encodeURIComponent(entry.eventId)+".json";
+  entry.attempts++;
+  entry.lastAttemptAt=new Date().toISOString();
+  var pre=(entry.attempts>1)
+    ? authFetch(url).then(function(r){
+        if(!r||!r.ok)return false;                       // 権限・HTTPエラーは「未保存」として書きにいく
+        return r.json().then(function(j){return !!(j&&typeof j==="object");});
+      }).catch(function(){return null;})                 // null = 通信断
+    : Promise.resolve(false);
+  return pre.then(function(exists){
+    if(exists===null){var err=new Error("network");err._offline=true;throw err;}
+    if(exists===true)return {ok:true,already:true};
+    var payload=Object.assign({},entry.rec,{
+      eventId:entry.eventId,
+      sentAt:new Date().toISOString(),
+      serverReceivedAt:{".sv":"timestamp"}
+    });
+    return authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
+      .then(function(res){
+        if(res&&res.ok)return {ok:true};
+        // 保険: サーバ値センチネル（serverReceivedAt）が拒否された場合に備え、
+        // 4xx のときだけ serverReceivedAt を外して1回だけ書き直す。
+        // サーバ受信時刻は「あれば良い付加情報」であり、打刻本体を落としてまで守るものではない。
+        if(res&&res.status>=400&&res.status<500){
+          var plain=Object.assign({},payload);
+          delete plain.serverReceivedAt;
+          return authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(plain)})
+            .then(function(r2){
+              if(r2&&r2.ok)return {ok:true,noServerTime:true};
+              return {ok:false,http:(r2&&r2.status)||0};
+            });
+        }
+        return {ok:false,http:(res&&res.status)||0};
+      });
+  });
+}
+// 未送信分をまとめて送る。通信断が出た時点でその回は打ち切る（順序維持・無駄な再試行の抑制）。
+function punchOutboxFlush(reason){
+  if(!punchOutboxEnabled())return Promise.resolve();
+  if(_punchOutboxFlushing)return Promise.resolve();
+  var nowMs=Date.now();
+  var force=PUNCH_OUTBOX_FORCE_REASONS.indexOf(String(reason||""))>=0;
+  var list=punchOutboxPending().filter(function(e){return _punchOutboxDue(e,nowMs,force);});
+  if(!list.length){_punchOutboxSyncWarnState();return Promise.resolve();}
+  _punchOutboxFlushing=true;
+  var i=0;
+  function step(){
+    if(i>=list.length)return Promise.resolve();
+    var e=list[i++];
+    if(!punchOutbox[e.eventId])return step();  // 別経路で送信済み
+    return _punchOutboxSendOne(e).then(function(r){
+      if(r&&r.ok){
+        console.log("[punchOutbox] sent:",e.eventId,r.already?"(already on server)":"",reason||"");
+        punchOutboxAck(e.eventId);
+        return step();
+      }
+      e.lastError="HTTP "+((r&&r.http)||"?");
+      _punchOutboxLsSave();_punchOutboxIdbPut(e);
+      console.warn("[punchOutbox] send failed:",e.eventId,e.lastError);
+      return step();                            // HTTPエラーは次の件へ進む
+    })["catch"](function(){
+      e.lastError="network";
+      _punchOutboxLsSave();_punchOutboxIdbPut(e);
+      return Promise.resolve();                 // 通信断はこの回を打ち切り、次の契機に再送
+    });
+  }
+  return step()["catch"](function(){}).then(function(){
+    _punchOutboxFlushing=false;
+    _punchOutboxSyncWarnState();
+  });
+}
+// 警告を出すべきか。出すべきでなければ null。
+function punchOutboxWarning(){
+  var list=punchOutboxPending();
+  if(!list.length)return null;
+  var now=Date.now(),maxAtt=0,oldest=null;
+  list.forEach(function(e){
+    if((e.attempts||0)>maxAtt)maxAtt=e.attempts||0;
+    var t=Date.parse(e.queuedAt||"");
+    if(!isNaN(t)&&(oldest===null||t<oldest))oldest=t;
+  });
+  var ageMs=(oldest===null)?0:(now-oldest);
+  if(ageMs>=PUNCH_OUTBOX_WARN_MS||maxAtt>=PUNCH_OUTBOX_WARN_ATTEMPTS)return {count:list.length,ageMs:ageMs,attempts:maxAtt};
+  return null;
+}
+function _punchOutboxSyncWarnState(){
+  var w=!!punchOutboxWarning();
+  if(w===_punchOutboxWarnState)return;
+  _punchOutboxWarnState=w;
+  // 他の polling 反映と同じガード（入力中・モーダル表示中は再描画しない）。
+  // ★ render() の内側から punchOutboxFlush() を呼ぶ経路があるため、必ず次のタスクへ回す（再入防止）。
+  setTimeout(function(){
+    try{
+      if(typeof render==="function"&&!document.querySelector(".time-edit-wrap")&&!showPaidLeaveForm)render();
+    }catch(e){}
+  },0);
+}
+function punchOutboxBannerHtml(){
+  var w=punchOutboxWarning();
+  if(!w)return "";
+  return '<div style="margin:0 0 10px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;">'
+    +'<div style="font-size:.92rem;font-weight:900;color:#b91c1c;">⚠ 未送信の打刻があります（'+w.count+'件）</div>'
+    +'<div style="font-size:.74rem;color:#7f1d1d;margin-top:4px;line-height:1.5;">打刻は端末に保存されています。通信が回復すると自動で送信されます。<br>この表示が続く場合は管理者に連絡してください。</div>'
+    +'</div>';
+}
+// 起動時に端末の未送信分を読み戻す（IndexedDB と localStorage を eventId で統合）
+function punchOutboxLoad(){
+  if(!punchOutboxEnabled())return Promise.resolve();
+  var merged={};
+  _punchOutboxLsLoad().forEach(function(e){if(e&&e.eventId&&e.rec)merged[e.eventId]=e;});
+  return _punchOutboxIdbAll().then(function(rows){
+    (rows||[]).forEach(function(e){if(e&&e.eventId&&e.rec)merged[e.eventId]=e;});
+  })["catch"](function(){}).then(function(){
+    Object.keys(merged).forEach(function(k){if(!punchOutbox[k])punchOutbox[k]=merged[k];});
+    // 片方にしか無かった分をもう一方へも書き戻す（次回起動でも確実に残す）
+    _punchOutboxLsSave();
+    punchOutboxPending().forEach(function(e){_punchOutboxIdbPut(e);});
+    _punchOutboxWarnState=!!punchOutboxWarning();
+  });
+}
+// サーバから取り直した打刻一覧へ、未送信の打刻を混ぜ戻す。
+// これをしないと、サーバ応答で records を差し替えた瞬間に未送信の打刻が画面から消える。
+function punchOutboxMergeInto(arr){
+  if(!Array.isArray(arr))return arr;
+  var pend=punchOutboxPending();
+  if(!pend.length)return arr;
+  var seen={};
+  arr.forEach(function(r){if(r&&r.id)seen[r.id]=true;});
+  pend.forEach(function(e){if(!seen[e.eventId])arr.push(e.rec);});
+  return arr;
+}
+// 打刻の保存入口。_execPunch からのみ呼ぶ（管理者の修正・追加は従来どおり saveRecord）。
+function punchOutboxSave(rec){
+  if(!punchOutboxEnabled()){saveRecord(rec);return;}
+  _lsSet("tc5_records",JSON.stringify(records));
+  punchOutboxEnqueue(rec);
+  punchOutboxFlush("punch");
+}
+// 再送の契機: 通信復旧・画面復帰・アプリ再表示。起動時・打刻画面表示時・ポーリングは呼び出し側。
+function punchOutboxInstallTriggers(){
+  if(_punchOutboxTriggersInstalled)return;
+  _punchOutboxTriggersInstalled=true;
+  try{
+    window.addEventListener("online",function(){punchOutboxFlush("online");});
+    window.addEventListener("pageshow",function(){punchOutboxFlush("pageshow");});
+    document.addEventListener("visibilitychange",function(){if(!document.hidden)punchOutboxFlush("visible");});
+  }catch(e){}
+}
+// ===== PUNCH-OUTBOX-END =====
+
 // ===== tc5_approvals 書込ヘルパー =====
 function saveApprovals(approvalsObj) {
   if(demoWriteBlocked())return;
@@ -827,10 +1162,13 @@ function listenFirebase() {
   setInterval(function(){
     // サンドボックス（スタッフテスト画面）中は本番値でメモリ上のテストデータを上書きしない
     if(writePolicy==="sandbox")return;
+    // 未送信の打刻の定期再送。実際の送信はバックオフ判定を通ったものだけ。
+    punchOutboxFlush("poll");
     // tc5_pins は画面を問わず常時同期（スタッフ選択画面でも反映されるよう）
     authFetch(FB_URL + "/tc5_pins.json")
-      .then(function(r){return r.json();})
+      .then(function(r){if(!r.ok)throw new Error("pins HTTP "+r.status);return r.json();})
       .then(function(val){if(writePolicy==="sandbox")return;
+        staffPinsLoaded=true; // 取得できた（不在＝PIN未登録も含む）。失敗時はここへ来ない
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
@@ -891,6 +1229,7 @@ function listenFirebase() {
       .then(function(val){
         if(val && savingCount===0){
           var arr=Array.isArray(val)?val:Object.values(val);
+          punchOutboxMergeInto(arr); // 未送信の打刻を消さない（比較前に混ぜ戻して無駄な再描画も避ける）
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
             _lsSet("tc5_records",JSON.stringify(records));
@@ -1942,6 +2281,7 @@ var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
 var staffList=loadData("tc5_staff",DEF_STAFF);
 var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageには保存しない）
+var staffPinsLoaded=false; // tc5_pins をサーバから取得できたか（未取得のままPIN新規登録させないため）
 var firebaseReady=false;  // Firebase読込完了フラグ
 var firebaseError=false;  // Firebase読込失敗フラグ
 var punchMsg=null,punchTimer=null;
@@ -2946,9 +3286,10 @@ function _renderInner(){
       }
       return '<button class="btn-staff" onclick="selStaff(&#39;'+escJs(s.name)+'&#39;)">'+esc(dispName)+locLabel+'</button>';
     }).join(""):'<div class="empty" style="grid-column:span 2">該当なし</div>';
-    var statusLabel=firebaseError
+    var statusLabel=punchOutboxBannerHtml()
+      +(firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
-      :(firebaseReady?'':'');
+      :(firebaseReady?'':''));
     app.innerHTML=((!urlToken||isAllToken)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
       +'<div class="center" style="margin-bottom:10px;padding-top:4px;">'
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
@@ -3002,6 +3343,7 @@ function _renderInner(){
     return;
   }
   if(screen==="punch"){
+    punchOutboxFlush("punchScreen"); // 打刻画面表示は再送の契機のひとつ
     var dk=fmtDateKey(now);
     var tr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
@@ -3236,6 +3578,7 @@ function _renderInner(){
       +'<div class="clock" id="clk" style="margin-top:6px;">'+fmtTimeSec(now)+'</div>'
       +'<div class="date-disp">'+fmtDate(now)+'</div>'
       +'</div>'
+      +punchOutboxBannerHtml()
       +_snHtml
       +(punchMsg
         ?'<div style="text-align:center;padding:36px 20px;">'
@@ -6250,7 +6593,7 @@ function _renderInner(){
       authFetch(FB_URL+"/tc5_records.json")
         .then(function(r){return r.json();})
         .then(function(val){
-          if(val){var arr=Array.isArray(val)?val:Object.values(val);records=arr;localStorage.setItem("tc5_records",JSON.stringify(records));}
+          if(val){var arr=Array.isArray(val)?val:Object.values(val);punchOutboxMergeInto(arr);records=arr;localStorage.setItem("tc5_records",JSON.stringify(records));}
           render();
         }).catch(function(){render();});
     };
@@ -7097,6 +7440,11 @@ function selStaff(s){
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
     screen="staffPin"; // PIN認証画面へ
+  } else if(!staffPinsLoaded){
+    // PIN一覧を取得できていない＝「PIN未登録」と断定できない。
+    // ここで新規登録へ進めると、本人だけを含む tc5_pins で全置換PUTし、他スタッフのPINを消す。
+    showAlert("通信が回復していないため、いまはログインできません。\n\n電波の良い場所でもう一度お試しください。");
+    return;
   } else {
     screen="staffPinNew"; // PIN新規登録画面へ
   }
@@ -7112,6 +7460,9 @@ function _execPunch(type,d){
   // facilityName: 1)URLトークン施設 → 2)スタッフ所属施設 の順で補完
   var _effFn=_fn||_hf;
   var nr={id:generateRecordId(),staff:staffName,type:type,date:fmtDateKey(d),time:fmtTime(d),timestamp:d.toISOString()};
+  // eventId は打刻イベントの一意キー。RTDB の保存先ノード名と同一で、再送しても増殖しない。
+  // timestamp（実打刻時刻）はこの時点で確定させ、送信時刻では上書きしない。
+  nr.eventId=nr.id;
   if(_effFn)nr.facilityName=_effFn;
   if(type==="clockIn"){
     // workFacility優先順位: 1)応援先選択 2)URLトークン施設 3)スタッフ所属施設
@@ -7139,7 +7490,8 @@ function _execPunch(type,d){
     nr.isSupportWork=!!(nr.homeFacility&&_to!==nr.homeFacility);
     nr.wageType=nr.isSupportWork?"support_zero":"normal";
   }
-  records.push(nr);saveRecord(nr);
+  // 端末へ保存してから即座に画面を「打刻済み」にする。送信はキュー経由で裏に回す。
+  records.push(nr);punchOutboxSave(nr);
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){
@@ -11113,7 +11465,10 @@ async function initFirebase() {
   try {
     // 認証トークンを1回取得してキャッシュ（Promise.all内の19並列fetchが個別にsignInして
     // Firebase匿名authレート制限に当たるのを防ぐ）
-    await getAuthToken();
+    // ★ 取得できなくても起動処理は続ける。個別の取得は失敗を null として扱うため、
+    //   端末キャッシュ（localStorage）だけでスタッフ選択・打刻画面まで表示できる。
+    //   ここで throw すると通信断のたびに「通信エラーです」画面になり、打刻自体ができない。
+    try{await getAuthToken();}catch(_e){console.warn("[initFirebase] auth token unavailable (offline?)");}
 
     // ── スタッフテスト画面の直接共有URL（?staffDemo=）──
     // 本番業務データは一切取得しない。表示条件に必要なスタッフ属性と拠点マスターのみ読む。
@@ -11148,11 +11503,18 @@ async function initFirebase() {
       return; // listenFirebase() も起動しない
     }
 
+    // 端末に残っている未送信の打刻を読み戻す。読み書きは端末内だけで通信に依存しないが、
+    // 起動を遅くしないためサーバ取得と並列に走らせ、records を差し替える直前で待ち合わせる。
+    var _outboxReady=punchOutboxLoad();
+    punchOutboxInstallTriggers();
+
     var results=await Promise.all([
       fetchJson(FB_URL+"/tc5_staff.json"),
       fetchJson(FB_URL+"/tc5_records.json"),
       fetchJson(FB_URL+"/tc5_approvals.json"),
-      fetchJson(FB_URL+"/tc5_pins.json"),
+      authFetch(FB_URL+"/tc5_pins.json")
+        .then(function(r){if(!r.ok)throw new Error("pins HTTP "+r.status);return r.json();})
+        .then(function(j){staffPinsLoaded=true;return j;}).catch(function(){return null;}),
       fetchJson(FB_URL+"/tc_master_depts.json"),
       // 施設マスタだけは「取得に成功したか」を別途記録する。
       // fetchJson は通信失敗も null を返すため、null だけでは「ノード不在」と区別できず、
@@ -11195,7 +11557,11 @@ async function initFirebase() {
     var fbMealConf=results[17];
     var fbReviewStatus=results[18];
 
-    if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);localStorage.setItem("tc5_records",JSON.stringify(records));}
+    if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);}
+    // 未送信の打刻をサーバ側一覧へ混ぜ戻す。これが無いと、起動のたびに未送信打刻が画面から消える。
+    await _outboxReady;
+    punchOutboxMergeInto(records);
+    if(fbRecords){localStorage.setItem("tc5_records",JSON.stringify(records));}
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
     if(fbApprovals){approvals=fbApprovals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
     if(fbPins){staffPins=fbPins;}
@@ -11327,6 +11693,7 @@ async function initFirebase() {
     firebaseReady=true;
     firebaseError=false;
     listenFirebase();
+    punchOutboxFlush("startup");
     render();
   } catch(e) {
     console.error("FB init error:",e);
