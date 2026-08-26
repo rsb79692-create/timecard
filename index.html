@@ -763,49 +763,59 @@ function softDeleteRecord(id) {
 }
 
 // ===== PUNCH-OUTBOX-BEGIN =====
-// 打刻の端末保存と自動再送（オフラインキュー）
+// 打刻の端末永続保存と自動再送（IndexedDB）
 //
-// 目的: 打刻は押した瞬間に端末側で確定させ、Firebase への送信結果を待たない。
-//       送信に失敗しても打刻を失わず、通信が戻った時点で自動的に送り直す。
+// 打刻ボタン押下 → event_id 採番・実打刻時刻の確定 → IndexedDB へ保存 →
+// **保存成功を確認してから** 画面を「打刻済み」へ更新 → サーバ送信は非同期。
 //
-// ★ 二重登録が起きない理由（設計の核）
-//   送信先は必ず /tc5_records/{eventId}.json であり、eventId は打刻時に端末が採番した
-//   一意キーである。RTDB は「キー＝ノード」なので、同じ eventId を何度 PUT しても
-//   同じ1ノードを上書きするだけで、行が増えることはない（キーによる冪等性）。
-//   POST（push）で採番させると再送のたびに別ノードができるため、絶対に使わない。
-//   さらに2回目以降の送信は GET で存在確認してから書くため、
-//   「サーバには保存されたがクライアントは失敗扱い」の場合は書き直さずに完了扱いにする
-//   （管理者が直後に修正していた場合でも、その修正を再送で巻き戻さない）。
+// ★ 守るべき順序（崩すと事故になる）
+//   1. サーバ応答を待って画面を更新してはならない（通信速度が打刻の体感時間に出る）。
+//   2. IndexedDB への保存完了前に画面だけ打刻済みにしてはならない
+//      （端末にもサーバにも無い打刻を「済んだ」と見せることになる）。
+//   3. IndexedDB へ保存できなかったときは打刻失敗として扱う。
+//      localStorage やサーバ直送へ勝手にフォールバックしない（整合性を優先する）。
 //
-// ★ 時刻の区別
+// ★ 二重登録が起きない理由
+//   送信先は必ず /tc5_records/{eventId}.json への PUT。eventId は打刻時に端末が採番した
+//   一意キーで、RTDB は「キー＝ノード」なので、同じ eventId を何度 PUT しても
+//   1ノードを上書きするだけで行は増えない（＝サーバ側の一意制約に相当する。
+//   PostgreSQL の PRIMARY KEY / INSERT ... ON CONFLICT DO UPDATE と同じ効果を、
+//   RTDB では「パスが主キー」という構造そのものが与える）。
+//   ★ POST（push）でサーバに採番させてはならない。再送のたびに別ノードができる。
+//   ★ 再送時に eventId を採り直してはならない。
+//   さらに2回目以降の送信は GET で存在確認してから書く。これにより
+//   「サーバには保存されたがクライアントは成功応答を受け取れなかった」打刻を再送しても
+//   上書きせず完了扱いにする（管理者がその間に修正していても巻き戻さない）。
+//
+// ★ 時刻
 //   timestamp / time / date … 実際に打刻ボタンを押した時刻（端末時刻）。正本。再送しても変えない。
-//   sentAt                  … 送信を実行した時刻（端末時刻）。
 //   serverReceivedAt        … サーバ（RTDB）が受け取った時刻。{".sv":"timestamp"} でサーバ側が入れる。
-//   送信時刻を打刻時刻として使うことは無い。
-//
-// ★ 保存先
-//   主保存 = IndexedDB（timecard_punch_outbox）。ページ更新・アプリ再起動・通信断で消えない。
-//   併用   = localStorage（未送信分のみの小さな配列）。IndexedDB は非同期のため、
-//            押した瞬間に同期的に残す退避先として使う。IndexedDB が使えない端末では
-//            こちらが唯一の保存先になる。打刻データ本体（tc5_records 全件）は従来どおりで、
-//            このキーには未送信の打刻だけを入れる。
-//   両方に同じ eventId で入るため、起動時は eventId で突き合わせて統合する（重複しない）。
+//   eventId                 … 打刻イベントの一意キー（= id = 保存先ノード名）。
+//   tc5_records に created_at 相当は無いため、サーバ受信時刻は serverReceivedAt を新設して持つ。
+//   これ以外のフィールドは追加しない。
 var PUNCH_OUTBOX_DB_NAME="timecard_punch_outbox";
-var PUNCH_OUTBOX_STORE="punches";
-var PUNCH_OUTBOX_LS_KEY="tc5_punch_outbox";
-// 警告の条件。通常の一時的な通信断（数十秒〜数分）では出さない。
-// 再送間隔は 5s→10s→20s→40s→80s… なので、5回失敗＝およそ2.5分経過に相当する。
-// 「5分以上未送信」または「5回以上失敗」を、一時的な断ではない状態として扱う。
-var PUNCH_OUTBOX_WARN_MS=5*60*1000;
-var PUNCH_OUTBOX_WARN_ATTEMPTS=5;
+var PUNCH_OUTBOX_STORE="punches";          // v1 から同名・同 keyPath。既存端末のデータをそのまま読む
+var PUNCH_OUTBOX_LEGACY_LS_KEY="tc5_punch_outbox"; // 旧実装の localStorage キュー（読み込んで IndexedDB へ移し、削除する）
+var PUNCH_OUTBOX_IDB_TIMEOUT_MS=4000;      // open / put が返らないときの打ち切り（打刻失敗として扱う）
+// 再送間隔。5s → 10s → 20s → 40s → 80s → 160s → 300s（上限）。
 var PUNCH_OUTBOX_BACKOFF_BASE_MS=5000;
-var PUNCH_OUTBOX_BACKOFF_MAX_MS=5*60*1000;
-var PUNCH_OUTBOX_OPEN_TIMEOUT_MS=1500; // 他タブが握っている等で open が返らない場合の打ち切り
-var punchOutbox={};                     // eventId → {eventId,rec,queuedAt,attempts,lastAttemptAt,lastError}
+var PUNCH_OUTBOX_BACKOFF_MAX_MS=300000;
+// 認証エラー（401/403）は待たずに叩いても通らない。トークンの更新周期を待つため長めにする。
+var PUNCH_OUTBOX_AUTH_MIN_MS=60000;
+var PUNCH_OUTBOX_AUTH_MAX_MS=600000;
+// 通信復旧・起動・画面復帰は「状況が変わった」契機なのでバックオフを待たない（連打だけ抑える）。
+var PUNCH_OUTBOX_FORCE_MIN_MS=3000;
+var PUNCH_OUTBOX_FORCE_REASONS=["online","startup","pageshow","visible"];
+// 警告のしきい値。決めた根拠は AGENTS.md「打刻のオフラインキュー」の該当節に記載。
+var PUNCH_OUTBOX_WARN_MS=10*60*1000;
+var PUNCH_OUTBOX_WARN_RETRIES=8;
+
+var punchOutbox={};                 // eventId → entry（メモリ上の作業コピー。正本は IndexedDB）
 var _punchOutboxDb=null;
 var _punchOutboxDbPromise=null;
+var _punchOutboxIdbUsable=null;     // null=未判定 / true=使える / false=使えない
 var _punchOutboxFlushing=false;
-var _punchOutboxWarnState=false;
+var _punchOutboxWarnState="";
 var _punchOutboxTriggersInstalled=false;
 
 // 本番の打刻画面でだけ有効にする。
@@ -814,16 +824,31 @@ var _punchOutboxTriggersInstalled=false;
 function punchOutboxEnabled(){
   return writePolicy==="full"&&!viewerMode;
 }
+// この端末で打刻を永続保存できるか。false なら打刻させない（画面に警告を出す）。
+function punchOutboxStorageBroken(){
+  return punchOutboxEnabled()&&_punchOutboxIdbUsable===false;
+}
 
+// ── IndexedDB ──────────────────────────────────────────────
+// 失敗した open は握りっぱなしにせず、次の呼び出しでやり直せるようにする
+// （一時的な失敗で以後ずっと打刻不能になるのを避ける）。
 function _punchOutboxOpenDb(){
+  if(_punchOutboxDb)return Promise.resolve(_punchOutboxDb);
   if(_punchOutboxDbPromise)return _punchOutboxDbPromise;
   _punchOutboxDbPromise=new Promise(function(resolve){
-    var done=false;
-    function fin(db){if(done)return;done=true;_punchOutboxDb=db||null;resolve(_punchOutboxDb);}
+    var done=false,timer=null;
+    function fin(db){
+      if(done)return;done=true;
+      if(timer)clearTimeout(timer);
+      _punchOutboxDb=db||null;
+      _punchOutboxIdbUsable=!!db;
+      if(!db)_punchOutboxDbPromise=null; // 次回やり直せるようにする
+      resolve(_punchOutboxDb);
+    }
     var idb=null;
     try{idb=(typeof indexedDB!=="undefined"&&indexedDB)?indexedDB:null;}catch(e){idb=null;}
     if(!idb){fin(null);return;}
-    setTimeout(function(){fin(null);},PUNCH_OUTBOX_OPEN_TIMEOUT_MS);
+    timer=setTimeout(function(){fin(null);},PUNCH_OUTBOX_IDB_TIMEOUT_MS);
     try{
       var req=idb.open(PUNCH_OUTBOX_DB_NAME,1);
       req.onupgradeneeded=function(){
@@ -832,163 +857,177 @@ function _punchOutboxOpenDb(){
           if(!db.objectStoreNames.contains(PUNCH_OUTBOX_STORE))db.createObjectStore(PUNCH_OUTBOX_STORE,{keyPath:"eventId"});
         }catch(e){}
       };
-      // 打ち切り後に開けた場合も、以後の書き込みでは使えるよう参照だけ入れておく
-      req.onsuccess=function(){if(done){_punchOutboxDb=req.result;return;}fin(req.result);};
+      req.onsuccess=function(){
+        var db=req.result;
+        // ストアが無い（別バージョンで作られた等）ときは使えないものとして扱う
+        try{if(!db.objectStoreNames.contains(PUNCH_OUTBOX_STORE)){fin(null);return;}}catch(e){fin(null);return;}
+        fin(db);
+      };
       req.onerror=function(){fin(null);};
       req.onblocked=function(){fin(null);};
     }catch(e){fin(null);}
   });
   return _punchOutboxDbPromise;
 }
-// IndexedDB が使えない端末では常に false / [] を返す（localStorage 側だけで動く）
-function _punchOutboxIdbPut(entry){
-  return _punchOutboxOpenDb().then(function(){
-    var db=_punchOutboxDb;if(!db)return false;
+function _punchOutboxIdbTx(mode,work){
+  return _punchOutboxOpenDb().then(function(db){
+    if(!db)return null;
     return new Promise(function(resolve){
+      var done=false,timer=null;
+      function fin(v){if(done)return;done=true;if(timer)clearTimeout(timer);resolve(v);}
+      timer=setTimeout(function(){fin(null);},PUNCH_OUTBOX_IDB_TIMEOUT_MS);
       try{
-        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readwrite");
-        tx.objectStore(PUNCH_OUTBOX_STORE).put(JSON.parse(JSON.stringify(entry)));
-        tx.oncomplete=function(){resolve(true);};
-        tx.onerror=function(){resolve(false);};
-        tx.onabort=function(){resolve(false);};
-      }catch(e){resolve(false);}
+        var tx=db.transaction(PUNCH_OUTBOX_STORE,mode);
+        var out=work(tx.objectStore(PUNCH_OUTBOX_STORE));
+        tx.oncomplete=function(){fin(out&&out.__box?out.__box.value:true);};
+        tx.onerror=function(){fin(null);};
+        tx.onabort=function(){fin(null);};
+      }catch(e){
+        // 接続が閉じている等。次回 open をやり直せるようにしてから失敗を返す
+        _punchOutboxDb=null;_punchOutboxDbPromise=null;
+        fin(null);
+      }
     });
-  }).catch(function(){return false;});
+  })["catch"](function(){return null;});
+}
+// 保存できたら true。false は「端末に残っていない」ことを意味する（打刻失敗として扱う）。
+function _punchOutboxIdbPut(entry){
+  var plain;
+  try{plain=JSON.parse(JSON.stringify(entry));}catch(e){return Promise.resolve(false);}
+  return _punchOutboxIdbTx("readwrite",function(st){st.put(plain);}).then(function(r){return r===true;});
 }
 function _punchOutboxIdbDelete(id){
-  return _punchOutboxOpenDb().then(function(){
-    var db=_punchOutboxDb;if(!db)return false;
-    return new Promise(function(resolve){
-      try{
-        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readwrite");
-        tx.objectStore(PUNCH_OUTBOX_STORE)["delete"](id);
-        tx.oncomplete=function(){resolve(true);};
-        tx.onerror=function(){resolve(false);};
-        tx.onabort=function(){resolve(false);};
-      }catch(e){resolve(false);}
-    });
-  }).catch(function(){return false;});
+  return _punchOutboxIdbTx("readwrite",function(st){st["delete"](id);}).then(function(r){return r===true;});
 }
 function _punchOutboxIdbAll(){
-  return _punchOutboxOpenDb().then(function(){
-    var db=_punchOutboxDb;if(!db)return [];
-    return new Promise(function(resolve){
-      try{
-        var tx=db.transaction(PUNCH_OUTBOX_STORE,"readonly");
-        var rq=tx.objectStore(PUNCH_OUTBOX_STORE).getAll();
-        rq.onsuccess=function(){resolve(rq.result||[]);};
-        rq.onerror=function(){resolve([]);};
-        tx.onerror=function(){resolve([]);};
-        tx.onabort=function(){resolve([]);};
-      }catch(e){resolve([]);}
-    });
-  }).catch(function(){return [];});
+  return _punchOutboxIdbTx("readonly",function(st){
+    var box={value:[]};
+    var rq=st.getAll();
+    rq.onsuccess=function(){box.value=rq.result||[];};
+    return {__box:box};
+  }).then(function(r){return Array.isArray(r)?r:[];});
 }
-// 同期の退避先。未送信分だけなので通常は0〜数件で、巨大化しない。
-function _punchOutboxLsSave(){
-  try{
-    var list=punchOutboxPending();
-    if(!list.length){try{localStorage.removeItem(PUNCH_OUTBOX_LS_KEY);}catch(e){}return;}
-    _lsSet(PUNCH_OUTBOX_LS_KEY,JSON.stringify(list));
-  }catch(e){}
+
+// ── エントリ ────────────────────────────────────────────────
+// state: "pending"（送信待ち）/ "syncing"（送信中）。送信できたエントリは削除する
+//        （サーバに正本があるので端末に残す必要がない＝ストアを小さく保つ）。
+// 旧実装（localStorage 併用版）の {queuedAt, attempts} 形もここで吸収する。
+function _punchOutboxNormalize(e){
+  if(!e||!e.eventId||!e.rec)return null;
+  return {
+    eventId:String(e.eventId),
+    rec:e.rec,
+    state:(e.state==="syncing")?"syncing":"pending",
+    createdAt:e.createdAt||e.queuedAt||e.rec.timestamp||new Date().toISOString(),
+    retryCount:(typeof e.retryCount==="number")?e.retryCount:(typeof e.attempts==="number"?e.attempts:0),
+    lastAttemptAt:e.lastAttemptAt||null,
+    lastError:e.lastError||""
+  };
 }
-function _punchOutboxLsLoad(){
-  try{
-    var raw=localStorage.getItem(PUNCH_OUTBOX_LS_KEY);
-    if(!raw)return [];
-    var a=JSON.parse(raw);
-    return Array.isArray(a)?a:[];
-  }catch(e){return [];}
-}
-// 未送信の打刻を打刻時刻の昇順で返す（オフライン中に複数打刻しても順序が入れ替わらない）
+// 送信待ちのイベントを「実打刻時刻の昇順」で返す。
+// オフライン中に 出勤→休憩開始→休憩終了→退勤 と打っても、この順で送られる。
 function punchOutboxPending(){
   return Object.keys(punchOutbox).map(function(k){return punchOutbox[k];})
     .filter(function(e){return e&&e.eventId&&e.rec;})
     .sort(function(a,b){
-      var ta=Date.parse(a.rec.timestamp||a.queuedAt||"")||0;
-      var tb=Date.parse(b.rec.timestamp||b.queuedAt||"")||0;
+      var ta=Date.parse(a.rec.timestamp||a.createdAt||"")||0;
+      var tb=Date.parse(b.rec.timestamp||b.createdAt||"")||0;
       if(ta!==tb)return ta-tb;
+      // 同時刻は端末での作成順（createdAt）→ eventId で決定的に並べる
+      var ca=Date.parse(a.createdAt||"")||0,cb=Date.parse(b.createdAt||"")||0;
+      if(ca!==cb)return ca-cb;
       return a.eventId<b.eventId?-1:a.eventId>b.eventId?1:0;
     });
 }
-function punchOutboxEnqueue(rec){
-  if(!punchOutboxEnabled())return false;
+
+// 打刻を端末へ永続保存する。**成功（true）を確認してから画面を打刻済みにすること。**
+function punchOutboxCommit(rec){
+  if(!punchOutboxEnabled())return Promise.resolve(false);
   var id=rec&&rec.id;
-  if(!id)return false;
-  var entry={eventId:String(id),rec:rec,queuedAt:new Date().toISOString(),attempts:0,lastAttemptAt:null,lastError:""};
+  if(!id)return Promise.resolve(false);
+  var entry=_punchOutboxNormalize({eventId:id,rec:rec,state:"pending",createdAt:new Date().toISOString(),retryCount:0});
+  return _punchOutboxIdbPut(entry).then(function(ok){
+    if(!ok)return false;
+    punchOutbox[entry.eventId]=entry;
+    return true;
+  });
+}
+function _punchOutboxSave(entry){
   punchOutbox[entry.eventId]=entry;
-  _punchOutboxLsSave();        // 同期。ここまでで打刻は端末に残る
-  _punchOutboxIdbPut(entry);   // 非同期。主保存先
-  return true;
+  return _punchOutboxIdbPut(entry);
 }
 function punchOutboxAck(id){
-  if(!punchOutbox[id])return;
   delete punchOutbox[id];
-  _punchOutboxLsSave();
-  _punchOutboxIdbDelete(id);
+  return _punchOutboxIdbDelete(id);
 }
-// 再送間隔（指数バックオフ）。初回は待たずに送る。
-function punchOutboxBackoffMs(attempts){
-  if(!attempts)return 0;
-  return Math.min(PUNCH_OUTBOX_BACKOFF_BASE_MS*Math.pow(2,attempts-1),PUNCH_OUTBOX_BACKOFF_MAX_MS);
+
+// ── 送信 ────────────────────────────────────────────────────
+function punchOutboxBackoffMs(retryCount,isAuth){
+  if(!retryCount)return 0;
+  var ms=PUNCH_OUTBOX_BACKOFF_BASE_MS*Math.pow(2,retryCount-1);
+  if(isAuth)return Math.min(Math.max(ms,PUNCH_OUTBOX_AUTH_MIN_MS),PUNCH_OUTBOX_AUTH_MAX_MS);
+  return Math.min(ms,PUNCH_OUTBOX_BACKOFF_MAX_MS);
 }
-// 状況が変わった契機（通信復旧・起動・画面復帰）はバックオフを待たずに送る。
-// ただし連打を避けるため最低3秒はあける。
-var PUNCH_OUTBOX_FORCE_MIN_MS=3000;
-var PUNCH_OUTBOX_FORCE_REASONS=["online","startup","pageshow","visible"];
 function _punchOutboxDue(e,nowMs,force){
-  if(!e.attempts)return true;
+  if(e.state==="syncing")return false;      // 送信中は重ねて送らない
+  if(!e.retryCount)return true;
   var last=Date.parse(e.lastAttemptAt||"");
   if(isNaN(last))return true;
-  var wait=force?Math.min(punchOutboxBackoffMs(e.attempts),PUNCH_OUTBOX_FORCE_MIN_MS):punchOutboxBackoffMs(e.attempts);
+  var wait=punchOutboxBackoffMs(e.retryCount,e.lastError==="auth");
+  if(force)wait=Math.min(wait,PUNCH_OUTBOX_FORCE_MIN_MS);
   return (nowMs-last)>=wait;
 }
-// 1件送信する。
-// 2回目以降は GET で存在確認し、既にサーバにあれば書かずに完了扱いにする。
-// 戻り値: {ok:true} / {ok:true,already:true} / {ok:false,http:...}。通信断は reject。
-function _punchOutboxSendOne(entry){
+// 1件送信する。戻り値: {ok:true[,already:true]} / {ok:false,kind:"auth"|"http"|"network"}
+// isRetry: 2回目以降の送信か。★ 初回は存在確認しない（毎回の打刻で通信を2倍にしないため）。
+function _punchOutboxSendOne(entry,isRetry){
   var url=FB_URL+"/tc5_records/"+encodeURIComponent(entry.eventId)+".json";
-  entry.attempts++;
-  entry.lastAttemptAt=new Date().toISOString();
-  var pre=(entry.attempts>1)
+  // 「サーバには保存済みだがクライアントが成功応答を受け取れなかった」場合に備え、
+  // 2回目以降は必ず存在確認してから書く。
+  var pre=isRetry
     ? authFetch(url).then(function(r){
-        if(!r||!r.ok)return false;                       // 権限・HTTPエラーは「未保存」として書きにいく
-        return r.json().then(function(j){return !!(j&&typeof j==="object");});
-      }).catch(function(){return null;})                 // null = 通信断
-    : Promise.resolve(false);
-  return pre.then(function(exists){
-    if(exists===null){var err=new Error("network");err._offline=true;throw err;}
-    if(exists===true)return {ok:true,already:true};
+        if(!r)return {kind:"network"};
+        if(r.status===401||r.status===403)return {kind:"auth"};
+        if(!r.ok)return {exists:false};                 // 判断できないので書きにいく
+        return r.json().then(function(j){return {exists:!!(j&&typeof j==="object")};});
+      })["catch"](function(){return {kind:"network"};})
+    : Promise.resolve({exists:false});
+  return pre.then(function(p){
+    if(p.kind)return {ok:false,kind:p.kind};
+    if(p.exists)return {ok:true,already:true};
     var payload=Object.assign({},entry.rec,{
       eventId:entry.eventId,
-      sentAt:new Date().toISOString(),
       serverReceivedAt:{".sv":"timestamp"}
     });
     return authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)})
       .then(function(res){
         if(res&&res.ok)return {ok:true};
-        // 保険: サーバ値センチネル（serverReceivedAt）が拒否された場合に備え、
+        var st=(res&&res.status)||0;
+        if(st===401||st===403)return {ok:false,kind:"auth"};
+        // 保険: サーバ値センチネル（serverReceivedAt）が受け付けられない場合に備え、
         // 4xx のときだけ serverReceivedAt を外して1回だけ書き直す。
-        // サーバ受信時刻は「あれば良い付加情報」であり、打刻本体を落としてまで守るものではない。
-        if(res&&res.status>=400&&res.status<500){
+        // サーバ受信時刻は付加情報であり、打刻本体を落としてまで守るものではない。
+        if(st>=400&&st<500){
           var plain=Object.assign({},payload);
           delete plain.serverReceivedAt;
           return authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(plain)})
             .then(function(r2){
               if(r2&&r2.ok)return {ok:true,noServerTime:true};
-              return {ok:false,http:(r2&&r2.status)||0};
+              var s2=(r2&&r2.status)||0;
+              return {ok:false,kind:(s2===401||s2===403)?"auth":"http",http:s2};
             });
         }
-        return {ok:false,http:(res&&res.status)||0};
-      });
-  });
+        return {ok:false,kind:"http",http:st};
+      })["catch"](function(){return {ok:false,kind:"network"};});
+  })["catch"](function(){return {ok:false,kind:"network"};});
 }
-// 未送信分をまとめて送る。通信断が出た時点でその回は打ち切る（順序維持・無駄な再試行の抑制）。
+// 未送信分をまとめて送る。
+// ★ 同時発火しても多重送信しない: グローバルの実行中フラグ＋各エントリの "syncing" 状態。
+// ★ 通信断が出た時点でその回は打ち切る（順序維持・無駄な再試行の抑制）。
 function punchOutboxFlush(reason){
   if(!punchOutboxEnabled())return Promise.resolve();
   if(_punchOutboxFlushing)return Promise.resolve();
-  var nowMs=Date.now();
   var force=PUNCH_OUTBOX_FORCE_REASONS.indexOf(String(reason||""))>=0;
+  var nowMs=Date.now();
   var list=punchOutboxPending().filter(function(e){return _punchOutboxDue(e,nowMs,force);});
   if(!list.length){_punchOutboxSyncWarnState();return Promise.resolve();}
   _punchOutboxFlushing=true;
@@ -996,21 +1035,30 @@ function punchOutboxFlush(reason){
   function step(){
     if(i>=list.length)return Promise.resolve();
     var e=list[i++];
-    if(!punchOutbox[e.eventId])return step();  // 別経路で送信済み
-    return _punchOutboxSendOne(e).then(function(r){
+    if(!punchOutbox[e.eventId])return step();       // 既に送信済み
+    var isRetry=(e.retryCount>0);                   // 増やす前に判定する（初回は存在確認しない）
+    e.state="syncing";
+    e.retryCount++;
+    e.lastAttemptAt=new Date().toISOString();
+    // 送信前に "syncing" を永続化する。送信中にアプリが落ちても、
+    // 起動時に "pending" へ戻して再送できる（存在確認つきなので二重登録しない）。
+    return _punchOutboxSave(e).then(function(){
+      return _punchOutboxSendOne(e,isRetry);
+    }).then(function(r){
       if(r&&r.ok){
         console.log("[punchOutbox] sent:",e.eventId,r.already?"(already on server)":"",reason||"");
-        punchOutboxAck(e.eventId);
-        return step();
+        return punchOutboxAck(e.eventId).then(step);
       }
-      e.lastError="HTTP "+((r&&r.http)||"?");
-      _punchOutboxLsSave();_punchOutboxIdbPut(e);
-      console.warn("[punchOutbox] send failed:",e.eventId,e.lastError);
-      return step();                            // HTTPエラーは次の件へ進む
+      e.state="pending";
+      e.lastError=(r&&r.kind)||"unknown";
+      return _punchOutboxSave(e).then(function(){
+        console.warn("[punchOutbox] send failed:",e.eventId,e.lastError,(r&&r.http)||"");
+        // 通信断はこの回を打ち切る。認証エラー・HTTPエラーは次の件へ進む。
+        return (e.lastError==="network")?Promise.resolve():step();
+      });
     })["catch"](function(){
-      e.lastError="network";
-      _punchOutboxLsSave();_punchOutboxIdbPut(e);
-      return Promise.resolve();                 // 通信断はこの回を打ち切り、次の契機に再送
+      e.state="pending";e.lastError="network";
+      return _punchOutboxSave(e);
     });
   }
   return step()["catch"](function(){}).then(function(){
@@ -1018,26 +1066,31 @@ function punchOutboxFlush(reason){
     _punchOutboxSyncWarnState();
   });
 }
-// 警告を出すべきか。出すべきでなければ null。
+
+// ── 警告 ────────────────────────────────────────────────────
+// 通常の一時的な通信断では何も出さない。長時間または繰り返し送れないときだけ出す。
 function punchOutboxWarning(){
+  if(punchOutboxStorageBroken())return {kind:"storage"};
   var list=punchOutboxPending();
   if(!list.length)return null;
-  var now=Date.now(),maxAtt=0,oldest=null;
+  var now=Date.now(),maxRetry=0,oldest=null;
   list.forEach(function(e){
-    if((e.attempts||0)>maxAtt)maxAtt=e.attempts||0;
-    var t=Date.parse(e.queuedAt||"");
+    if((e.retryCount||0)>maxRetry)maxRetry=e.retryCount||0;
+    var t=Date.parse(e.createdAt||"");
     if(!isNaN(t)&&(oldest===null||t<oldest))oldest=t;
   });
   var ageMs=(oldest===null)?0:(now-oldest);
-  if(ageMs>=PUNCH_OUTBOX_WARN_MS||maxAtt>=PUNCH_OUTBOX_WARN_ATTEMPTS)return {count:list.length,ageMs:ageMs,attempts:maxAtt};
+  if(ageMs>=PUNCH_OUTBOX_WARN_MS||maxRetry>=PUNCH_OUTBOX_WARN_RETRIES){
+    return {kind:"unsent",count:list.length,ageMs:ageMs,retryCount:maxRetry};
+  }
   return null;
 }
 function _punchOutboxSyncWarnState(){
-  var w=!!punchOutboxWarning();
-  if(w===_punchOutboxWarnState)return;
-  _punchOutboxWarnState=w;
-  // 他の polling 反映と同じガード（入力中・モーダル表示中は再描画しない）。
-  // ★ render() の内側から punchOutboxFlush() を呼ぶ経路があるため、必ず次のタスクへ回す（再入防止）。
+  var w=punchOutboxWarning();
+  var key=w?(w.kind+":"+(w.count||0)):"";
+  if(key===_punchOutboxWarnState)return;
+  _punchOutboxWarnState=key;
+  // render() の内側から punchOutboxFlush() を呼ぶ経路があるため、必ず次のタスクへ回す（再入防止）。
   setTimeout(function(){
     try{
       if(typeof render==="function"&&!document.querySelector(".time-edit-wrap")&&!showPaidLeaveForm)render();
@@ -1047,28 +1100,54 @@ function _punchOutboxSyncWarnState(){
 function punchOutboxBannerHtml(){
   var w=punchOutboxWarning();
   if(!w)return "";
+  if(w.kind==="storage"){
+    return '<div style="margin:0 0 10px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;">'
+      +'<div style="font-size:.92rem;font-weight:900;color:#b91c1c;">⚠ この端末では打刻を保存できません</div>'
+      +'<div style="font-size:.74rem;color:#7f1d1d;margin-top:4px;line-height:1.5;">ブラウザのプライベートモードや保存制限が原因のことがあります。<br>通常のブラウザで開き直すか、管理者に連絡してください。</div>'
+      +'</div>';
+  }
   return '<div style="margin:0 0 10px;padding:10px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;text-align:center;">'
     +'<div style="font-size:.92rem;font-weight:900;color:#b91c1c;">⚠ 未送信の打刻があります（'+w.count+'件）</div>'
     +'<div style="font-size:.74rem;color:#7f1d1d;margin-top:4px;line-height:1.5;">打刻は端末に保存されています。通信が回復すると自動で送信されます。<br>この表示が続く場合は管理者に連絡してください。</div>'
     +'</div>';
 }
-// 起動時に端末の未送信分を読み戻す（IndexedDB と localStorage を eventId で統合）
+
+// ── 起動・復元 ──────────────────────────────────────────────
+// 端末に残っている未送信打刻を読み戻す。
+// ・旧実装の localStorage キューがあれば IndexedDB へ移してから削除する（移行）
+// ・"syncing" のまま終了していたものは "pending" へ戻す（存在確認つき再送なので安全）
 function punchOutboxLoad(){
   if(!punchOutboxEnabled())return Promise.resolve();
-  var merged={};
-  _punchOutboxLsLoad().forEach(function(e){if(e&&e.eventId&&e.rec)merged[e.eventId]=e;});
+  var legacy=[];
+  try{
+    var raw=localStorage.getItem(PUNCH_OUTBOX_LEGACY_LS_KEY);
+    if(raw){var a=JSON.parse(raw);if(Array.isArray(a))legacy=a;}
+  }catch(e){}
   return _punchOutboxIdbAll().then(function(rows){
-    (rows||[]).forEach(function(e){if(e&&e.eventId&&e.rec)merged[e.eventId]=e;});
+    var merged={};
+    legacy.forEach(function(e){var n=_punchOutboxNormalize(e);if(n)merged[n.eventId]=n;});
+    (rows||[]).forEach(function(e){var n=_punchOutboxNormalize(e);if(n)merged[n.eventId]=n;});
+    var keys=Object.keys(merged);
+    var chain=Promise.resolve();
+    keys.forEach(function(k){
+      var e=merged[k];
+      var wasSyncing=(e.state==="syncing");
+      e.state="pending";                       // 送信中のまま終了した分を再送対象へ戻す
+      punchOutbox[k]=e;
+      // 旧 localStorage 由来 / syncing だった分は IndexedDB へ書き戻す
+      if(wasSyncing||legacy.some(function(x){return x&&x.eventId===k;})){
+        chain=chain.then(function(){return _punchOutboxIdbPut(e);});
+      }
+    });
+    return chain;
   })["catch"](function(){}).then(function(){
-    Object.keys(merged).forEach(function(k){if(!punchOutbox[k])punchOutbox[k]=merged[k];});
-    // 片方にしか無かった分をもう一方へも書き戻す（次回起動でも確実に残す）
-    _punchOutboxLsSave();
-    punchOutboxPending().forEach(function(e){_punchOutboxIdbPut(e);});
-    _punchOutboxWarnState=!!punchOutboxWarning();
+    // 移行が終わったので旧キーは残さない（localStorage に業務データを溜めない）
+    try{localStorage.removeItem(PUNCH_OUTBOX_LEGACY_LS_KEY);}catch(e){}
+    _punchOutboxWarnState=(function(){var w=punchOutboxWarning();return w?(w.kind+":"+(w.count||0)):"";})();
   });
 }
 // サーバから取り直した打刻一覧へ、未送信の打刻を混ぜ戻す。
-// これをしないと、サーバ応答で records を差し替えた瞬間に未送信の打刻が画面から消える。
+// ★ サーバ側に同じ eventId があれば触らない（ローカルでサーバの正本を上書きしない）。
 function punchOutboxMergeInto(arr){
   if(!Array.isArray(arr))return arr;
   var pend=punchOutboxPending();
@@ -1078,14 +1157,7 @@ function punchOutboxMergeInto(arr){
   pend.forEach(function(e){if(!seen[e.eventId])arr.push(e.rec);});
   return arr;
 }
-// 打刻の保存入口。_execPunch からのみ呼ぶ（管理者の修正・追加は従来どおり saveRecord）。
-function punchOutboxSave(rec){
-  if(!punchOutboxEnabled()){saveRecord(rec);return;}
-  _lsSet("tc5_records",JSON.stringify(records));
-  punchOutboxEnqueue(rec);
-  punchOutboxFlush("punch");
-}
-// 再送の契機: 通信復旧・画面復帰・アプリ再表示。起動時・打刻画面表示時・ポーリングは呼び出し側。
+// 再送の契機: 通信復旧・画面復帰・アプリ再表示。起動時・打刻画面表示・ポーリングは呼び出し側。
 function punchOutboxInstallTriggers(){
   if(_punchOutboxTriggersInstalled)return;
   _punchOutboxTriggersInstalled=true;
@@ -1096,6 +1168,7 @@ function punchOutboxInstallTriggers(){
   }catch(e){}
 }
 // ===== PUNCH-OUTBOX-END =====
+
 
 // ===== tc5_approvals 書込ヘルパー =====
 function saveApprovals(approvalsObj) {
@@ -7452,8 +7525,13 @@ function selStaff(s){
 }
 function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;});saveData("tc5_staff",staffList);render();}
 
-function _execPunch(type,d){
+// 打刻の実行。呼び出し側は戻り値（Promise）を待たない（従来どおり即座に制御を返す）。
+// ★ 端末保存（IndexedDB）の成功を確認してから画面を打刻済みにする。
+//   保存できなかった場合は打刻失敗として扱い、records にも積まない。
+var _punchSaving=false; // 端末保存中の再入防止（保存完了までの数ミリ秒の連打を弾く）
+async function _execPunch(type,d){
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
+  if(_punchSaving)return;
   var _so=staffList.find(function(s){return s.name===staffName;})||{};
   var _hf=(_so.location)||"";
   var _fn=facilityName||"";
@@ -7490,8 +7568,27 @@ function _execPunch(type,d){
     nr.isSupportWork=!!(nr.homeFacility&&_to!==nr.homeFacility);
     nr.wageType=nr.isSupportWork?"support_zero":"normal";
   }
-  // 端末へ保存してから即座に画面を「打刻済み」にする。送信はキュー経由で裏に回す。
-  records.push(nr);punchOutboxSave(nr);
+  // ① 端末（IndexedDB）へ保存する。サーバ応答は待たない。
+  //    スタッフテスト画面・管理者デモ・閲覧用URLではキューを使わず従来経路へ委譲する。
+  if(punchOutboxEnabled()){
+    _punchSaving=true;
+    var _saved=false;
+    try{_saved=await punchOutboxCommit(nr);}catch(e){_saved=false;}
+    _punchSaving=false;
+    if(!_saved){
+      // ★ 端末に残っていないものを「打刻済み」と見せてはならない。
+      //    localStorage やサーバ直送へフォールバックせず、打刻失敗として再操作できる状態を保つ。
+      console.error("[punch] local persist failed", type);
+      showAlert("打刻を保存できませんでした。\n\nもう一度押してください。\n繰り返す場合は管理者に連絡してください。");
+      render();
+      return;
+    }
+  } else {
+    saveRecord(nr);
+  }
+  // ② ここから先は「端末に保存済み」。画面を即座に打刻済みにする。
+  records.push(nr);
+  _lsSet("tc5_records",JSON.stringify(records));
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){
@@ -7501,10 +7598,13 @@ function _execPunch(type,d){
     render();
   },1500);
   render();
+  // ③ サーバ送信は非同期。結果を待たない。
+  punchOutboxFlush("punch");
 }
 function doPunch(type){
   // A. 既存チェック
   if(!tokenValid)return;
+  if(_punchSaving)return; // 端末保存の完了前に同じボタンを連打させない
   // 打刻ボタンから来る4種以外は受け付けない（施設変更は doFacilityChange 経由のみ）
   if(["clockIn","clockOut","breakStart","breakEnd"].indexOf(type)<0)return;
   var d=new Date();
