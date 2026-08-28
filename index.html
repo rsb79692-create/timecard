@@ -298,6 +298,34 @@ function elevateShareSession(kind,token){
   return _shareElevatePromise;
 }
 
+// ===== 匿名セッションの端末保存（起動時の認証待ちをなくす）=====
+// 従来はページを開くたびに accounts:signUp を呼び、そのつど新しい匿名ユーザーを作っていた。
+// 本番実測で 1回あたり 531ms（中央値・n=5）かかり、しかも initFirebase は
+// この完了を待ってから全データ取得を始めるため、「操作可能になるまで」の先頭に
+// 必ずこの時間が積まれていた。
+//
+// ★ 保存するのは匿名トークンだけ。staff / admin / viewer の役割トークンは保存しない。
+//   匿名トークンは公開APIキー（このHTMLに元から書かれている）で誰でもその場で発行でき、
+//   このアプリ自身が毎回そうしている。したがって端末へ置いても得られる権限は増えない。
+//   一方、役割トークンは特権なので端末へ残さない。
+// ★ PIN照合材料（tc5_pins）は従来どおり保存しない。ここで保存するのは認証トークンだけ。
+var _ANON_SESS_KEY="tc_anon_session";
+var _anonSessRestored=false; // 端末に保存された匿名トークンをそのまま使っているか
+function _saveAnonSession(){
+  if(_authRole!=="anon")return;                    // 役割トークンは保存しない
+  if(!_fbIdToken||!_fbRefreshToken)return;
+  saveRaw(_ANON_SESS_KEY,JSON.stringify({v:1,t:_fbIdToken,r:_fbRefreshToken,e:_fbTokenExpiry}));
+}
+function _clearAnonSession(){_anonSessRestored=false;try{localStorage.removeItem(_ANON_SESS_KEY);}catch(e){}}
+(function _restoreAnonSession(){
+  var raw=loadRaw(_ANON_SESS_KEY,"");
+  if(!raw)return;
+  var o=null;try{o=JSON.parse(raw);}catch(e){o=null;}
+  if(!o||o.v!==1||typeof o.t!=="string"||typeof o.r!=="string"){_clearAnonSession();return;}
+  _fbIdToken=o.t;_fbRefreshToken=o.r;_fbTokenExpiry=Number(o.e)||0;
+  _anonSessRestored=true;
+})();
+
 // ★ single-flight。起動時の一括読込は authFetch を20本以上同時に呼ぶため、
 //   従来は「同じサインイン」が20本以上並列発射されていた（＝毎ロード20個以上の匿名ユーザー生成）。
 //   進行中の取得を共有して1本に集約する。通信本数が減るので現行より速くなる方向にしか働かない。
@@ -322,6 +350,8 @@ async function getAuthToken(){
             _fbIdToken=d.id_token;
             _fbRefreshToken=d.refresh_token;
             _fbTokenExpiry=Date.now()+parseInt(d.expires_in)*1000;
+            _anonSessRestored=false; // 自分で取り直した＝復元トークンではない
+            _saveAnonSession();
             return _fbIdToken;
           }
         }catch(e){console.warn("token refresh failed, re-signing in",e);}
@@ -333,6 +363,8 @@ async function getAuthToken(){
       _fbRefreshToken=a.refreshToken;
       _fbTokenExpiry=Date.now()+a.expiresIn*1000;
       _authRole="anon";
+      _anonSessRestored=false;
+      _saveAnonSession();
       return _fbIdToken;
     }finally{_authInFlight=null;}
   })();
@@ -486,8 +518,28 @@ async function authFetch(url,opts){
     return _blockedResponse(writePolicy==="sandbox");
   }
   var tok=await getAuthToken();
+  // このリクエストが「端末に保存していたトークン」を使ったかを、送信前に確定させる。
+  // 起動時は5本が同時に飛ぶため、応答時点のフラグを見ると先着1本しか復帰できない。
+  var _usedRestored=_anonSessRestored;
   var authUrl=url+(url.indexOf('?')>=0?'&':'?')+'auth='+tok;
-  return fetch(authUrl,opts||{});
+  var res=await fetch(authUrl,opts||{});
+  // ★ 端末に保存していた匿名トークンをサーバが拒否した場合だけ、1回だけ取り直して再試行する。
+  //   （期限内に見えても Firebase 側で匿名ユーザーが消されていれば 401 になる。通常は起きない）
+  //   これが無いと、壊れた保存トークンを持つ端末が「読み込み中…」から復帰できなくなる。
+  //   書き込みは全て eventId 等をキーにした PUT/PATCH で冪等なため、再試行しても二重登録しない。
+  if(res&&res.status===401&&_usedRestored&&_authRole==="anon"){
+    // 破棄するのは「今回失敗したトークンがまだ現役のとき」だけ。
+    // 並列の別リクエストが既に取り直していた場合、その新しいトークンを消さない。
+    if(_fbIdToken===tok){
+      _clearAnonSession();
+      _fbIdToken="";_fbRefreshToken="";_fbTokenExpiry=0;
+    }
+    var tok2=await getAuthToken(); // single-flight なので同時に走っても取得は1回
+    if(tok2&&tok2!==tok){
+      return fetch(url+(url.indexOf('?')>=0?'&':'?')+'auth='+tok2,opts||{});
+    }
+  }
+  return res;
 }
 
 function saveToFirebase(key, val) {
@@ -514,6 +566,13 @@ function saveToFirebase(key, val) {
 // 既存の有給計算（付与日数・勤続・残日数・申請・消化）はこのデータを参照しないため影響なし。
 function mdSaveCell(inputEl, eid, ym){
   if(demoWriteBlocked()){render();return;}
+  // ★ このスタッフの既存の月データを読み込めていない状態で保存すると、
+  //   入力した1か月だけを持つエントリで上書きし、他の月を消す（フェイルクローズ）。
+  if(!monthlyDaysLoaded){
+    console.warn("[mdSaveCell] blocked: monthlyDaysImport not loaded");
+    showAlert("月別出勤日数を読み込めていないため保存できません。\n\n通信状態を確認して画面を再読み込みしてください。");
+    render();return;
+  }
   monthlyDaysEditing=false;
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");render();return;}
@@ -589,6 +648,11 @@ function mealAttendanceDates(staffName,ym){
 // 1日分の賄い取得をトグル（打刻画面・本人操作）。eid単位でcache更新→即PUT。
 function mealToggleDate(eid,ym,ds){
   if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
+  if(!mealsLoaded){
+    console.warn("[meal] blocked: mealsData not loaded");
+    showAlert("賄いのデータを読み込めていないため保存できません。\n\n通信状態を確認して画面を再読み込みしてください。");
+    return;
+  }
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
   if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
@@ -606,6 +670,11 @@ function mealToggleDate(eid,ym,ds){
 // 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
 function mealSelectAttendance(eid,ym){
   if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
+  if(!mealsLoaded){
+    console.warn("[meal] blocked: mealsData not loaded");
+    showAlert("賄いのデータを読み込めていないため保存できません。\n\n通信状態を確認して画面を再読み込みしてください。");
+    return;
+  }
   eid=String(eid||"").trim();
   if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
   if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
@@ -1173,6 +1242,14 @@ function punchOutboxInstallTriggers(){
 // ===== tc5_approvals 書込ヘルパー =====
 function saveApprovals(approvalsObj) {
   if(demoWriteBlocked())return;
+  // ★ この関数は tc5_approvals を「全体PUT」で上書きする。
+  //   取得前のメモリ内容（空）で書くと既存の承認が全件消えるため、
+  //   取得が確認できるまで書き込まない（フェイルクローズ）。
+  if(!approvalsLoaded){
+    console.warn("[saveApprovals] blocked: approvals not loaded");
+    showAlert("承認データを読み込めていないため保存できません。\n\n通信状態を確認して画面を再読み込みしてください。");
+    return;
+  }
   var url = FB_URL + "/tc5_approvals.json";
   console.log("[saveApprovals] called");
   _lsSet("tc5_approvals", JSON.stringify(approvalsObj));
@@ -1230,6 +1307,123 @@ function fetchJson(url) {
     .then(function(r){ if(!r.ok){throw new Error("HTTP "+r.status);} return r.json(); })
     .catch(function(){return null;});
 }
+
+// ===== 当日打刻の判定に使う tc5_records の取得（起動時に await しない） =====
+// 起動の待ち行列から外しただけで、取得内容も反映先も変更前と同一。
+// 取得できるまで打刻ボタンは押せない（recordsReady）。
+var _recordsTries=0;
+var RECORDS_MAX_TRIES=3;
+function loadPunchRecords(){ return fetchJson(FB_URL+"/tc5_records.json"); }
+function applyPunchRecords(fbRecords){
+  if(fbRecords){
+    var arr=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);
+    punchOutboxMergeInto(arr); // 未送信の打刻をサーバ一覧へ混ぜ戻す（起動のたびに消さない）
+    records=arr;
+    _lsSet("tc5_records",JSON.stringify(records));
+    recordsReady=true;recordsStale=false;_recordsTries=0;
+    return true;
+  }
+  // 取得できなかった。短い間隔で数回だけ静かに再試行する。
+  _recordsTries++;
+  if(_recordsTries<RECORDS_MAX_TRIES){
+    setTimeout(function(){
+      loadPunchRecords().then(function(v){applyPunchRecords(v);render();}).catch(function(){});
+    },1500*_recordsTries);
+    return false;
+  }
+  // ★ ここまで来たら通信が使えない。変更前と同じく端末キャッシュのまま打刻を継続させる。
+  //   （変更前は取得失敗を null 扱いにして黙ってキャッシュで動いていた。可用性を落とさない）
+  //   ただし他端末の当日打刻を反映できていないため、その事実を打刻画面に明示する。
+  recordsReady=true;recordsStale=true;
+  return false;
+}
+
+// ===== 起動時に取得しないデータの遅延取得 =====
+// 打刻画面・スタッフ選択画面が一切読まないノードは、起動時ではなくその画面へ入るときに取得する。
+// 起動時の取得件数と転送量を減らすのが目的で、取得内容・保存内容・判定は従来と同一。
+//
+// ★ どちらも「1度だけ実行する」形にしてある。render() から呼ばれるため、
+//   毎回の再描画で通信が走らないようにする必要がある。
+//   取得に失敗した場合はフラグを戻し、次の描画で再試行できるようにする（無言で欠測にしない）。
+
+// ★ 再試行は最短5秒あける。これが無いと「取得失敗 → フラグを戻す → render() → 再取得」の
+//   ループになり、通信断のあいだ延々とリクエストを撃ち続ける。
+var _LAZY_RETRY_MS=5000;
+
+// 管理者画面・労務士画面・スタッフ別詳細でしか読まないデータ。
+var _adminDataPromise=null,_adminDataLastTry=0;
+function ensureAdminData(){
+  if(_adminDataPromise)return _adminDataPromise;
+  if(Date.now()-_adminDataLastTry<_LAZY_RETRY_MS)return null;
+  _adminDataLastTry=Date.now();
+  _adminDataPromise=Promise.all([
+    fetchJson(FB_URL+"/tc5_approvals.json"),
+    fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
+    fetchJson(FB_URL+"/tc5_monthly_review_status.json"),
+    fetchJson(FB_URL+"/tc5_meals.json"),
+    fetchJson(FB_URL+"/tc5_meal_confirmations.json"),
+    // 管理者画面の通知バッジ（未対応の有給申請件数）に必要。残日数は有給管理タブで別途取得する。
+    fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
+    // 管理者トークンの設定状態（マスタ設定タブの表示専用。認証には使わない）
+    loadAdminTokenState()
+  ]).then(function(r){
+    var changed=false;
+    // ★ tc5_approvals は saveApprovals が「全体PUT」で保存する。
+    //   取得できていない状態で承認操作をすると既存の承認が全消えするため、
+    //   approvalsLoaded が真になるまで書き込みを止める（saveApprovals 側で判定）。
+    if(r[0]&&typeof r[0]==="object"){approvals=r[0];_lsSet("tc5_approvals",JSON.stringify(approvals));approvalsLoaded=true;changed=true;}
+    if(r[1]&&typeof r[1]==="object"){monthlyDaysImport=r[1];monthlyDaysLoaded=true;changed=true;}
+    if(r[2]&&typeof r[2]==="object"){reviewStatus=r[2];reviewStatusLoaded=true;changed=true;}
+    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];changed=true;}
+    if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];changed=true;}
+    if(r[5]){var _pl=(typeof r[5]==="object"&&!Array.isArray(r[5]))?Object.values(r[5]):r[5];paidLeaveRequests=(_pl||[]).filter(Boolean);changed=true;}
+    if(r[6]){applyAdminTokenState(r[6]);changed=true;}
+    // 「取得成功してノードが空」も正常。取得自体が成功したかどうかで既読フラグを立てる。
+    if(r[0]!==null)approvalsLoaded=true;
+    if(r[1]!==null)monthlyDaysLoaded=true;
+    if(r[2]!==null)reviewStatusLoaded=true;
+    if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
+    if(!approvalsLoaded||!monthlyDaysLoaded||!reviewStatusLoaded||!mealsLoaded)_adminDataPromise=null; // 再試行を許す
+    if(changed&&!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+  }).catch(function(){_adminDataPromise=null;});
+  return _adminDataPromise;
+}
+
+// スタッフがPIN認証を通って打刻画面へ入ったときだけ読むデータ。
+// 通知は本人の社員番号配下だけを読む（共有端末が全スタッフ分の通知を持たない）。
+var _staffDataPromise=null,_staffDataFor="",_staffDataLastTry=0;
+function ensureStaffScopedData(name){
+  var sid=resolveStaffId(name);
+  if(_staffDataPromise&&_staffDataFor===(name||""))return _staffDataPromise;
+  if(_staffDataFor===(name||"")&&Date.now()-_staffDataLastTry<_LAZY_RETRY_MS)return null;
+  _staffDataFor=(name||"");
+  _staffDataLastTry=Date.now();
+  _staffDataPromise=Promise.all([
+    fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
+    fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
+    sid?fetchJson(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+".json"):Promise.resolve(null),
+    fetchJson(FB_URL+"/tc5_meals.json"),
+    fetchJson(FB_URL+"/tc5_meal_confirmations.json")
+  ]).then(function(r){
+    if(r[0]){var a=(typeof r[0]==="object"&&!Array.isArray(r[0]))?Object.values(r[0]):r[0];paidLeaveRequests=(a||[]).filter(Boolean);}
+    if(r[1]){var b=(typeof r[1]==="object"&&!Array.isArray(r[1]))?Object.values(r[1]):r[1];paidLeaveBalances=(b||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});}
+    if(r[0]!==null&&r[1]!==null)paidLeaveLoaded=true;
+    if(sid&&r[2]&&typeof r[2]==="object"){
+      var cur=staffNotifications[sid]||{};
+      // 既読フラグはローカル（既読化PUT済み）を優先（polling と同じ扱い）
+      Object.keys(r[2]).forEach(function(k){if(r[2][k]&&cur[k]&&cur[k].read===true)r[2][k].read=true;});
+      Object.keys(cur).forEach(function(k){if(!r[2][k])r[2][k]=cur[k];});
+      staffNotifications[sid]=r[2];
+    }
+    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];}
+    if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];}
+    if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
+    if(!paidLeaveLoaded||!mealsLoaded)_staffDataPromise=null; // 再試行を許す
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard)render();
+  }).catch(function(){_staffDataPromise=null;});
+  return _staffDataPromise;
+}
+
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
   setInterval(function(){
@@ -1253,6 +1447,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_monthly_review_status.json")
       .then(function(r){return r.json();})
       .then(function(val){if(writePolicy==="sandbox")return;
+        if(val && typeof val==="object")reviewStatusLoaded=true;
         if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
           reviewStatus=val;
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -1303,6 +1498,7 @@ function listenFirebase() {
         if(val && savingCount===0){
           var arr=Array.isArray(val)?val:Object.values(val);
           punchOutboxMergeInto(arr); // 未送信の打刻を消さない（比較前に混ぜ戻して無駄な再描画も避ける）
+          recordsReady=true;recordsStale=false;
           if(JSON.stringify(arr)!==JSON.stringify(records)){
             records=arr;
             _lsSet("tc5_records",JSON.stringify(records));
@@ -1313,6 +1509,7 @@ function listenFirebase() {
     authFetch(FB_URL + "/tc5_approvals.json")
       .then(function(r){return r.json();})
       .then(function(val){
+        if(val && typeof val==="object")approvalsLoaded=true;
         if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           _lsSet("tc5_approvals",JSON.stringify(approvals));
@@ -2355,8 +2552,22 @@ var records=loadData("tc5_records",[]);
 var staffList=loadData("tc5_staff",DEF_STAFF);
 var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageには保存しない）
 var staffPinsLoaded=false; // tc5_pins をサーバから取得できたか（未取得のままPIN新規登録させないため）
-var firebaseReady=false;  // Firebase読込完了フラグ
+var firebaseReady=false;  // スタッフ選択画面を操作可能にする最小データの読込完了フラグ
 var firebaseError=false;  // Firebase読込失敗フラグ
+// ★ サーバの tc5_records を取得できたか。打刻ボタンはこれが真になるまで押せない。
+//   端末キャッシュ（localStorage）だけを根拠に打刻させると、他端末で行われた当日の打刻を
+//   見落として二重打刻になりうるため、この判定を緩めてはならない。
+var recordsReady=false;
+// サーバから当日打刻を取得できず、端末キャッシュのまま打刻を許可している状態（変更前と同じ挙動）。
+// 真のときは打刻画面にその旨を表示する。
+var recordsStale=false;
+// 起動時に取得しないノードの「取得済み」フラグ。未取得のまま書き込むと
+// 既存データを消す経路（tc5_approvals の全体PUT 等）があるため、書込側でこれを必ず確認する。
+var approvalsLoaded=false;      // tc5_approvals（全体PUTで保存するため特に重要）
+var monthlyDaysLoaded=false;    // tc5_monthly_days_import
+var reviewStatusLoaded=false;   // tc5_monthly_review_status
+var mealsLoaded=false;          // tc5_meals / tc5_meal_confirmations
+var paidLeaveLoaded=false;      // tc5_paid_leave_requests / tc5_paid_leave_balances
 var punchMsg=null,punchTimer=null;
 var pinInput="",pinError=false,pinTimer=null;
 var staffPinInput="",staffPinError=false,staffPinConfirm="",staffPinStep=1;
@@ -2841,6 +3052,11 @@ function _renderInner(){
   var app=document.getElementById("app");
   var isAdminScreen=(screen==="admin"||screen==="csvPreview"||screen==="staffDetail"||viewerMode);
   app.className=isAdminScreen?"wrap admin-mode":"wrap";
+  // 管理・労務士画面でしか読まないデータは、この画面へ入った時点で初めて取得する（起動時は取得しない）。
+  // 1度だけ走る（ensureAdminData 内でガード）。サンドボックスでは本番値を混ぜない。
+  if(isAdminScreen&&firebaseReady&&writePolicy!=="sandbox")ensureAdminData();
+  // スタッフの打刻画面でしか読まないデータ（有給・賄い・本人向け通知）も同様。
+  if(screen==="punch"&&staffName&&firebaseReady&&writePolicy!=="sandbox")ensureStaffScopedData(staffName);
 
 
   // ── 閲覧トークン認証待ち（Firebase読込中）──
@@ -3444,6 +3660,16 @@ function _renderInner(){
     // 施設変更：勤務中（出勤済・未退勤）かつ休憩中でない応援可スタッフのみ
     var _curFac=(!_done&&_openCin&&!_onBreak&&_pso.canSupportWork)?getCurrentWorkFacility(staffName,dk):"";
     var cfc=!!_curFac; // 現在施設が確定できない場合はボタンを出さない（押しても必ず弾かれるため）
+    // ★ サーバの当日打刻をまだ受け取れていない間は、すべての打刻ボタンを押せなくする。
+    //   端末キャッシュだけで判定すると、他端末で行われた当日の打刻を見落として二重打刻になる。
+    //   （スタッフ選択→PIN入力の所要時間中に届くため、通常は利用者の目に触れない）
+    var _recWait=!recordsReady&&writePolicy==="full";
+    if(_recWait){ci=false;co=false;cbs=false;cbe=false;cfc=false;}
+    var _recWaitHtml=_recWait
+      ?'<div style="margin:0 0 10px;padding:9px 12px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;text-align:center;font-size:.85rem;font-weight:700;color:#475569;">本日の打刻状態を確認しています…</div>'
+      :(recordsStale
+        ?'<div style="margin:0 0 10px;padding:9px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;text-align:center;font-size:.83rem;font-weight:700;color:#92400e;line-height:1.5;">⚠ 最新の打刻状態を取得できていません<div style="font-weight:400;font-size:.76rem;margin-top:2px;">この端末の記録で表示しています。他の端末で打刻済みでないかご確認ください。</div></div>'
+        :'');
     var worked=toHM(calcMs(tr));
     var histHTML=tr.length?tr.map(function(r){
       return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":r.type==="facilityChange"?"c-fc":"c-brk")+'">'+esc(TYPE_LABEL[r.type]||r.type)+(r.type==="facilityChange"&&r.workFacility?' → '+esc(r.workFacility):"")+'</span><span style="font-family:monospace;font-weight:600;">'+esc(r.time||"")+'</span></div>';
@@ -3676,6 +3902,7 @@ function _renderInner(){
                 +masterLocs.map(function(l){return'<option value="'+esc(l)+'"'+(selectedWorkFacility===l?" selected":"")+'>'+esc(l)+'</option>';}).join("")
                 +'</select></div>'
               :""))
+           +_recWaitHtml
            +'<div class="grid2">'
             +'<button class="btn-punch btn-in" '+(ci?"":"disabled")+' onclick="doPunch(\'clockIn\')">🟢<br>出　勤</button>'
             +'<button class="btn-punch btn-out" '+(co?"":"disabled")+' onclick="doPunch(\'clockOut\')">🔴<br>退　勤</button>'
@@ -7604,6 +7831,11 @@ async function _execPunch(type,d){
 function doPunch(type){
   // A. 既存チェック
   if(!tokenValid)return;
+  // ★ サーバの当日打刻を受け取る前は打刻させない（二重打刻防止。ボタンの disabled と二重化）
+  if(!recordsReady&&writePolicy==="full"){
+    showAlert("本日の打刻状態を確認しています。\n\n数秒お待ちのうえ、もう一度押してください。");
+    return;
+  }
   if(_punchSaving)return; // 端末保存の完了前に同じボタンを連打させない
   // 打刻ボタンから来る4種以外は受け付けない（施設変更は doFacilityChange 経由のみ）
   if(["clockIn","clockOut","breakStart","breakEnd"].indexOf(type)<0)return;
@@ -7740,6 +7972,11 @@ function openFacilityChangeModal(){
 function doFacilityChange(toFac){
   if(!tokenValid)return;
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
+  // ★ 打刻と同じ理由でサーバの当日打刻を受け取る前は実行しない（経路＝支給額に直結する）
+  if(!recordsReady&&writePolicy==="full"){
+    showAlert("本日の打刻状態を確認しています。\n\n数秒お待ちのうえ、もう一度お試しください。");
+    return;
+  }
   if(!toFac)return;
   var _fso2=staffList.find(function(s){return s.name===staffName;})||{};
   if(!_fso2.canSupportWork){console.warn("[facilityChange] not permitted");return;}
@@ -11608,10 +11845,26 @@ async function initFirebase() {
     var _outboxReady=punchOutboxLoad();
     punchOutboxInstallTriggers();
 
+    // ===== 起動時の取得を「操作可能に必要なもの」と「そうでないもの」に分ける =====
+    //
+    // 変更前は 16 本すべてを1つの Promise.all で待ち、その完了で firebaseReady=true にしていた。
+    // その中に tc5_records（本番実測 1,008KB・単独で 700〜830ms）が含まれるため、
+    // スタッフ選択ボタンは実際には 11KB あれば描けるのに、1MB の到着まで disabled のままだった。
+    //
+    // ここでは3段に分ける。取得の総量を減らし、かつ待ち順を実際の必要順に合わせる。
+    //   第1段（await する）: スタッフ選択画面を操作可能にするのに要るものだけ … 約11KB
+    //   第2段（待たない）  : 打刻状態の判定に要る tc5_records … 打刻ボタンだけを recordsReady で守る
+    //   第3段（取得しない）: 打刻画面・スタッフ選択画面が一切読まないもの
+    //                        → 管理/労務士画面を開いたとき(ensureAdminData)と
+    //                          スタッフがログインしたとき(ensureStaffScopedData)に取得する
+    //
+    // ★ 「先に描いて速く見せる」ための変更ではない。打刻の可否判定は従来どおり
+    //   サーバの最新 tc5_records で行い、届くまで打刻ボタンは押せない（recordsReady）。
+    var _recordsPromise=loadPunchRecords();
     var results=await Promise.all([
       fetchJson(FB_URL+"/tc5_staff.json"),
-      fetchJson(FB_URL+"/tc5_records.json"),
-      fetchJson(FB_URL+"/tc5_approvals.json"),
+      Promise.resolve(null), // tc5_records は第2段（_recordsPromise）へ移動。添字維持用
+      Promise.resolve(null), // tc5_approvals は第3段（ensureAdminData）へ移動。添字維持用
       authFetch(FB_URL+"/tc5_pins.json")
         .then(function(r){if(!r.ok)throw new Error("pins HTTP "+r.status);return r.json();})
         .then(function(j){staffPinsLoaded=true;return j;}).catch(function(){return null;}),
@@ -11628,42 +11881,38 @@ async function initFirebase() {
       //   （Promise.all の添字を保つためプレースホルダを置く）
       Promise.resolve(null),
       Promise.resolve(null),
-      // ★ adminTokenHash は「設定済みか」の表示にしか使わない（認証には使わない）。
-      //   移行期は削除前後どちらの状態でも正しく表示できるよう、真偽値フラグと併読する。
-      // ★ fetchJson は通信失敗も null を返すため、ここでは使わない。
-      //   loadAdminTokenState が r.ok を確認し、「未設定」と「取得失敗」を区別して返す。
-      loadAdminTokenState(),
+      // ★ 管理者トークンの「設定状態」は管理画面（マスタ設定タブ）でしか表示しない。
+      //   3リクエストを要するため起動時には読まず、ensureAdminData() で読む。
+      Promise.resolve(null), // 添字維持用
       Promise.resolve(null), // 旧 config/adminToken は loadAdminTokenState 内で読む（添字維持用）
       (viewerPending&&viewerParam)?fetchJson(FB_URL+"/viewerTokens/"+viewerParam+".json"):Promise.resolve(null),
       // デモトークンは「トークンをキーに単一ノードを引く」方式。デモURL以外では取得しない。
       (demoUrlUsed&&demoParam)?fetchJson(FB_URL+"/demoTokens/"+encodeURIComponent(demoParam)+".json"):Promise.resolve(null),
-      fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
-      fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
-      fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
-      fetchJson(FB_URL+"/tc5_staff_notifications.json"),
-      fetchJson(FB_URL+"/tc5_meals.json"),
-      fetchJson(FB_URL+"/tc5_meal_confirmations.json"),
-      fetchJson(FB_URL+"/tc5_monthly_review_status.json"),
+      // ↓ 以下はスタッフ選択画面が一切読まない。第3段へ移動（添字は維持する）
+      Promise.resolve(null), // tc5_paid_leave_requests   → ensureStaffScopedData
+      Promise.resolve(null), // tc5_paid_leave_balances   → ensureStaffScopedData
+      Promise.resolve(null), // tc5_monthly_days_import   → ensureAdminData
+      Promise.resolve(null), // tc5_staff_notifications   → ensureStaffScopedData（本人の枝だけ）
+      Promise.resolve(null), // tc5_meals                 → ensureStaffScopedData / ensureAdminData
+      Promise.resolve(null), // tc5_meal_confirmations    → ensureStaffScopedData / ensureAdminData
+      Promise.resolve(null), // tc5_monthly_review_status → ensureAdminData
     ]);
-    var fbStaff=results[0],fbRecords=results[1],fbApprovals=results[2],fbPins=results[3];
+    var fbStaff=results[0],fbPins=results[3];
     var fbDepts=results[4],fbLocations=results[5];
     // results[6] / results[7] は管理者PIN用の未使用プレースホルダ（読み込みを廃止）
-    var _fbAdminTokenState=results[8]; // {status,set,legacy}。results[9] は添字維持用の未使用プレースホルダ
+    // results[8] / results[9] は管理者トークン状態用の未使用プレースホルダ（ensureAdminData へ移動）
     var fbViewerTokenData=results[10],fbDemoTokenRec=results[11];
-    var fbPaidLeaveRequests=results[12],fbPaidLeaveBalances=results[13];
-    var fbMonthlyImport=results[14];
-    var fbStaffNotifications=results[15];
-    var fbMeals=results[16];
-    var fbMealConf=results[17];
-    var fbReviewStatus=results[18];
+    // results[1]/[2]/[12]〜[18] は第2段・第3段へ移した分の未使用プレースホルダ
 
-    if(fbRecords){records=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);}
-    // 未送信の打刻をサーバ側一覧へ混ぜ戻す。これが無いと、起動のたびに未送信打刻が画面から消える。
+    // 端末に残っている未送信の打刻は、サーバ取得を待たずに先に画面へ戻す。
     await _outboxReady;
     punchOutboxMergeInto(records);
-    if(fbRecords){localStorage.setItem("tc5_records",JSON.stringify(records));}
+    // tc5_records（1MB）の到着は待たない。届いた時点で差し替え、recordsReady を立てる。
+    _recordsPromise.then(function(fbRecords){
+      applyPunchRecords(fbRecords);
+      render();
+    }).catch(function(){render();});
     if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);localStorage.setItem("tc5_staff",JSON.stringify(staffList));}
-    if(fbApprovals){approvals=fbApprovals;localStorage.setItem("tc5_approvals",JSON.stringify(approvals));}
     if(fbPins){staffPins=fbPins;}
     if(fbDepts){masterDepts=Array.isArray(fbDepts)?fbDepts:Object.values(fbDepts);localStorage.setItem("tc_master_depts",JSON.stringify(masterDepts));}
     if(fbLocations){
@@ -11686,32 +11935,12 @@ async function initFirebase() {
       authFetch(FB_URL+"/master/locations.json",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(masterFacilities)}).catch(function(e){console.error("[initFirebase] master/locations save error:", e);});
     }
     // 管理者PINはクライアントへ読み込まない（照合はサーバのみ）。
-    // 管理者トークン: hashあればhash優先、なければ旧平文フォールバック
-    // 表示専用。config/adminTokenSet が真、または旧 config/adminTokenHash が残っていれば「設定済み」。
-    // ★ 取得に失敗していた場合は error のまま保持し、「未設定」とは表示しない（短時間の自動再試行つき）。
-    applyAdminTokenState(_fbAdminTokenState);
-    // 月別出勤日数の過去取込データ（employeeIdキーのマップ）
-    if(fbMonthlyImport&&typeof fbMonthlyImport==="object"){monthlyDaysImport=fbMonthlyImport;}
-    // 賄い（まかない）取得記録（employeeIdキーのマップ）
-    if(fbMeals&&typeof fbMeals==="object"){mealsData=fbMeals;}
-    // 賄い月初確認（employeeId→{"YYYY-MM":エントリ}）
-    if(fbMealConf&&typeof fbMealConf==="object"){mealConfData=fbMealConf;}
-    // 月次精査完了フラグ（"YYYY-MM"→{reviewed,reviewedAt,reviewedBy}）
-    if(fbReviewStatus&&typeof fbReviewStatus==="object"){reviewStatus=fbReviewStatus;}
-    // スタッフ本人向け通知（社員番号→{notifId→通知}）
-    if(fbStaffNotifications&&typeof fbStaffNotifications==="object"){staffNotifications=fbStaffNotifications;}
-    // 有給申請
-    if(fbPaidLeaveRequests){
-      var _plArr=typeof fbPaidLeaveRequests==="object"&&!Array.isArray(fbPaidLeaveRequests)
-        ?Object.values(fbPaidLeaveRequests):fbPaidLeaveRequests;
-      paidLeaveRequests=(_plArr||[]).filter(Boolean);
-    }
-    // 有給残日数（正規化して読み込み）
-    if(fbPaidLeaveBalances){
-      var _plbArr=typeof fbPaidLeaveBalances==="object"&&!Array.isArray(fbPaidLeaveBalances)
-        ?Object.values(fbPaidLeaveBalances):fbPaidLeaveBalances;
-      paidLeaveBalances=(_plbArr||[]).filter(Boolean).map(function(b){return normalizePaidLeaveBalance(b);});
-    }
+    //
+    // 以下は起動時に取得しない（それぞれの画面へ入ったときに取得する）:
+    //   管理者トークンの設定状態 / 承認 / 月別出勤日数 / 精査完了フラグ / 賄い
+    //     → ensureAdminData()        （render() の isAdminScreen 判定から呼ぶ）
+    //   有給（申請・残日数）/ 本人向け通知 / 賄い
+    //     → ensureStaffScopedData()  （render() の打刻画面判定から呼ぶ）
     // 管理者URLトークン認証。
     // ★ 照合はサーバ（/api/auth/admin）だけで行う。
     //   以前は公開領域の config/adminTokenHash とクライアント側で突き合わせていたが、
