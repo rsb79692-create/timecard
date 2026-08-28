@@ -585,7 +585,8 @@ async function run() {
       ["キューを使わない画面では従来の saveRecord へ委譲する", /\}\s*else\s*\{\s*\n\s*saveRecord\(nr\);\s*\n\s*\}/],
       ["起動時にキューを読み戻す", /var _outboxReady=punchOutboxLoad\(\);/],
       ["起動時の取得で未送信打刻を消さない", /await _outboxReady;\s*\n\s*punchOutboxMergeInto\(records\);/],
-      ["ポーリングの取得で未送信打刻を消さない", /punchOutboxMergeInto\(arr\);/],
+      ["範囲取得のマージで未送信打刻を消さない", /function mergeRecordsRange\(from,to,obj\)\{[\s\S]{0,500}?punchOutboxMergeInto\(records\);/],
+      ["ポーリングの取得は mergeRecordsRange を通す", /fetchRecordsRange\(_pd,_pd\)[\s\S]{0,700}?mergeRecordsRange\(_pd,_pd,val\);/],
       ["再送の契機を仕掛ける", /punchOutboxInstallTriggers\(\);/],
       ["起動時に再送する", /punchOutboxFlush\("startup"\);/],
       ["ポーリングでも再送する", /punchOutboxFlush\("poll"\);/],
@@ -598,6 +599,8 @@ async function run() {
     wired.forEach(([name, re]) => check(name, re.test(html)));
     check("打刻の保存で従来の saveRecord を直接呼ぶ経路が残っていない",
       !/records\.push\(nr\);saveRecord\(nr\);\s*\n\s*punchMsg=/.test(html));
+    check("サーバ応答で records を丸ごと置き換える経路が残っていない",
+      !/punchOutboxMergeInto\(arr\);\s*records=arr;/.test(html));
     check("キュー本体が POST（push）を使わない", CODE.indexOf('"POST"') < 0);
     check("キュー本体が tc5_records 以外へ書かない",
       (CODE.match(/FB_URL\+"\/[a-z0-9_]+/gi) || []).every((x) => x.indexOf("tc5_records") > 0));

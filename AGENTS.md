@@ -159,7 +159,12 @@
 
 **打刻データの読み取り**
 
-・画面表示は**クライアント側で計算する**（`tc5_records` は起動時に全件取得済みのため追加の通信をしない）。
+・画面表示は**クライアント側で計算する**。
+　★ **起動時に全件取得しているわけではない**（2026-08-28 に変更。旧記載は破棄）。
+　起動時は当日分だけで、表示対象月の打刻は次の2つが確保する。
+　・職員画面: `punchScreenRecordRange()` が `mileage.myMonth` まで範囲を広げる
+　・管理画面: `ensureAdminRecordRanges()` が `mileage.adminYm` の月を取得する
+　**この2つの拡張を削除してはならない。削除すると集計が黙って空になる（支給額に直結）。**
 ・**確定（`closeMonth`）と確認（`autoCheck`）はサーバが打刻を読み直して計算する。画面の数値は受け取らない。**
 ・サーバから `/honomi` を触ってよいのは **`api/_lib/mileage-punch.js` だけ**。同ファイルは
 　**読み取り専用**（`dbPut`/`dbPatch`/`dbPatchRoot` を1つも呼ばない）で、参照するのは
@@ -535,7 +540,8 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 
 ## tc5_records の取得範囲（2026-08-28）
 
-**クライアントは `tc5_records` を全件取得しない。画面が表示する日付範囲だけを取る。**
+**クライアントは `tc5_records` を全件取得しない。画面が表示する期間だけを取る。**
+**管理・労務士画面の入口でも全件を取らない**（2026-08-28 の第2段で変更。旧記載の「管理・労務士は全期間を1回だけ取得」は破棄）。
 
 `database.rules.json` に `honomi/tc5_records/.indexOn: ["date"]` を追加済み。
 RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、この索引が前提になる。
@@ -545,51 +551,284 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 
 | 範囲 | 件数 | サイズ |
 |---|--:|--:|
-| 全件 | 4,248 | 1,008 KB |
-| 当日のみ | 10 | **3.8 KB** |
-| 当月 | 764 | 218 KB |
+| 全件 | 4,267 | 1,038,792 B |
+| 当月（2026-08） | 783 | 230,104 B |
+| 当日 | 29 | 10,501 B |
+| 最古日の取得（`orderBy="date"&limitToFirst=5`） | 5 | 約 700 B（実測: 1件なら 141 B） |
+| `tc5_approvals`（全件） | 1,717キー | 54,471 B |
 
-`date` は全 4,248 件が `YYYY-MM-DD` 形式で存在し、**全件が `timestamp` の JST 日付と一致**する
-（欠損 0 / 不正形式 0 / 不一致 0）。日付クエリで取りこぼすレコードは無い。
+`date` は全件が `YYYY-MM-DD` 形式で存在し、**全件が `timestamp` の JST 日付と一致**する（欠損 0 / 不正形式 0 / 不一致 0）。
+データ月は **2026-04〜2026-08 で欠落なし**（最古の打刻日 = 2026-04-01）。
+
+### 取得済み範囲は「区間の集合」で持つ（`_recIvs`）
+
+★ **単一の連続区間にしてはならない。** 管理画面で 8月 → 4月 と月を飛ばして選んだだけで、
+あいだの 5〜7月まで巻き込んで取得することになる。
+`ensureRecordsRange(from,to)` は `_recGaps()` で**未取得の部分だけ**を取りに行く。
+
+★ **同時に走らせる範囲取得は常に1本だけ**（`_recRangePromise`）。月を切り替えるたびに並走させると、
+通信の細い端末で取り合いになる。失敗時は 5 秒あけて再試行する。
+
+★ 月末を `"-31"` で表す上限値（例 `"2026-06-31"`）が混ざるため、隣接判定には `_recNextDay()` を使う。
+`Date` へ素で渡すと `"2026-07-02"` になり、**7/1 が抜けているのに「連続している」と誤判定する**。
+
+### 月・年の「取得すべき上限日」は当日で頭打ちにする（`recMonthEnd` / `recYearEnd`）
+
+★ **当月を `"YYYY-MM-31"` まで要求してはならない。**
+打刻画面の取得範囲は `punchScreenRecordRange()` が返す `…〜当日` で終わるため、当月末には決して到達しない。
+`recordsMonthKnown("当月")` を `-31` で判定すると**永久に偽**になり、
+移動距離ONの職員全員が当月のあいだずっと「打刻データを読み込めていません」の赤バナーを見ることになる
+（再読み込みしても消えない）。`recMonthEnd()` / `recYearEnd()` を必ず通すこと。
 
 ### どの画面がどの範囲を使うか
 
 | 契機 | 範囲 | 関数 |
 |---|---|---|
 | 起動時 | **当日のみ** | `loadPunchRecords()` → `applyPunchRecords()` |
-| スタッフのログイン後 | 直近14日（＋開いているカードに応じて当月・先月） | `punchScreenRecordRange()` → `ensureRecordsRange()` |
-| 管理・労務士・スタッフ別詳細 | **全期間（1回だけ）** | `ensureRecordsFull()` |
+| スタッフのログイン後 | 直近14日（＋開いているカードに応じて当月・賄いの表示月・**移動距離の選択月（最大12か月前まで遡る）**） | `punchScreenRecordRange()` → `ensureRecordsRange()` |
+| 管理・労務士・スタッフ別詳細の入口 | **表示中の月／年／当日だけ** | `ensureAdminRecordRanges()` |
+| 承認漏れサマリー・有給付与の自動算出 | 全期間（**月ごとに分割**して背景取得） | `ensureRecordsHistory()` |
+| スタッフ改名 | 全期間（必須。`ensureRecordsHistory()` の完了まで実行しない） | `recordsHistoryReady()` |
 | 10秒ポーリング（管理画面） | **当日のみ** | `listenFirebase()` 内 |
+| 朝出勤確認「最新状態に更新」 | **当日のみ** | `fetchRecordsRange(_d,_d)` → `mergeRecordsRange` |
 | 日付が変わったとき | 当日を取り直す | `refreshRecordsIfDayChanged()` |
 
-★ **起動時が当日分だけで足りる根拠**: 打刻状態の判定は `records.filter(r.date===dk)`（当日のみ）と
-`findOpenClockInAcrossFacilities(staffName, 当日)` だけで、前日以前を参照しない。
-対象施設に日付をまたぐ勤務は存在しない（2026-08-14 ユーザー確認）。
+`ensureAdminRecordRanges()` がタブごとに要求する範囲:
+
+| タブ | 範囲 |
+|---|---|
+| 勤怠一覧 / CSV出力 / 応援集計 / スタッフ管理 / マスター管理 | `selMonth` ＋ `selDate` ＋ 当日 |
+| 賄い一覧 | ＋ `mealAdminMonth` |
+| 修正履歴 | ＋ `adjLogMonth` |
+| 月別出勤日数 | ＋ `monthlyDaysYear` の 1/1〜`recYearEnd()`（当年は当日まで） |
+| 移動距離 | ＋ `mileage.adminYm` |
+| 有給管理 | ＋ 全期間（`ensureRecordsHistory` を即座に開始） |
+| 労務士（viewer） | `reviewMonth` ＋ `selDate` |
+| スタッフ別詳細 / CSVプレビュー | `selMonth` |
+
+### 月／年セレクタの選択肢は「最古の打刻日1件」から作る
+
+★ **選択肢を作るために全件を取得してはならない。**
+`orderBy="date"&limitToFirst=5` で運用開始日を取り（実測: 1件で 141 B）、
+★ **1件だけ見てはならない**。RTDB の順序規則上 `date` を持たない子が先頭へ来得るため、
+弾いてしまうと運用開始月が永久に確定せず、フェイルクローズが解除不能になる。
+取得した中から**最小の有効な日付**を採る。
+`recordsMonthOptions()` / `recordsYearOptions()` が **運用開始月〜当月**を機械的に列挙する。
+最古日は localStorage `tc5_records_oldest` へ保存し、次回起動では即座に使う。
+
+★ **運用開始月には2つの関数がある。取り違えてはならない。**
+
+| 関数 | 値 | 用途 |
+|---|---|---|
+| `recordsOperationStartMonth()` | **サーバで確認済みの最古日だけ**（未確定なら空文字） | 「その月に打刻が無い」と**断定してよいかの判断** |
+| `recordsOldestMonth()` | サーバ値 ∪ メモリ上の `records` の最古月 | **月・年セレクタの選択肢を作るときだけ** |
+
+取得範囲を絞ったことで `records` の最古月は真の運用開始月より新しくなり得る。
+これを判断の根拠に使うと、その前の月を「運用開始前＝打刻なし」と誤断定して
+**有給の付与日数が取込値（`monthlyDaysImport`）へ黙って落ちる**。
+`recordsMonthKnown()` と `_recHistoryStep()` は必ず `recordsOperationStartMonth()` を使う。
+
+候補が減る後退を起こさないため、次を必ず併合する。
+
+・メモリ上の `records` に存在する月／年（前回セッションの端末キャッシュを含む）
+・呼び出し側が指定した「選択中の月」（`selMonth` / `reviewMonth` / `mealAdminMonth` など）
+
+★ **固定値を根拠なく埋め込んではならない。** 下限は必ず実データ（最古の打刻日）から取る。
+
+対象箇所: 労務士の年／月セレクタ・スタッフ別詳細・CSVプレビュー・管理画面共通・勤怠一覧の年・
+月別出勤日数の年・賄いの月・修正履歴の月（下限）。
+
+### 承認漏れサマリーだけが全期間を必要とする（期間分割で対応）
+
+`getUnapprovedSummary()` / `getNotificationCounts()` / 勤怠一覧の未承認一覧は
+`isPastDate(r.date)`（＝**過去日すべて・下限なし**）を対象にしている。
+**UI に期間の文言は一切なく**、業務要件として「全期間」が明示されているわけではないが、
+**勝手に期間を切っていない**。対象期間は変更前と同一である。
+
+代わりに取得方法だけを変えた。`ensureRecordsHistory()` が
+
+1. 入口の描画から 1.2 秒あけて開始する（表示中の月の取得を優先する）
+2. 当月 → 過去へ **1か月ずつ**（実測 約230KB/月）取得する
+3. 運用開始月まで到達したら `_recFull=true` にして確定する
+
+★ **確定するまで「承認漏れ 0 件」と断定してはならない。** `recordsHistoryReady()` が偽のあいだは
+画面に「集計中」を必ず出す（ヘッダのバナー・未承認一覧の見出し・通知タブの単位表示）。
+この表示を消してはならない。
+
+★ スキャンは `screen==="admin"` のときだけ進む（打刻画面の通信を奪わない）。
+`writePolicy==="sandbox"`（スタッフテスト画面）では走らせない。
+
+### 未取得の期間を「0件」と誤認させない（フェイルクローズ）
+
+範囲取得にしたことで「まだ読んでいない期間」が生じる。次の判定は取得済みを確認してから行う。
+
+| 判定・書き込み | ガード |
+|---|---|
+| 有給付与日数の自動算出（`getAttendanceDaysForMonth`） | `recordsMonthKnown(ym)`。未取得の月は `src:"none"`（データ不足）にする。**取込値（`monthlyDaysImport`）へ落とすと付与日数が黙って変わる**。★ **この判定は `cnt>0`（その月の打刻件数）より先に行う**。月が「部分的に」取得済みのときに半分の日数を `src:"punch"`（確信値）として返さないため |
+| 日付が変わったとき（`refreshRecordsIfDayChanged`） | `_recIvs=[]` と `_recFull=false` の**両方**を戻す。片方だけだと、前日に立った `_recFull` が翼日も真のまま残り、当日分しか取っていない新しい月を「全期間取得済み」と誤認する |
+| 「全件承認」（未承認一覧） | `recordsHistoryReady()` が偽のあいだはボタン文言を「表示中の分を承認」に変え、確認ダイアログで件数を明示する |
+| 「打刻を追加」の氏名候補 | 在籍スタッフ（`staffList`）を必ず併合する。`records` だけだと「その月に打刻が無い在籍スタッフ」が候補から消える |
+| スタッフ改名（全期間の `r.id` を PATCH） | `recordsHistoryReady()`。偽なら実行せず案内を出す |
+| 移動距離の自動集計の警告表示 | `recordsMonthKnown(mileage.adminYm / mileage.myMonth)` |
+| `mealSelectAttendance()`（賄いの出勤日全選択） | `recordsRangeCovers()`（当月） |
+| `saveApprovals()`（`tc5_approvals` の全体PUT） | `approvalsLoaded` |
+| `mdSaveCell()`（月別出勤日数） | `monthlyDaysLoaded` |
+| `mealToggleDate()` / `mealSelectAttendance()` | `mealsLoaded` |
+
+★ `recordsMonthKnown()` の判定順を変えてはならない。
+　①`_recFull` → ②未来月 → ③**実際に取得済み（`recordsRangeCovers`）** → ④運用開始月が未確定なら false → ⑤運用開始前なら true。
+　③を後ろへ回すと、管理画面を一度も開いていない端末（＝打刻端末）では `ensureRecordsOldest()` が走らず、
+　移動距離カードの「打刻データを読み込めていません」が**常時点灯**して本当の未取得を検知できなくなる。
+　運用開始月より前と未来月は「打刻が存在しない月」として真を返す。
+これを外すと、入社が運用開始より前のスタッフの付与日数が従来と変わる。
+
+### 変えてはならないこと
 
 ★ **日付の基準を `fmtDateKey()`（端末ローカル日付）から変えてはならない。**
 打刻を書くとき（`_execPunch` の `nr.date`）と画面が絞り込むとき（`r.date===dk`）が同じ関数なので、
 取得範囲と表示範囲が食い違わない。ここに `getTodayJSTStr()` を混ぜると、端末TZがJSTでない場合に
 「画面が探す日付」と「取ってきた日付」がずれて打刻が消える。
 
-★ **管理・労務士画面を月単位に絞ってはならない（現状の実装では）。** 次のものが全期間を前提にしている。
-承認漏れサマリー（全期間の未承認日数）／月セレクタの選択肢（`records` の月から生成）／
-月別出勤日数タブ（年単位）／移動距離の自動集計（サーバ側の計算と一致させる必要がある）。
-月に絞ると**表示値そのものが変わる**。絞るならこれら4つを先に作り替えること。
-
-★ **`ensureRecordsRange` / `ensureRecordsFull` は `render()` から呼ばれる。**
-取得済みなら通信しない・失敗時は5秒あけて再試行する、というガードを外すと
+★ **`ensureRecordsRange` / `ensureRecordsHistory` は `render()` から呼ばれる。**
+取得済みなら通信しない・失敗時は間隔をあけて再試行する、というガードを外すと
 通信断のあいだリクエストを撃ち続ける。
 
-### 未取得のまま書き込ませない（フェイルクローズ）
+★ **サーバから `tc5_records` を取り直す箇所では必ず `mergeRecordsRange()` を通す。**
+`records=arr` の全置換をしてはならない（未送信打刻が消え、`_recIvs` とも整合しなくなる）。
+`mergeRecordsRange` が `punchOutboxMergeInto()` を呼ぶことで未送信打刻を守っている。
 
-範囲取得にしたことで「まだ読んでいない期間」が生じる。次の書き込みは取得済みを確認してから行う。
+★ **サーバ側（`api/_lib/mileage-punch.js`）は従来どおり `tc5_records` を全件取得する。**
+月次確定・確認のときだけなので変更していない。クライアントが対象月だけを取得しても、
+サーバも `d.slice(0,7)!==ym` で同じ月に絞っているため**計算結果は一致する**。
 
-| 書き込み | ガード |
-|---|---|
-| `mealSelectAttendance()`（賄いの出勤日全選択） | その月が `recordsRangeCovers()` を満たすまで実行しない |
-| `saveApprovals()`（`tc5_approvals` の全体PUT） | `approvalsLoaded` |
-| `mdSaveCell()`（月別出勤日数） | `monthlyDaysLoaded` |
-| `mealToggleDate()` / `mealSelectAttendance()` | `mealsLoaded` |
+★ **`orderBy="$key"` + `startAt` で範囲を絞る最適化を採用してはならない（2026-08-14 実測で否定）。**
+本番の実データは ID が3系統混在し、**辞書順が時系列順にならない**（3,869件中1,285件が順序逆転）。
+`startAt` で絞ると大量のレコードが黙って欠落する。範囲取得は必ず `date` で行う。
+
+---
+
+## index.html（app shell）の Cache Storage キャッシュ（2026-08-28）
+
+**再訪問のたびに index.html（gzip 約231KB）を丸ごと再ダウンロードしていたのをやめた。**
+
+### 変更前の問題（実測）
+
+`sw.js` の navigate ハンドラが `fetch(new Request(req,{cache:'no-store'}))` で
+**毎回 HTTP キャッシュをバイパス**していたため、リロードのたびに 236,171 B を取得していた。
+GitHub Pages は `ETag: W/"…"` と `Cache-Control: max-age=600` を返しているが、この方式では活きない。
+
+### 変更後の方式（stale-while-revalidate）
+
+1. ナビゲーションは **Cache Storage から即座に返す**（ネットワーク転送 0）。
+2. 裏で **HEAD** により配信中の `ETag`（無ければ `Last-Modified`）を確認する。
+3. 変わっていたら本体を GET してキャッシュを入れ替え、`postMessage({type:'APP_UPDATE_AVAILABLE'})` で画面へ通知する。
+4. 画面は**既存の更新バナー**（「新しいバージョンがあります。再読み込みしてください。」）を出す。
+   **自動リロードはしない**（打刻・入力中に画面を奪わない）。
+
+### ローカル実測（GitHub Pages と同じヘッダを返す検証サーバ）
+
+| | 変更前 | 変更後 |
+|---|--:|--:|
+| 初回訪問の index.html 転送 | 236,171 B | 240,795 B ×2（プリフェッチぶん）＝ 481,590 B |
+| **2回目以降の index.html 転送** | **236,171 B** | **0 B**（`deliveryType: "cache-storage"`） |
+| 2回目の `domInteractive` | 108 ms | **56 ms** |
+| 2回目の `loadEventEnd` | 594 ms | **109 ms** |
+| 2回目のサーバ側リクエスト | GET 236,171 B | HEAD ×2（0 B）＋ `sw.js` 304 |
+
+初回だけ二重取得になるのは、**Chromium ではナビゲーションの応答を Service Worker の `fetch` から
+HTTP キャッシュ経由で再利用できない**ため（`default` / `force-cache` のいずれでもネットワークへ行くことを実測で確認）。
+**2回訪問した時点で合計転送量はプリフェッチしない場合と同じ**になり、初回直後からオフライン起動できる利点が残る。
+
+### 「速くなったが最新版に更新されない」を防いでいる仕組み
+
+★ **`_appVersionTag` の HEAD 監視だけでは不十分になった。**
+起動時に HEAD で取る ETag は常に「配信中の最新版」であり、**いま動いている HTML の版とは限らない**
+（Cache Storage から古い版を返している可能性がある）。
+そのため「古い HTML を実行中」を検知できるのは **Service Worker だけ**であり、
+`_swSaysStale` フラグ（SW からの `APP_UPDATE_AVAILABLE` を受けて立つ）が唯一の経路になる。
+**このフラグと `checkAppVersion()` の先頭の判定を外してはならない。**
+
+多重の安全弁:
+
+・**ナビゲーションのたびに HEAD で版を確認する**（1リクエスト・0バイト）
+・オンライン復帰・タブ復帰で `CHECK_APP_UPDATE` を SW へ送る
+・**版が取得できないときは必ず本体を GET する**（「取れない＝更新なし」と扱わない）
+・`sw.js` の `CACHE_NAME` を上げれば `activate` で旧キャッシュを全削除する（最後の安全弁）
+
+### 通知の取りこぼし対策（`__served_version`）
+
+キャッシュを入れ替えたあとに再確認しても、比較相手がキャッシュ（すでに新版）だと差が無いことになる。
+そのため **「最後に画面へ返した版」を Cache Storage の `\`/timecard/__served_version\`` へ残し**、
+`CHECK_APP_UPDATE` ではそちらと比べる。これが無いと、postMessage を取りこぼしたタブは
+**二度と更新に気づけない**（打刻端末は開きっぱなしなので1セッション＝数日になりうる）。
+保存するのは ETag 文字列だけで、個人情報は含まない。
+
+★ **ETag の弱い印（`W/`）は比較前に外す**（`normVersion`）。
+GitHub Pages は同じ内容でも `Accept-Encoding` によって印が付き外れする
+（2026-08-28 実測: gzip なら `W/"6a9102ae-d926d"`、identity なら `"6a9102ae-d926d"`）。
+**HEAD と GET の ETag は同じ `Accept-Encoding` なら一致することを実測済み**。
+
+★ **HEAD が `!ok` のときは必ず本体を GET して確かめる**。405 を返す中継プロキシのある経路で
+「何もしない」とすると、その端末は二度と更新に気づけない。
+
+### 「後で」を無効化しない
+
+★ Service Worker は**ナビゲーションのたび・画面復帰のたび**に通知しうる。
+そのため `_appUpdateDismissedAt` を見て、「後で」を押してから 5分は再表示しない。
+`checkAppVersion()` の `_swSaysStale` 判定も**間隔ゲートのあと**に置く。
+この2箇所のどちらかをゲートの前へ戻すと、打刻端末では画面復帰のたびにバナーが戻り、
+実質「後で」が効かなくなる（実機で確認済み）。
+
+### キャッシュしてよいもの／絶対にしないもの
+
+★ **Cache Storage へ入れるのは配信物だけである。**
+`cache.put` を呼ぶのは app shell の1箇所だけ、`cache.addAll` は `OFFLINE_URLS` の1箇所だけ、という
+**ホワイトリスト方式**にしてある（除外リスト方式にすると、新しい API を足したときに黙って漏れる）。
+
+・Firebase Realtime Database（勤怠データ）・Identity Toolkit / securetoken（認証）・
+　`timecard-rho.vercel.app/api/*`（通知・移動距離）は **一切キャッシュしない**
+・`OFFLINE_URLS` は同一オリジンの静的アセットのみ（`manifest.json` とアイコン3種）。**HTML を入れない**
+・**キャッシュキーは `/timecard/` に正規化する**。`?admin=` / `?token=` / `?demo=` などのクエリは
+　キーに含めない（トークンがキャッシュに残らない／クエリごとにエントリが増殖しない）。
+　権限判定は従来どおり実行時に `location.search` で行うため、正規化しても挙動は変わらない
+・`manual.html` など app shell 以外のナビゲーションは**素通し**する（index.html を返してはならない）
+・`ok` でない応答（404・エラーHTML）は保存しない
+
+### 打刻データとの責務分離
+
+打刻の端末保存は **IndexedDB（`timecard_punch_outbox`）** のままで、Cache Storage とは無関係。
+`sw.js` は打刻データに一切触れない。
+
+### 変更時の注意
+
+★ **`sw.js` を変更したら必ず `CACHE_NAME` を上げる**（`timecard-vN`）。
+これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
+
+### 既知の制限（未解消・運用で認識しておくこと）
+
+1. **管理画面のセッション合計の転送量は減っていない。**
+   承認漏れバナーは全タブ共通のヘッダにあるため、`ensureRecordsHistory()` はタブに関係なく走る。
+   入口で待たされる量は 1,038,792B → 230,245B になったが、約13秒以上開けば合計はほぼ同じ。
+   ★ これを減らすには「承認漏れの対象期間を限る」という**業務判断**が要る。推測で変えてはならない。
+2. **月別出勤日数タブは選択年を1リクエストで取る。** 現在は5か月分だが、
+   12か月分になると約2.8MB の単一リクエストへ成長する。その時点で月単位分割へ変えること。
+3. **`tc5_approvals` は10秒ポーリングで毎回全件（54,471B）取得している**（今回の対象外）。
+   現在のポーリング転送量の約56%を占める最大の残存コスト。
+   ★ **読み取りだけを月に絞ってはならない。** `saveApprovals()` がノード全体 PUT なので、
+   読みだけ絞ると承認1件で**他月の承認が全消滅する**。順序は必ず
+   ①`saveApprovals` を per-key 書き込みへ → ②読み取りを月範囲へ。
+4. **分割取得のあいだ、月ごとに `records` 全件を localStorage へ書き戻す**（月数回）。
+   実測 6.4ms/回（デスクトップ・4,267件）。低速端末では体感しうる。
+5. **打刻件数が現在の約4〜5倍（約5MB）で localStorage のクォータに達する**。
+   `_lsSet` は無言で失敗するため、その時点で端末キャッシュの保持方式を見直すこと。
+6. **初回訪問だけ index.html を二重取得する**（上記の実測表）。2回訪問した時点で相殺される。
+
+### テスト
+
+`node scripts/test-records-range.js`（依存パッケージなし・送信なし・本番データ非アクセス）。
+期間取得と app shell キャッシュの両方を固定している。
+**`tc5_records` の取得範囲・管理画面の入口・月/年セレクタ・`sw.js` に関係する変更では実行必須**
+（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
 
 ---
 
@@ -637,7 +876,8 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 ・`rec` は `tc5_records` へ書くレコードそのもの。
 ・**`localStorage` はキューの保存先として使わない。** 旧実装（2026-08-26 初版）が使っていた
 　`tc5_punch_outbox` キーは、起動時に読み込んで IndexedDB へ移送したうえで削除する（移行処理）。
-　`tc5_records` の全件キャッシュは従来どおりで、本変更では触っていない。
+　`tc5_records` の端末キャッシュは従来どおりのキーを使う（本変更では触っていない）。
+　★ ただし 2026-08-28 以降、中身は**全件ではなく取得済み区間分だけ**である（`mergeRecordsRange`）。
 ・**送信前に `state:"syncing"` を永続化する。** 送信中にアプリが終了しても、
 　起動時に `pending` へ戻して再送できる（存在確認つきなので二重登録しない）。
 
@@ -727,7 +967,8 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
 
 サーバから `tc5_records` を取り直す箇所では、必ず `punchOutboxMergeInto(arr)` を通す。
 通さないと**サーバ応答で `records` を差し替えた瞬間に未送信打刻が画面から消える**。
-現在の該当箇所は3つ（起動時 `initFirebase`／10秒ポーリング／管理画面「朝出勤確認 — 最新状態に更新」）。
+現在の直接呼び出しは2つ（起動時 `initFirebase`／`mergeRecordsRange()` の中）。
+10秒ポーリングと朝出勤確認の「最新状態に更新」は `mergeRecordsRange()` 経由で間接的に通っている。
 **`tc5_records` の再取得を新しく足すときは、同じ処理を必ず入れること。**
 `punchOutboxMergeInto` は**サーバ側に同じ `eventId` があれば触らない**
 （ローカルの古い内容でサーバの正本＝管理者修正後の値を上書きしない）。
@@ -811,6 +1052,7 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
   - **管理者トークン状態の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-admin-token-state.js`。`index.html` の管理者URLトークン「設定状態」判定ブロックを抽出して検証する。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **有給「付与日数の修正」の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-paid-leave-grant-edit.js`。`index.html` の付与日数修正ブロックを抽出し、残日数の再計算式・下限判定・確認表示と保存値の一致・`usedDays` と他の付与行を変更しないことを検証する。**有給の付与日数修正・残日数の計算に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **打刻の端末永続保存・自動再送の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-punch-outbox.js`。`index.html` の `PUNCH-OUTBOX-BEGIN/END` ブロックを抽出し、IndexedDB 保存の成否・二重登録防止・実打刻時刻の不変性・syncing の復旧・多重送信の抑止・認証切れ・警告条件・旧 localStorage キューからの移行・sandbox/デモ/閲覧用での無効化・`index.html` 側の結線を検証する。**打刻に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
+  - **tc5_records の期間取得と app shell キャッシュの回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-records-range.js`。`index.html` の `RECORDS-RANGE-BEGIN/END` ブロックを抽出し、区間集合の境界条件・未取得部分だけの取得・管理画面の入口で全件取得しないこと・月単位の分割スキャン・月/年セレクタの選択肢・フェイルクローズ、および `sw.js` が app shell 以外（Firebase / 認証 / API）を Cache Storage へ入れないことを検証する。**`tc5_records` の取得範囲・管理画面の入口・月/年セレクタ・`sw.js` に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **打刻イベントの適用確認（本番データを読むだけ・書き込みなし）**: `node scripts/verify-punch-events.js`。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` を環境変数で渡す。`eventId` の重複・ノード名との一致・サーバ受信時刻の妥当性を確認する。
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
@@ -930,8 +1172,9 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
 6. **管理者トークン状態の回帰テスト**: `node scripts/test-admin-token-state.js`（全件 PASS / 0 FAIL を確認）。**管理者URLトークン・管理者PINの設定状態表示・`/config/adminTokenSet.json` / `adminTokenHash.json` / `adminToken.json` の取得処理に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 7. **有給付与日数修正の回帰テスト**: `node scripts/test-paid-leave-grant-edit.js`（全件 PASS / 0 FAIL を確認）。**有給の付与日数修正・残日数の計算に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 8. **打刻の端末永続保存・自動再送の回帰テスト**: `node scripts/test-punch-outbox.js`（全件 PASS / 0 FAIL を確認）。**打刻・`_execPunch`・`tc5_records` への書き込み・起動時／polling の打刻取得に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
-9. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
-10. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
+9. **tc5_records の期間取得・app shell キャッシュの回帰テスト**: `node scripts/test-records-range.js`（全件 PASS / 0 FAIL を確認）。**`tc5_records` の取得範囲・管理画面の入口・月/年セレクタ・`sw.js` に関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+10. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
+11. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 
 総合判定は「出荷可 / 要修正」。要修正なら ship に進まない。
 

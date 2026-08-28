@@ -681,8 +681,8 @@ function mealSelectAttendance(eid,ym){
   if(!mealEditable(ym)){showAlert("未来の月は入力できません");return;}
   // ★ その月の打刻をまだ取得できていない状態で実行すると、出勤日を取りこぼしたまま
   //   「全選択しました」と保存してしまう。取得できるまで実行しない（フェイルクローズ）。
-  if(!recordsRangeCovers(ym+"-01",ym+"-31")){
-    ensureRecordsRange(ym+"-01",ym+"-31");
+  if(!recordsRangeCovers(ym+"-01",recMonthEnd(ym))){
+    ensureRecordsRange(ym+"-01",recMonthEnd(ym));
     showAlert("この月の打刻を読み込んでいます。\n\n数秒お待ちのうえ、もう一度お試しください。");
     return;
   }
@@ -1326,17 +1326,71 @@ function fetchJson(url) {
 //   同じ関数なので、取得範囲と表示範囲が食い違わない。ここで getTodayJSTStr() を混ぜると、
 //   端末TZがJSTでない場合に「画面が探す日付」と「取ってきた日付」がずれて打刻が消える。
 //
-// ★ 取得済みの範囲は1つの連続区間 [_recRange.from, _recRange.to] として持つ。
 //   範囲外のレコードはメモリに残るが、画面が表示するのは必ず取得済み範囲だけにする。
-var _recRange={from:"",to:"",full:false};
+// ===== RECORDS-RANGE-BEGIN =====
+// ★ 取得済みの範囲は「区間の集合」として持つ。
+//   単一の連続区間にすると、管理画面で 8月 → 4月 と月を飛ばして選んだだけで
+//   あいだの 5〜7月まで巻き込んで取得することになり、必要以上の期間を取ってしまう。
+//   区間は昇順・重複なし・隣接はマージ済みで保持する。
+var _recIvs=[];              // [{from,to}] 取得済み区間
+var _recFull=false;          // 運用開始月〜当月をすべて取得済み
 var _recordsTries=0;
 var RECORDS_MAX_TRIES=3;
 var _recDayShift=function(n){var d=new Date();d.setDate(d.getDate()+n);return fmtDateKey(d);};
 function recToday(){return fmtDateKey(new Date());}
+// 翌日／前日の "YYYY-MM-DD"。区間の隣接判定に使う。
+// ★ 月末を "-31" で表す上限値（例 "2026-06-31"）を渡されても必ず翌月1日を返す。
+//   Date へ素で渡すと "2026-07-02" になり、7/1 が抜けているのに「連続している」と誤判定する。
+function _recNextDay(ds){
+  var p=String(ds).split("-");var y=+p[0],m=+p[1],d=+p[2];
+  if(!y||!m||!d)return ds;
+  var last=new Date(Date.UTC(y,m,0)).getUTCDate();
+  if(d>=last)return (m===12?(y+1)+"-01":y+"-"+pad(m+1))+"-01";
+  return y+"-"+pad(m)+"-"+pad(d+1);
+}
+function _recPrevDay(ds){
+  var p=String(ds).split("-");
+  var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));d.setUTCDate(d.getUTCDate()-1);
+  return d.toISOString().slice(0,10);
+}
+// その月／その年の「取得すべき上限日」。当月・当年は当日まで（未来日に打刻は存在しない）。
+// ★ 当月を "-31" で要求すると、打刻画面の取得範囲（…〜当日）では永久に満たされず、
+//   職員の移動距離カードが月内ずっと「読み込めていません」になる。
+function recMonthEnd(ym){
+  var t=recToday();
+  return (ym===t.substring(0,7))?t:(ym+"-31");
+}
+function recYearEnd(y){
+  var t=recToday();
+  return (String(y)===t.substring(0,4))?t:(y+"-12-31");
+}
 function recordsRangeCovers(from,to){
-  if(_recRange.full)return true;
-  if(!_recRange.from)return false;
-  return _recRange.from<=from&&_recRange.to>=to;
+  if(_recFull)return true;
+  for(var i=0;i<_recIvs.length;i++){if(_recIvs[i].from<=from&&_recIvs[i].to>=to)return true;}
+  return false;
+}
+function _recAddIv(from,to){
+  var list=_recIvs.concat([{from:from,to:to}]).sort(function(a,b){return a.from<b.from?-1:(a.from>b.from?1:0);});
+  var out=[];
+  list.forEach(function(iv){
+    var last=out[out.length-1];
+    if(last&&iv.from<=_recNextDay(last.to)){if(iv.to>last.to)last.to=iv.to;}
+    else out.push({from:iv.from,to:iv.to});
+  });
+  _recIvs=out;
+}
+// [from,to] のうち未取得の部分だけを返す（取得済みの期間を取り直さない）
+function _recGaps(from,to){
+  if(_recFull)return [];
+  var gaps=[],cur=from;
+  for(var i=0;i<_recIvs.length&&cur<=to;i++){
+    var iv=_recIvs[i];
+    if(iv.to<cur)continue;
+    if(iv.from>cur)gaps.push({from:cur,to:(iv.from<=to?_recPrevDay(iv.from):to)});
+    cur=_recNextDay(iv.to);
+  }
+  if(cur<=to)gaps.push({from:cur,to:to});
+  return gaps;
 }
 // 取得した範囲だけを差し替える。範囲外の既存レコード（前回セッションの端末キャッシュ等）は残す。
 function mergeRecordsRange(from,to,obj){
@@ -1345,18 +1399,155 @@ function mergeRecordsRange(from,to,obj){
   records=kept.concat(incoming);
   punchOutboxMergeInto(records); // 未送信の打刻を消さない（サーバに同じ eventId があれば触らない）
   _lsSet("tc5_records",JSON.stringify(records));
-  if(!_recRange.full){
-    _recRange.from=_recRange.from?(from<_recRange.from?from:_recRange.from):from;
-    _recRange.to=_recRange.to?(to>_recRange.to?to:_recRange.to):to;
-  }
+  _recAddIv(from,to);
   monthRecordsReady=recordsRangeCovers(getJSTMonthRange().first,recToday());
 }
+// ★ 「取得失敗」と「該当 0 件」を区別する。
+//   RTDB REST は該当 0 件でも 200 ＋ `null` を返す。fetchJson は取得失敗も null を返すため、
+//   区別しないと「打刻が1件も無い期間」を永久に未取得扱いにし、
+//   render のたび（5秒間隔で）同じ範囲を取り直し続ける。さらに ensureAdminRecordRanges が
+//   そこで return するため、全期間スキャン（承認漏れの集計）も永久に進まなくなる。
+//   該当 0 件は空オブジェクトを返し、取得失敗だけを null にする。
 function fetchRecordsRange(from,to){
-  return fetchJson(FB_URL+"/tc5_records.json?orderBy="+encodeURIComponent('"date"')
-    +"&startAt="+encodeURIComponent('"'+from+'"')+"&endAt="+encodeURIComponent('"'+to+'"'));
+  var url=FB_URL+"/tc5_records.json?orderBy="+encodeURIComponent('"date"')
+    +"&startAt="+encodeURIComponent('"'+from+'"')+"&endAt="+encodeURIComponent('"'+to+'"');
+  return authFetch(url)
+    .then(function(r){if(!r.ok){throw new Error("HTTP "+r.status);}return r.json();})
+    .then(function(v){return (v===null||v===undefined)?{}:v;})
+    .catch(function(){return null;});
 }
-// 全件（管理・労務士画面。承認漏れサマリーが全期間・月セレクタ・月別出勤日数の年単位で必要）
-function fetchRecordsAll(){return fetchJson(FB_URL+"/tc5_records.json");}
+// ★ tc5_records の「絞り込みなしの全件 GET」はこのファイルに存在しない（実測 1,038,792B）。
+//   全期間が必要な場合も ensureRecordsHistory() の月単位分割取得を使う。
+//   全件取得のヘルパを復活させてはならない（使えるところにあると必ず使われる）。
+
+// ===== 運用開始日（最古の打刻日）=====
+// 月・年セレクタの選択肢を作るためだけに、最古の1件（本番実測 141B）を取得する。
+// ★ 選択肢のために全件（実測 1,008KB）を取得しない。端末へ保存し、次回は即座に使う。
+// ★ ここで loadData() を呼んではならない。このブロックは前半の script ブロックにあり、
+//   loadData() は後半の script ブロックで定義されるため、評価時点では未定義で ReferenceError になる
+//   （関数宣言の巻き上げは script ブロックをまたがない）。
+//   例外はこの script ブロックの残りの実行を丸ごと止める（_LAZY_RETRY_MS などが undefined になり、
+//   再試行の間隔ガードが効かなくなる）。端末保存からの復元は最初に参照したときに行う。
+var _recOldestDate="";
+var _recOldestRestored=false;
+function _recOldestFromStorage(){
+  if(_recOldestRestored)return _recOldestDate;
+  _recOldestRestored=true;
+  try{
+    var v=localStorage.getItem("tc5_records_oldest");
+    var d=v?JSON.parse(v):"";
+    if(typeof d==="string"&&/^\d{4}-\d{2}-\d{2}$/.test(d))_recOldestDate=d;
+  }catch(e){}
+  return _recOldestDate;
+}
+var _recOldestPromise=null,_recOldestLastTry=0,_recOldestChecked=false;
+function ensureRecordsOldest(){
+  // ★ 取得に成功したらそのページのあいだは二度と取りに行かない。
+  //   ensureAdminRecordRanges が毎 render から呼ぶため、ガードが無いと
+  //   管理画面を開いている間ずっと 5秒おきに取り続ける。
+  if(_recOldestChecked)return null;
+  if(_recOldestPromise)return _recOldestPromise;
+  if(Date.now()-_recOldestLastTry<_LAZY_RETRY_MS)return null;
+  _recOldestLastTry=Date.now();
+  // ★ limitToFirst=1 にしない。RTDB の順序規則上、`date` を持たない子が先頭へ来得る。
+  //   1件だけ見て弾くと _recOldestDate が永久に空になり、全期間の確定（_recFull）も
+  //   改名も永久にブロックされる（フェイルクローズが解除不能になる）。
+  //   本番実測（2026-08-28）では `date` 欠損 0 件だが、少数件見て最小の有効日を採る。
+  _recOldestPromise=fetchJson(FB_URL+"/tc5_records.json?orderBy="+encodeURIComponent('"date"')+"&limitToFirst=5")
+    .then(function(v){
+      _recOldestPromise=null;
+      if(v===null||v===undefined)return;
+      var arr=Array.isArray(v)?v.filter(Boolean):Object.values(v).filter(Boolean);
+      var d="";
+      arr.forEach(function(r){
+        var x=(r&&r.date)?String(r.date):"";
+        if(!/^\d{4}-\d{2}-\d{2}$/.test(x))return;
+        if(!d||x<d)d=x;
+      });
+      if(!d)return;
+      var _prev=_recOldestFromStorage();   // ★ 保存より先に復元する（逆にすると初回解決時に再描画されない）
+      _recOldestRestored=true;
+      _recOldestChecked=true;
+      _lsSet("tc5_records_oldest",JSON.stringify(d));
+      if(d!==_prev||d!==_recOldestDate){
+        _recOldestDate=d;
+        if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+      }
+    }).catch(function(){_recOldestPromise=null;});
+  return _recOldestPromise;
+}
+// 運用開始月（サーバで確認済みの値だけ）。未確定なら空文字を返す。
+// ★ 「その月に打刻が無い」と断定してよいのはこの値が確定しているときだけである。
+//   メモリ上の records から推測した月を根拠にすると、取得範囲を絞ったせいで
+//   実際より新しい月が「運用開始月」になり、その前の月を「打刻なし」と誤断定して
+//   有給の付与日数が取込値へ黙って落ちる。
+function recordsOperationStartMonth(){
+  var d=_recOldestFromStorage();
+  return d?d.substring(0,7):"";
+}
+// 月・年セレクタの選択肢を作るための最良推定。★ 判断の根拠には使わない。
+function recordsOldestMonth(){
+  var saved=_recOldestFromStorage();
+  var m=saved?saved.substring(0,7):"";
+  for(var i=0;i<records.length;i++){
+    var r=records[i];
+    if(!r||!r.date||r.date.length<7)continue;
+    var rm=r.date.substring(0,7);
+    if(!m||rm<m)m=rm;
+  }
+  return m;
+}
+// 月セレクタの選択肢（降順）。運用開始月〜当月を機械的に列挙する。
+// ★ 本番実測（2026-08-28）で 2026-04〜2026-08 に月の欠落が無いことを確認済み。
+//   それでも、メモリ上の records に存在する月と呼び出し側が指定した月は必ず併合する
+//   （取得範囲を絞ったことで選択肢が減る、という後退を起こさない）。
+function recordsMonthOptions(extra){
+  var set={};
+  records.forEach(function(r){if(r&&r.date&&r.date.length>=7)set[r.date.substring(0,7)]=true;});
+  var oldest=recordsOldestMonth();
+  if(oldest){
+    var cur=monthKey(recToday()),m=oldest,guard=0;
+    while(m<=cur&&guard++<600){set[m]=true;m=addYm(m,1);}
+  }
+  (extra||[]).forEach(function(m){if(m)set[m]=true;});
+  return Object.keys(set).sort().reverse();
+}
+// 年セレクタの選択肢（昇順）。運用開始年〜当年。
+function recordsYearOptions(extra){
+  var set={};
+  records.forEach(function(r){
+    if(!r)return;
+    var t=r.timestamp?new Date(r.timestamp):null;
+    if(t&&!isNaN(t))set[t.getFullYear()]=true;
+    else if(r.date&&r.date.length>=4)set[parseInt(r.date.substring(0,4),10)]=true;
+  });
+  var oldest=recordsOldestMonth();
+  var y0=oldest?parseInt(oldest.substring(0,4),10):0;
+  var y1=new Date().getFullYear();
+  if(y0)for(var y=y0;y<=y1;y++)set[y]=true;
+  set[y1]=true;
+  (extra||[]).forEach(function(y){if(y)set[parseInt(y,10)]=true;});
+  return Object.keys(set).map(Number).filter(function(n){return !!n;}).sort(function(a,b){return a-b;});
+}
+
+// その月の打刻を「確かに知っている」か。
+// 運用開始前と未来の月は打刻が存在しないので真（従来どおり取込値へフォールバックさせる）。
+function recordsMonthKnown(ym){
+  if(!ym||!/^\d{4}-\d{2}$/.test(ym))return true;
+  if(_recFull)return true;
+  if(ym>monthKey(recToday()))return true;                        // 未来月＝打刻が存在しない
+  // ★ 実際に取得済みなら、運用開始月が未確定でも known と断定してよい（実測根拠の true）。
+  //   この判定を後ろへ回すと、管理画面を一度も開いていない端末（＝打刻端末）では
+  //   ensureRecordsOldest() が走らず start が空のままなので、移動距離カードの
+  //   「打刻データを読み込めていません」が常時点灯し、本当の未取得を検知できなくなる。
+  if(recordsRangeCovers(ym+"-01",recMonthEnd(ym)))return true;
+  var start=recordsOperationStartMonth();
+  // ★ 運用開始月が未確定のあいだは「打刻が無い月」と断定しない（フェイルクローズ）。
+  //   ここを recordsOldestMonth() の推測値で判定すると、端末キャッシュしか無い状態で
+  //   過去月を「運用開始前」と誤断定し、有給の付与日数が取込値へ黙って落ちる。
+  if(!start)return false;
+  return ym<start;                                               // 運用開始前＝打刻が存在しない
+}
 
 // 起動時の当日取得。打刻ボタンはこれが終わるまで押せない（recordsReady）。
 function loadPunchRecords(){var d=recToday();return fetchRecordsRange(d,d);}
@@ -1383,45 +1574,131 @@ function applyPunchRecords(fbRecords){
 }
 
 // 画面が必要とする期間を確保する。取得済みなら通信しない。
+// ★ 未取得の部分（gap）だけを取りに行く。同時に走らせるのは常に1本だけ
+//   （月を切り替えるたびに前の取得と並走させると、通信の細い端末で取り合いになる）。
 // 失敗時は5秒あけて再試行（render() から呼ぶため、間隔を置かないと撃ち続ける）。
+// ★ authFetch にタイムアウトが無いため、1本がハングすると単一実行のしからみで
+//   他の期間取得まで永久に止まる。一定時間を超えたら新しい取得を許す
+//   （古い promise の完了処理も mergeRecordsRange なので重複しても安全）。
+var RECORDS_RANGE_STUCK_MS=30000;
 var _recRangePromise=null,_recRangeLastTry=0,_recRangeWant="";
 function ensureRecordsRange(from,to){
   if(recordsRangeCovers(from,to))return null;
-  // 既存の取得済み区間と連続させる（穴を作らない）
-  var f=_recRange.from&&_recRange.from<from?_recRange.from:from;
-  var t=_recRange.to&&_recRange.to>to?_recRange.to:to;
+  var gaps=_recGaps(from,to);
+  if(!gaps.length)return null;
+  if(_recRangePromise&&Date.now()-_recRangeLastTry<RECORDS_RANGE_STUCK_MS)return _recRangePromise;
+  var f=gaps[0].from,t=gaps[0].to;
   var want=f+"~"+t;
-  if(_recRangePromise&&_recRangeWant===want)return _recRangePromise;
   if(_recRangeWant===want&&Date.now()-_recRangeLastTry<_LAZY_RETRY_MS)return null;
   _recRangeWant=want;_recRangeLastTry=Date.now();
-  _recRangePromise=fetchRecordsRange(f,t).then(function(v){
+  // ★ 停滞解除で2本目が走ったとき、遅れて着地した古い応答は捨てる。
+  //   後勝ちにすると、その範囲だけ 30秒以上前のデータへ一時的に巻き戻る。
+  //   また古い方が _recRangePromise を null にすると、新しい取得が飛行中でも
+  //   単一実行の保証が一時的に外れる。
+  var p=fetchRecordsRange(f,t).then(function(v){
+    if(_recRangePromise!==p)return;              // 追い越された古い応答
     _recRangePromise=null;
     if(v===null||v===undefined)return;           // 失敗。次の描画で再試行される
     mergeRecordsRange(f,t,v);
     if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
-  }).catch(function(){_recRangePromise=null;});
-  return _recRangePromise;
+  }).catch(function(){if(_recRangePromise===p)_recRangePromise=null;});
+  _recRangePromise=p;
+  return p;
 }
-// 管理・労務士画面は全期間を使う（下記コメント参照）。1度だけ取得する。
-var _recFullPromise=null,_recFullLastTry=0;
-function ensureRecordsFull(){
-  if(_recRange.full)return null;
-  if(_recFullPromise)return _recFullPromise;
-  if(Date.now()-_recFullLastTry<_LAZY_RETRY_MS)return null;
-  _recFullLastTry=Date.now();
-  _recFullPromise=fetchRecordsAll().then(function(v){
-    _recFullPromise=null;
-    if(v===null||v===undefined)return;
-    var arr=Array.isArray(v)?v.filter(Boolean):Object.values(v).filter(Boolean);
-    records=arr;
-    punchOutboxMergeInto(records);
-    _lsSet("tc5_records",JSON.stringify(records));
-    _recRange.full=true;_recRange.from="0000-00-00";_recRange.to="9999-99-99";
-    recordsReady=true;recordsStale=false;monthRecordsReady=true;_recLoadedDay=recToday();
-    if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
-  }).catch(function(){_recFullPromise=null;});
-  return _recFullPromise;
+
+// ===== 全期間（運用開始月〜当月）の分割取得 =====
+// ★ 全期間を必要とするのは「承認漏れサマリー（全期間の未承認日数）」と
+//   「有給付与日数の自動算出」だけである。1本の全件取得（実測 1,008KB）を
+//   管理画面の入口で行うと、開いた瞬間に 1MB を待たされる。
+//   そこで、表示中の月を先に取り終えてから、残りを新しい月→古い月の順に
+//   1か月ずつ（実測 約230KB/月）取得する。**期間分割であって対象期間は変えない**
+//   ＝ 承認漏れの件数・有給の付与日数は変更前と一致する。
+var _recHistoryWant=false,_recHistoryPumping=false,_recHistoryStartedAt=0;
+function ensureRecordsHistory(){
+  if(_recFull)return;
+  _recHistoryWant=true;
+  if(!_recHistoryStartedAt)_recHistoryStartedAt=Date.now();
+  if(_recHistoryPumping)return;
+  _recHistoryPumping=true;
+  setTimeout(_recHistoryTick,1200); // 入口の描画・操作を優先する
 }
+function _recHistoryTick(){
+  // ★ 完了したときと管理画面を離れたときはタイマーを止める。
+  //   止めないと、打刻端末をつけっぱなしにする運用で 2.5秒間隔の空タイマーが永久に回る。
+  //   管理画面へ戻れば ensureRecordsHistory()（毎 render から呼ばれる）で自動的に再開する。
+  if(_recFull||screen!=="admin"||viewerMode||writePolicy==="sandbox"){
+    _recHistoryPumping=false;
+    // ★ 経過時間も戻す。戻さないと、一度管理画面を離れて戻ってきただけで
+    //   いきなり「時間がかかっています」と出てしまう（停滞の検知が意味をなさなくなる）。
+    if(!_recFull)_recHistoryStartedAt=0;
+    return;
+  }
+  _recHistoryStep();
+  setTimeout(_recHistoryTick,2500);
+}
+function _recHistoryStep(){
+  if(_recFull||!_recHistoryWant)return;
+  // 管理画面を離れたら追いかけない（打刻画面の通信を奪わない）
+  if(screen!=="admin"||viewerMode)return;
+  if(writePolicy==="sandbox")return;
+  // ★ 運用開始月はサーバで確認済みの値だけを使う。推測値で回すと、少ない月数を巡回しただけで
+  //   _recFull が立ち、承認漏れを「0件」と断定したりスタッフ改名のガードを素通りしたりする。
+  var oldest=recordsOperationStartMonth();
+  if(!oldest){ensureRecordsOldest();return;}
+  var cur=monthKey(recToday()),m=cur,guard=0,pending=null;
+  while(m>=oldest&&guard++<600){
+    if(!recordsRangeCovers(m+"-01",recMonthEnd(m))){pending=m;break;}
+    m=addYm(m,-1);
+  }
+  if(pending){ensureRecordsRange(pending+"-01",recMonthEnd(pending));return;}
+  // 運用開始月〜当月をすべて取得済み
+  _recFull=true;monthRecordsReady=true;_recHistoryPumping=false;
+  setTimeout(function(){
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+  },0);
+}
+// 分割取得の進行状態を文言にする。
+// ★ 進行中と停滞（通信断・取得失敗の繰り返し）を区別できないと、
+//   「集計中です…」が恒久表示になっても誰も気づけない。
+var HISTORY_SLOW_MS=60*1000;
+function recordsHistoryStatusText(){
+  if(_recHistoryStartedAt&&Date.now()-_recHistoryStartedAt>HISTORY_SLOW_MS)
+    return "⚠ 過去分の集計に時間がかかっています。通信状態を確認してください。";
+  return "⏳ 承認漏れを集計中です…（過去分を読み込んでいます）";
+}
+// 全期間の集計（承認漏れ・有給付与の自動算出）が確定したか。
+// ★ 未確定のまま「承認漏れ 0件」「付与日数 N日」と断定してはならない（フェイルクローズ）。
+function recordsHistoryReady(){return _recFull;}
+
+// 管理・労務士画面が「いま表示している内容」の根拠として必要とする期間だけを取得する。
+// ★ 入口で全件（実測 1,008KB）を取らない。ここに無い期間は、その画面が読まない期間である。
+function ensureAdminRecordRanges(){
+  ensureRecordsOldest();
+  var need=[],today=recToday();
+  var addMonth=function(ym){if(ym&&/^\d{4}-\d{2}$/.test(ym))need.push([ym+"-01",recMonthEnd(ym)]);};
+  if(viewerMode){
+    addMonth(reviewMonth);
+    if(selDate)need.push([selDate,selDate]);
+  }else if(screen==="staffDetail"||screen==="csvPreview"){
+    addMonth(selMonth);
+  }else{
+    addMonth(selMonth);
+    if(selDate)need.push([selDate,selDate]);
+    need.push([today,today]);                                   // 朝出勤確認・当日状況
+    if(adminTab==="meals")addMonth(mealAdminMonth||selMonth);
+    if(adminTab==="adjustlog")addMonth(adjLogMonth||monthKey(today));
+    if(adminTab==="monthlyDays"&&monthlyDaysYear)need.push([monthlyDaysYear+"-01-01",recYearEnd(monthlyDaysYear)]);
+    if(adminTab==="mileage"&&typeof mileage==="object"&&mileage&&mileage.adminYm)addMonth(mileage.adminYm);
+    // 付与日数の自動算出は入社月まで遡るため全期間が要る。タブを開いた時点で分割取得を始める。
+    if(adminTab==="paidleave")ensureRecordsHistory();
+  }
+  for(var i=0;i<need.length;i++){
+    if(!recordsRangeCovers(need[i][0],need[i][1])){ensureRecordsRange(need[i][0],need[i][1]);return;}
+  }
+  // 表示中の期間を取り終えたら、全期間が要るもの（承認漏れ／有給付与）を背景で月ごとに取得する。
+  if(screen==="admin"&&!viewerMode)ensureRecordsHistory();
+}
+// ===== RECORDS-RANGE-END =====
 // 打刻画面が「いま表示している内容」の根拠として必要とする日付範囲。
 // 起動時は当日分しか取っていないので、ログイン後にこの範囲まで広げる。
 // ★ 「とりあえず30日分」ではなく、画面上の各要素が実際に読む範囲だけを足している。
@@ -1450,7 +1727,10 @@ function refreshRecordsIfDayChanged(){
   var d=recToday();
   if(!_recLoadedDay||_recLoadedDay===d)return;
   _recLoadedDay=d;
-  _recRange.full=false;_recRange.from="";_recRange.to="";monthRecordsReady=false; // 範囲を取り直す
+  // ★ 取得済み区間をすべて捨てる。ここを旧変数（_recRange）だけで済ませると、
+  //   前日に立った _recFull が翌日も真のまま残り、当日分しか取っていない新しい月を
+  //   「全期間取得済み」と誤認する（賄いの出勤日全選択・有給の付与日数が壊れる）。
+  _recIvs=[];_recFull=false;monthRecordsReady=false;_recHistoryStartedAt=0;
   // ★ 取得の成否に関わらず、まず描き直す。日付が変わった瞬間に画面が
   //   前日の打刻状態（例: 退勤だけ押せる）を表示したままになるのを防ぐ。
   render();
@@ -1623,7 +1903,7 @@ function listenFirebase() {
     //   本番実測 1,008KB × 6回/分 = 約360MB/時。管理画面を開いている間ずっと流れ続けていた。
     //   ポーリングが拾う必要があるのは「他端末で今まさに行われた打刻」であり、それは必ず当日に入る。
     //   したがって当日分（実測 3.8KB）だけを取り直し、既存の範囲へマージする。
-    //   過去日の内容は画面へ入ったときの全件取得（ensureRecordsFull）と、
+    //   過去日の内容は画面へ入ったときの期間取得（ensureAdminRecordRanges / ensureRecordsHistory）と、
     //   自分の編集操作（saveRecord / patchRecord が records を直接更新する）で最新に保たれる。
     //   ※ 別の管理者が過去日を編集した場合、その反映は次に画面を開き直すまで遅れる。
     (function(){
@@ -2398,6 +2678,11 @@ function getAttendanceDaysForMonth(staffName,eid,ym,punchMap){
   if(MD_OVERRIDE_MONTHS[ym]&&impVal!=null)return{days:impVal,src:"override"};
   var pm=punchMap&&punchMap[staffName]&&punchMap[staffName][ym];
   var cnt=pm?Object.keys(pm).length:0;
+  // ★ known 判定は cnt より先に行う。その月が「部分的に」取得済みのとき、
+  //   cnt>0 を先に見ると半分の日数を src:"punch"（確信値）として返してしまい、
+  //   dataShort が立たないため「判定不可」にもならない（付与日数が黙って過少になる）。
+  //   取得範囲外の月は「データ不足」として扱う（分割取得が完了すれば従来と同じ値へ収束する）。
+  if(!recordsMonthKnown(ym))return{days:0,src:"none"};
   if(cnt>0)return{days:cnt,src:"punch"};
   if(impVal!=null)return{days:impVal,src:"import"};
   return{days:0,src:"none"};
@@ -3192,14 +3477,14 @@ function _renderInner(){
   // 1度だけ走る（ensureAdminData 内でガード）。サンドボックスでは本番値を混ぜない。
   if(isAdminScreen&&firebaseReady&&writePolicy!=="sandbox"){
     ensureAdminData();
-    // ★ 管理・労務士画面は tc5_records の全期間を使う。月だけに絞れない実装上の理由:
-    //   ・承認漏れサマリー（通知バッジ・勤怠一覧の未承認一覧）は「全期間の未承認日数」を数える
-    //   ・月セレクタの選択肢を records の月から作っている（勤怠一覧・スタッフ別・賄い・調整ログ）
-    //   ・月別出勤日数タブは年単位で集計する
-    //   ・移動距離の自動集計はクライアント側で計算し、サーバ側の計算と一致させる必要がある
-    //   月に絞るとこれらの表示値が変わるため、ここでは全件を1回だけ取得する。
+    // ★ 管理・労務士画面も「いま表示している期間」だけを取る（入口で全件 1,008KB を取らない）。
+    //   ・月／年セレクタの選択肢は、最古の打刻日1件（実測141B）から機械的に列挙する
+    //     （recordsMonthOptions / recordsYearOptions）
+    //   ・月別出勤日数は選択年、賄い・調整ログ・応援集計・CSV・移動距離は選択月だけ
+    //   ・承認漏れサマリーと有給付与の自動算出だけが全期間を必要とする。これは入口では取らず、
+    //     表示中の月を取り終えたあとに月ごとの分割取得で追いつかせる（ensureRecordsHistory）。
     //   毎回1MBを取り直していた10秒ポーリング側は当日分だけに変更してある（listenFirebase）。
-    ensureRecordsFull();
+    ensureAdminRecordRanges();
   }
   // スタッフの打刻画面でしか読まないデータ（有給・賄い・本人向け通知）も同様。
   if(screen==="punch"&&staffName&&firebaseReady&&writePolicy!=="sandbox"){
@@ -3375,7 +3660,7 @@ function _renderInner(){
     var DAYS_V=["日","月","火","水","木","金","土"];
     // 日付ナビゲーション
     var sdPV=selDate.split('-'),sdYV=parseInt(sdPV[0]),sdMoV=parseInt(sdPV[1]),sdDyV=parseInt(sdPV[2]);
-    var sdAllYearsV=[...new Set(records.map(function(r){return new Date(r.timestamp).getFullYear();}))].sort();
+    var sdAllYearsV=recordsYearOptions([sdYV]);
     var sdThisYV=new Date().getFullYear();
     if(sdAllYearsV.indexOf(sdThisYV)<0)sdAllYearsV.push(sdThisYV);
     sdAllYearsV.sort();
@@ -3421,7 +3706,7 @@ function _renderInner(){
     }).join("");
     // 月次CSV用データ
     // 労務士CSV: ゲート判定・CSV内容ともに締め対象月(reviewMonth=前月)に統一（selMonth/selDate とは独立）
-    var vMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
+    var vMonths=recordsMonthOptions([reviewMonth]);
     if(vMonths.indexOf(reviewMonth)<0)vMonths.unshift(reviewMonth);
     var vMonthOpts=vMonths.map(function(m){return'<option value="'+esc(m)+'"'+(m===reviewMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var vMRecs=records.filter(function(r){return monthKey(r.date)===reviewMonth&&!r.deleted;});
@@ -4328,7 +4613,7 @@ function _renderInner(){
     var _detailIdx=_detailStaffList.indexOf(nm);
     var _prevStaff=_detailIdx>0?_detailStaffList[_detailIdx-1]:null;
     var _nextStaff=(_detailIdx>=0&&_detailIdx<_detailStaffList.length-1)?_detailStaffList[_detailIdx+1]:null;
-    var months2=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
+    var months2=recordsMonthOptions([selMonth]);
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.date)===selMonth;});
@@ -4497,7 +4782,7 @@ function _renderInner(){
   }
 
   if(screen==="csvPreview"){
-    var prevMonths=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
+    var prevMonths=recordsMonthOptions([selMonth]);
     if(prevMonths.indexOf(selMonth)<0)prevMonths.unshift(selMonth);
     var prevMonthOpts=prevMonths.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var mRecsPrev=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
@@ -4658,7 +4943,7 @@ function _renderInner(){
   }
 
   if(screen==="admin"){
-    var months=[...new Set(records.map(function(r){return monthKey(r.date);}))].sort().reverse();
+    var months=recordsMonthOptions([selMonth]);
     if(months.indexOf(selMonth)<0)months.unshift(selMonth);
     var mRecs=records.filter(function(r){return monthKey(r.date)===selMonth;});
     var tc="";
@@ -4703,8 +4988,9 @@ function _renderInner(){
         tc=_pendingCrqHTML+'<div class="admin-card admin-wrap">'
           +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
           +'<span style="color:#c62828;font-size:.88rem;font-weight:700;">未承認一覧 '+unapvList.length+'件</span>'
+          +(recordsHistoryReady()?"":'<span style="color:#64748b;font-size:.78rem;">（全期間を集計中…）</span>')
           +'<button onclick="showUnapprovedOnly=false;render();" style="background:#c62828;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">✕ 未承認フィルター解除</button>'
-          +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">全件承認</button>'
+          +'<button id="btn-bulk-approve" style="margin-left:auto;background:#1e40af;color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(recordsHistoryReady()?"全件承認":"表示中の分を承認")+'</button>'
           +'</div>'
           +'<table class="records-table" style="width:100%;border-collapse:collapse;min-width:360px;">'
           +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
@@ -4813,7 +5099,7 @@ function _renderInner(){
       }).join("");
       var delRecs=dRecs.filter(function(r){return r.deleted;});
       var sdParts=selDate.split('-'),sdY=parseInt(sdParts[0]),sdMo=parseInt(sdParts[1]),sdDy=parseInt(sdParts[2]);
-      var sdAllYears=[...new Set(records.map(function(r){return new Date(r.timestamp).getFullYear();}))].sort();
+      var sdAllYears=recordsYearOptions([sdY]);
       var sdThisY=new Date().getFullYear();
       if(sdAllYears.indexOf(sdThisY)<0)sdAllYears.push(sdThisY);
       sdAllYears.sort();
@@ -4907,7 +5193,11 @@ function _renderInner(){
 
     if(adminTab==="edit"){
       var editRecs=mRecs.filter(function(r){return !r.deleted;}).sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
-      var allNames=[...new Set(records.map(function(r){return r.staff;}))].sort();
+      // ★ records だけから作ると、取得範囲を絞ったことで「その月に打刻が無い在籍スタッフ」
+      //   （入社直後など）が候補から消える。在籍スタッフを必ず併合する。
+      //   退職者は従来どおり `records` 側で拾う（`staffList` からは除外される）。
+      var allNames=[...new Set(staffList.filter(function(s){return !s.status||s.status==="在籍";}).map(function(s){return s.name;})
+        .concat(records.map(function(r){return r.staff;})).filter(Boolean))].sort();
       var monOpts2=months.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
       var editRows=editRecs.map(function(r){
         return '<div style="border:1px solid #adb5bd;border-radius:2px;padding:10px;margin-bottom:8px;background:'+(r.editedFrom?"#fef9c3":"#fff")+'">'
@@ -5568,7 +5858,7 @@ function _renderInner(){
         +'<div style="background:#fff5f5;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">未承認打刻</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#c62828;">'+_nc.unapproved+'</div>'
-        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">'+(recordsHistoryReady()?"件":"件（集計中）")+'</div>'
         +'<button onclick="goUnapprovedRecords()" style="margin-top:8px;background:#dc2626;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
         +'</div>'
         +'<div style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;">'
@@ -5587,7 +5877,7 @@ function _renderInner(){
         +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">合計</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#1e40af;">'+_nc.total+'</div>'
-        +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +'<div style="font-size:.7rem;color:#8496a7;">'+(recordsHistoryReady()?"件":"件（集計中）")+'</div>'
         +'</div>'
         +'</div>'
         +'<div style="border:1px solid '+(_nc.pendingPaidLeave>0?"#86efac":"#e2e8f0")+';border-radius:8px;overflow:hidden;">'
@@ -5896,6 +6186,7 @@ function _renderInner(){
         +'<div class="admin-title" style="margin-bottom:0;">付与予定（未登録）'
         +(_plr.grants.length>0?'<span style="background:#dc2626;color:#fff;font-size:.58rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;">'+_plr.grants.length+'件</span>':'')+'</div>'
         +'</div>'
+        +(recordsHistoryReady()?"":'<div style="background:#eef2f7;color:#475569;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:.78rem;line-height:1.6;">'+recordsHistoryStatusText()+'完了するまでは自動算出が「判定不可（データ不足）」になることがあります。</div>')
         +'<div style="font-size:.74rem;color:#64748b;margin-bottom:8px;line-height:1.6;">付与日数は<b style="color:#1e40af;">出勤日数からの自動算出</b>です（初回＝入社月から6か月×2、2回目以降＝付与月の前12か月の年間勤務日数で週相当を判定）。<b>判定不可・要確認</b>は自動算出できないため管理者の確認が必要です。登録ボタンを押すまで保存されません。</div>'
         +_dupWarnGr+_noIdWarnGr
         +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:920px;">'
@@ -5993,7 +6284,12 @@ function _renderInner(){
       if(!adjLogMonth)adjLogMonth=adjCurMonth;
       if(adjLogMonth>adjCurMonth)adjLogMonth=adjCurMonth;
       // 月候補：修正履歴のある最古月〜当月を連続で列挙（履歴0件の月・年またぎも選択できる）
+      // ★ 変更前は「修正履歴のある最古月」を全打刻の走査で求めていた。取得範囲を絞ったため、
+      //   運用開始月（最古の打刻日1件から取得。実測141B）を下限に加える。
+      //   メモリ上に修正履歴がある月も従来どおり併合するので、候補は減らない。
       var adjOldest=adjCurMonth;
+      var _adjOpMonth=recordsOldestMonth();
+      if(/^\d{4}-\d{2}$/.test(_adjOpMonth||"")&&_adjOpMonth<adjOldest)adjOldest=_adjOpMonth;
       records.forEach(function(r){
         if(r.deleted||!r.adjustReason||!r.date)return;
         var mk=r.date.substring(0,7);
@@ -6097,7 +6393,7 @@ function _renderInner(){
     if(adminTab==="monthlyDays"){
       var mdYear=monthlyDaysYear;
       // 利用可能な年（recordsの打刻年 ＋ 過去取込データの年 ＋ 当年 ＋ 選択中の年）
-      var mdYears=[...new Set(records.filter(function(r){return !r.deleted&&r.date;}).map(function(r){return parseInt(r.date.substring(0,4),10);}))];
+      var mdYears=recordsYearOptions([]);
       Object.keys(monthlyDaysImport).forEach(function(eid){
         var ms=(monthlyDaysImport[eid]||{}).months||{};
         Object.keys(ms).forEach(function(ym){var y=parseInt(ym.substring(0,4),10);if(y>0&&mdYears.indexOf(y)<0)mdYears.push(y);});
@@ -6384,7 +6680,7 @@ function _renderInner(){
       if(!mealAdminMonth)mealAdminMonth=selMonth;
       // 月候補：打刻のある月 ＋ 賄いデータのある月 ＋ 当月 ＋ 選択中
       var _meSet={};
-      records.forEach(function(r){if(r.type==="clockIn"&&!r.deleted&&r.date&&r.date.length>=7)_meSet[r.date.substring(0,7)]=true;});
+      recordsMonthOptions([]).forEach(function(m){_meSet[m]=true;});
       Object.keys(mealsData).forEach(function(eid){var dd=(mealsData[eid]||{}).dates||{};Object.keys(dd).forEach(function(d){if(d&&d.length>=7)_meSet[d.substring(0,7)]=true;});});
       var _meCur=getTodayJSTStr().substring(0,7); // JST基準（端末TZに依存しない）
       _meSet[_meCur]=true;_meSet[mealAdminMonth]=true;
@@ -6500,12 +6796,17 @@ function _renderInner(){
     updateAppBadge(counts.total);
     setTimeout(function(){ updateAppBadge(counts.total); }, 500);
     setTimeout(function(){ updateAppBadge(counts.total); }, 2000);
+    // ★ 承認漏れは全期間が対象。月ごとの分割取得が終わるまでは確定値ではないため、
+    //   「0件」と断定せず集計中であることを必ず示す（未承認を見落とさせない）。
+    var _unapvScanning=!recordsHistoryReady();
     var _unapvHTML=_unapv.total>0
       ?'<div onclick="goUnapprovedRecords()" style="background:#ffebee;color:#c62828;border-radius:12px;padding:12px;margin-bottom:8px;cursor:pointer;">'
-        +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）</div>'
+        +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">⚠ 承認漏れがあります：'+_unapv.total+'件（'+_unapv.people+'名）'+(_unapvScanning?'<span style="font-weight:400;font-size:.8rem;">（全期間を集計中…）</span>':"")+'</div>'
         +'<div style="font-size:.8rem;">'+Object.keys(_unapv.byFacility).map(function(k){return esc(k)+"："+_unapv.byFacility[k]+"件";}).join("　")+'</div>'
         +'</div>'
-      :"";
+      :(_unapvScanning
+        ?'<div style="background:#eef2f7;color:#475569;border-radius:12px;padding:9px 12px;margin-bottom:8px;font-size:.8rem;line-height:1.6;">'+recordsHistoryStatusText()+'</div>'
+        :"");
     var _installHTML=_deferredInstallPrompt
       ?'<div style="background:#e8f5e9;border-radius:12px;padding:10px 12px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;">'
         +'<div style="font-size:.82rem;color:#2e7d32;font-weight:700;">📲 アプリとしてインストールできます</div>'
@@ -6627,7 +6928,9 @@ function _renderInner(){
     var bulkApproveBtn=document.getElementById("btn-bulk-approve");
     if(bulkApproveBtn)bulkApproveBtn.onclick=function(){
       if(showUnapprovedOnly){
-        showConfirm("未承認データをすべて承認します。よろしいですか？",function(){
+        showConfirm(recordsHistoryReady()
+          ?"未承認データをすべて承認します。よろしいですか？"
+          :"過去分の集計がまだ完了していません。いま表示されている "+unapvList.length+" 件だけを承認します（あとから未承認が追加で出る場合があります）。よろしいですか？",function(){
           if(!unapvList.length){showAlert("承認済みでないデータはありません");return;}
           var _approved=[],_skipped=[];
           unapvList.forEach(function(p){
@@ -7044,13 +7347,15 @@ function _renderInner(){
     // 朝出勤確認 — 最新状態に更新
     var mRefBtn=document.getElementById("btn-morning-refresh");
     if(mRefBtn)mRefBtn.onclick=function(){
+      // ★ この画面が読むのは当日の clockIn だけなので、全件（実測 1,008KB）を取り直さない。
+      //   以前は records を丸ごと置換しており、取得範囲（_recIvs）と整合しなかった。
       mRefBtn.textContent="更新中…";mRefBtn.disabled=true;
-      authFetch(FB_URL+"/tc5_records.json")
-        .then(function(r){return r.json();})
+      (function(){var _d=recToday();
+       fetchRecordsRange(_d,_d)
         .then(function(val){
-          if(val){var arr=Array.isArray(val)?val:Object.values(val);punchOutboxMergeInto(arr);records=arr;localStorage.setItem("tc5_records",JSON.stringify(records));}
+          if(val!==null&&val!==undefined)mergeRecordsRange(_d,_d,val);
           render();
-        }).catch(function(){render();});
+        }).catch(function(){render();});})();
     };
 
     // 打刻追加
@@ -7176,9 +7481,18 @@ function _renderInner(){
         if(!s)return;
         if(newN!==orig){
           if(staffList.find(function(x){return x.name===newN&&x!==s;})){showAlert("同名のスタッフが既に存在します");return;}
+          // ★ 改名は全期間の打刻（r.id）を書き換える。取得できていない期間があると
+          //   その期間の打刻が旧氏名のまま残り、集計から黙って外れる。必ず全期間を取得してから実行する。
+          if(!recordsHistoryReady()){
+            ensureRecordsHistory();
+            showAlert("打刻データを読み込んでいます。数秒後にもう一度保存してください。");
+            return;
+          }
           var renamedIds=records.filter(function(r){return r.staff===orig;}).map(function(r){return r.id;});
           records.forEach(function(r){if(r.staff===orig)r.staff=newN;});
-          localStorage.setItem("tc5_records",JSON.stringify(records));
+          // ★ localStorage を直呼びしない。クォータ超過で例外が投げられると、
+          //   メモリ上の氏名だけ書き換わった状態で Firebase への PATCH 前に中断する。
+          _lsSet("tc5_records",JSON.stringify(records));
           renamedIds.forEach(function(rid){
             authFetch(FB_URL+"/tc5_records/"+rid+".json",{
               method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({staff:newN})
@@ -9588,7 +9902,7 @@ function mileageAutoDiff(snapDays,curRows){
 
 // ---- 自動集計のクライアント側の入口（表示用。確定の正本はサーバの closeMonth）----
 // ★ 打刻（tc5_records）は、この画面が表示する月が `records` に読み込み済みであることを前提にする。
-//   職員画面は punchScreenRecordRange()、管理画面は ensureRecordsFull() が範囲を保証する。
+//   職員画面は punchScreenRecordRange()、管理画面は ensureAdminRecordRanges() が範囲を保証する。
 //   表示のたびにサーバへ取りに行くことはしない。
 //   サーバは月次確定・要確認チェックのときだけ打刻を読み、同じ共有ロジックで計算し直す。
 var MILEAGE_AUTO_BADGE={
@@ -10080,7 +10394,7 @@ function mileageStaffCardHtml(){
     +'</div>'
     +'<div style="font-size:.72rem;color:#64748b;line-height:1.5;margin-bottom:8px;">応援（施設変更）の打刻から自動で集計しています。申請は不要です。</div>'
     // ★ 打刻を読めていないときに 0km を「移動なし」として見せない（未取得と 0 を区別する）
-    +(!records.length?'<div style="font-size:.74rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:6px 9px;margin-bottom:8px;">打刻データを読み込めていないため、自動集計を表示できません。通信状態を確認して画面を再読み込みしてください。</div>':"")
+    +(!recordsMonthKnown(mileage.myMonth)?'<div style="font-size:.74rem;color:#b91c1c;background:#fee2e2;border:1px solid #fecaca;border-radius:4px;padding:6px 9px;margin-bottom:8px;">打刻データを読み込めていないため、自動集計を表示できません。通信状態を確認して画面を再読み込みしてください。</div>':"")
     +(mileage.myClosed?'<div style="font-size:.74rem;color:#92400e;background:#fef3c7;border:1px solid #fde68a;border-radius:4px;padding:6px 9px;margin-bottom:8px;">この月は確定済みです。内容の変更はできません。'
       +(snap?'<br>下の金額は確定時のものです（日別の内訳は現在の打刻から表示しています）。'
             :'<br>確定内容を取得できませんでした。下の金額は参考値です。')+'</div>':"")
@@ -10695,8 +11009,8 @@ function mileageAdminCardHtml(){
       +'<button onclick="mileageAutoCheckRun()" style="background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:2px;padding:7px 14px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">'
       +(mileage.checkLoading?"確認中…":"サーバで再集計して確認")+'</button>'
       +'</div>'
-      +(!records.length
-        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">打刻データを読み込めていません。この画面の集計は正しくありません（画面を再読み込みしてください）。</div>':"")
+      +(!recordsMonthKnown(mileage.adminYm)
+        ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">この月の打刻データを読み込んでいます。表示中の集計はまだ確定ではありません。</div>':"")
       +(agg.unresolved
         ?'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">要確認が '+agg.unresolved+' 件あります。解消するまでこの月は確定できません。</div>'
         :'<div style="background:#dcfce7;color:#166534;border:1px solid #86efac;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:8px;">要確認はありません。</div>')
@@ -12013,7 +12327,7 @@ async function initFirebase() {
     //   第2段（待たない）  : 打刻状態の判定に要る tc5_records の【当日分だけ】… 実測 3.8KB
     //                        打刻ボタンはこれが届くまで押せない（recordsReady）
     //   第3段（取得しない）: 打刻画面・スタッフ選択画面が一切読まないもの
-    //                        → 管理/労務士画面を開いたとき(ensureAdminData / ensureRecordsFull)と
+    //                        → 管理/労務士画面を開いたとき(ensureAdminData / ensureAdminRecordRanges)と
     //                          スタッフがログインしたとき(ensureStaffScopedData / ensureRecordsRange)に取得する
     //
     // ★ 「先に描いて速く見せる」ための変更ではない。打刻の可否判定は従来どおり
@@ -12836,6 +13150,7 @@ document.addEventListener("keydown",function(e){
 //   再読み込みを促す。★ 自動リロードはしない（打刻・入力中に画面を奪わない）。
 var _appVersionTag="";        // 起動時に確認した配信版
 var _appUpdateNotified=false; // バナーは1回だけ
+var _appUpdateDismissedAt=0;  // 「後で」を押した時刻（先送りの間隔判定に使う）
 var _appVersionLastCheck=0;
 var APP_VERSION_CHECK_MS=30*60*1000; // 定期確認は30分間隔
 var APP_VERSION_MIN_GAP_MS=5*60*1000; // タブ復帰が続いても5分に1回まで
@@ -12882,6 +13197,7 @@ function _showAppUpdateBanner(){
   later.onclick=function(){
     _hideAppUpdateBanner(bar);
     _appUpdateNotified=false;               // 次の定期確認で再提示する
+    _appUpdateDismissedAt=Date.now();       // Service Worker からの通知でも即再表示しない
     _appVersionLastCheck=Date.now();        // 直後の再表示はしない（最短でも次の間隔後）
   };
   bar.appendChild(msg);bar.appendChild(reload);bar.appendChild(later);
@@ -12897,10 +13213,20 @@ window.addEventListener("resize",function(){
   if(b)_syncAppBannerPadding(b);
 });
 
+// ★ Service Worker が app shell を Cache Storage から返すようになったため、
+//   「起動時に HEAD で取った版」は常に最新であり、いま動いている HTML の版とは限らない。
+//   そのため「古い HTML を実行中」を検知できるのは SW だけであり、その報告を受け取るこのフラグが
+//   「速くなったが最新版に更新されない」を防ぐ唯一の経路になる。外してはならない。
+var _swSaysStale=false;
 function checkAppVersion(){
-  if(_appUpdateNotified||!_appVersionTag)return;
+  if(_appUpdateNotified)return;
   var now=Date.now();
+  // ★ 「後で」は先送りであって無効化ではない。_swSaysStale は一度立つと降りないため、
+  //   この分岐を間隔ゲートの前に置くと、画面復帰のたびにバナーが即再表示されて
+  //   「後で」が事実上効かなくなる。必ずゲートのあとで判定する。
   if(now-_appVersionLastCheck<APP_VERSION_MIN_GAP_MS)return;
+  if(_swSaysStale){_appVersionLastCheck=now;_appUpdateNotified=true;_showAppUpdateBanner();return;}
+  if(!_appVersionTag)return;
   _appVersionLastCheck=now;
   _fetchAppVersionTag().then(function(tag){
     if(!tag||tag===_appVersionTag)return; // 取得失敗（空文字）は「更新なし」として扱う（誤検知させない）
@@ -12936,6 +13262,32 @@ function startAppVersionWatch(){
     });
   });
 }
+// ===== Service Worker からの更新通知 =====
+// SW は app shell を Cache Storage から即座に返し、裏で HEAD により配信中の版を確かめる。
+// 版が違っていたら新しい HTML をキャッシュへ入れ直してここへ通知する。
+// ★ 自動リロードはしない（打刻・入力中に画面を奪わない）。従来と同じバナーを出す。
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.addEventListener('message',function(ev){
+    var d=ev&&ev.data;
+    if(!d||d.type!=='APP_UPDATE_AVAILABLE')return;
+    _swSaysStale=true;
+    if(_appUpdateNotified)return;
+    // ★ 「後で」は先送りであって無効化ではない。ここで間隔を見ないと、
+    //   Service Worker は画面復帰・オンライン復帰のたびに通知するため、
+    //   押した直後にバナーが戻ってきて「後で」が事実上効かなくなる（実機で確認）。
+    if(_appUpdateDismissedAt&&Date.now()-_appUpdateDismissedAt<APP_VERSION_MIN_GAP_MS)return;
+    _appUpdateNotified=true;
+    _showAppUpdateBanner();
+  });
+  // オンライン復帰・タブ復帰時にも SW 側へ版の確認を依頼する
+  var _swAskCheck=function(){
+    if(!navigator.serviceWorker.controller)return;
+    try{navigator.serviceWorker.controller.postMessage({type:'CHECK_APP_UPDATE'});}catch(e){}
+  };
+  window.addEventListener('online',_swAskCheck);
+  document.addEventListener('visibilitychange',function(){if(document.visibilityState==='visible')_swAskCheck();});
+}
+
 // オンライン復帰時: まだ監視を確立できていなければ、再試行の予算を戻してその場で試す。
 // （予算を戻さないと、起動直後に数分オフラインだった端末が二度と監視を張れない）
 window.addEventListener("online",function(){
@@ -12957,7 +13309,21 @@ startAppVersionWatch();
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', function() {
     navigator.serviceWorker.register('/timecard/sw.js')
-      .then(function(reg){ window._swRegistration=reg; })
+      .then(function(reg){
+        window._swRegistration=reg;
+        // app shell を端末へ保存させる（初回訪問の直後にオフラインになっても起動できるように）。
+        // ★ 読み込みが落ち着いてから依頼する。install 中に取りに行かせると、ナビゲーションの応答が
+        //   まだ HTTP キャッシュへ書き終わっておらず、初回訪問だけ約231KB を二重取得してしまう。
+        // ★ 登録直後は controller も active も未確立のことがある。届かなかったら何度か送り直す
+        //   （届かなくても次回訪問の navigate で保存されるので破綻はしない）。
+        var _shellTries=0;
+        var _askCacheShell=function(){
+          var sw=navigator.serviceWorker.controller||reg.active;
+          if(sw){try{sw.postMessage({type:'CACHE_APP_SHELL'});return;}catch(e){}}
+          if(++_shellTries<5)setTimeout(_askCacheShell,3000);
+        };
+        setTimeout(_askCacheShell,3000);
+      })
       .catch(function(e){ console.warn('[SW] register failed',e); });
   });
 }
