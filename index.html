@@ -679,6 +679,13 @@ function mealSelectAttendance(eid,ym){
   if(!eid){showAlert("社員番号が未設定のため保存できません");return;}
   if(!/^[A-Za-z0-9_-]+$/.test(eid)){showAlert("社員番号に使用できない文字が含まれています");return;}
   if(!mealEditable(ym)){showAlert("未来の月は入力できません");return;}
+  // ★ その月の打刻をまだ取得できていない状態で実行すると、出勤日を取りこぼしたまま
+  //   「全選択しました」と保存してしまう。取得できるまで実行しない（フェイルクローズ）。
+  if(!recordsRangeCovers(ym+"-01",ym+"-31")){
+    ensureRecordsRange(ym+"-01",ym+"-31");
+    showAlert("この月の打刻を読み込んでいます。\n\n数秒お待ちのうえ、もう一度お試しください。");
+    return;
+  }
   var nm=mealStaffNameById(eid);
   var att=mealAttendanceDates(nm,ym);
   var dates=Object.keys(att);
@@ -1308,19 +1315,56 @@ function fetchJson(url) {
     .catch(function(){return null;});
 }
 
-// ===== 当日打刻の判定に使う tc5_records の取得（起動時に await しない） =====
-// 起動の待ち行列から外しただけで、取得内容も反映先も変更前と同一。
-// 取得できるまで打刻ボタンは押せない（recordsReady）。
+// ===== tc5_records の日付範囲取得 =====
+//
+// 本番実測: 全件 4,248件 / 1,008KB に対し、当日分は 10件 / 3.8KB。
+// `database.rules.json` の `honomi/tc5_records/.indexOn: ["date"]` を前提に
+// orderBy="date" の範囲取得を使い、画面が実際に表示する期間だけを取る。
+//
+// ★ 日付の基準は既存仕様のまま `fmtDateKey()`（端末ローカル日付）を使う。
+//   打刻を書くとき（`_execPunch` の `nr.date`）も、画面が絞り込むとき（`tr` の `r.date===dk`）も
+//   同じ関数なので、取得範囲と表示範囲が食い違わない。ここで getTodayJSTStr() を混ぜると、
+//   端末TZがJSTでない場合に「画面が探す日付」と「取ってきた日付」がずれて打刻が消える。
+//
+// ★ 取得済みの範囲は1つの連続区間 [_recRange.from, _recRange.to] として持つ。
+//   範囲外のレコードはメモリに残るが、画面が表示するのは必ず取得済み範囲だけにする。
+var _recRange={from:"",to:"",full:false};
 var _recordsTries=0;
 var RECORDS_MAX_TRIES=3;
-function loadPunchRecords(){ return fetchJson(FB_URL+"/tc5_records.json"); }
+var _recDayShift=function(n){var d=new Date();d.setDate(d.getDate()+n);return fmtDateKey(d);};
+function recToday(){return fmtDateKey(new Date());}
+function recordsRangeCovers(from,to){
+  if(_recRange.full)return true;
+  if(!_recRange.from)return false;
+  return _recRange.from<=from&&_recRange.to>=to;
+}
+// 取得した範囲だけを差し替える。範囲外の既存レコード（前回セッションの端末キャッシュ等）は残す。
+function mergeRecordsRange(from,to,obj){
+  var incoming=obj?(Array.isArray(obj)?obj.filter(Boolean):Object.values(obj).filter(Boolean)):[];
+  var kept=records.filter(function(r){return !(r&&r.date&&r.date>=from&&r.date<=to);});
+  records=kept.concat(incoming);
+  punchOutboxMergeInto(records); // 未送信の打刻を消さない（サーバに同じ eventId があれば触らない）
+  _lsSet("tc5_records",JSON.stringify(records));
+  if(!_recRange.full){
+    _recRange.from=_recRange.from?(from<_recRange.from?from:_recRange.from):from;
+    _recRange.to=_recRange.to?(to>_recRange.to?to:_recRange.to):to;
+  }
+  monthRecordsReady=recordsRangeCovers(getJSTMonthRange().first,recToday());
+}
+function fetchRecordsRange(from,to){
+  return fetchJson(FB_URL+"/tc5_records.json?orderBy="+encodeURIComponent('"date"')
+    +"&startAt="+encodeURIComponent('"'+from+'"')+"&endAt="+encodeURIComponent('"'+to+'"'));
+}
+// 全件（管理・労務士画面。承認漏れサマリーが全期間・月セレクタ・月別出勤日数の年単位で必要）
+function fetchRecordsAll(){return fetchJson(FB_URL+"/tc5_records.json");}
+
+// 起動時の当日取得。打刻ボタンはこれが終わるまで押せない（recordsReady）。
+function loadPunchRecords(){var d=recToday();return fetchRecordsRange(d,d);}
 function applyPunchRecords(fbRecords){
-  if(fbRecords){
-    var arr=Array.isArray(fbRecords)?fbRecords:Object.values(fbRecords);
-    punchOutboxMergeInto(arr); // 未送信の打刻をサーバ一覧へ混ぜ戻す（起動のたびに消さない）
-    records=arr;
-    _lsSet("tc5_records",JSON.stringify(records));
-    recordsReady=true;recordsStale=false;_recordsTries=0;
+  var d=recToday();
+  if(fbRecords!==null&&fbRecords!==undefined){
+    mergeRecordsRange(d,d,fbRecords);
+    recordsReady=true;recordsStale=false;_recordsTries=0;_recLoadedDay=d;
     return true;
   }
   // 取得できなかった。短い間隔で数回だけ静かに再試行する。
@@ -1334,8 +1378,88 @@ function applyPunchRecords(fbRecords){
   // ★ ここまで来たら通信が使えない。変更前と同じく端末キャッシュのまま打刻を継続させる。
   //   （変更前は取得失敗を null 扱いにして黙ってキャッシュで動いていた。可用性を落とさない）
   //   ただし他端末の当日打刻を反映できていないため、その事実を打刻画面に明示する。
-  recordsReady=true;recordsStale=true;
+  recordsReady=true;recordsStale=true;_recLoadedDay=d;
   return false;
+}
+
+// 画面が必要とする期間を確保する。取得済みなら通信しない。
+// 失敗時は5秒あけて再試行（render() から呼ぶため、間隔を置かないと撃ち続ける）。
+var _recRangePromise=null,_recRangeLastTry=0,_recRangeWant="";
+function ensureRecordsRange(from,to){
+  if(recordsRangeCovers(from,to))return null;
+  // 既存の取得済み区間と連続させる（穴を作らない）
+  var f=_recRange.from&&_recRange.from<from?_recRange.from:from;
+  var t=_recRange.to&&_recRange.to>to?_recRange.to:to;
+  var want=f+"~"+t;
+  if(_recRangePromise&&_recRangeWant===want)return _recRangePromise;
+  if(_recRangeWant===want&&Date.now()-_recRangeLastTry<_LAZY_RETRY_MS)return null;
+  _recRangeWant=want;_recRangeLastTry=Date.now();
+  _recRangePromise=fetchRecordsRange(f,t).then(function(v){
+    _recRangePromise=null;
+    if(v===null||v===undefined)return;           // 失敗。次の描画で再試行される
+    mergeRecordsRange(f,t,v);
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+  }).catch(function(){_recRangePromise=null;});
+  return _recRangePromise;
+}
+// 管理・労務士画面は全期間を使う（下記コメント参照）。1度だけ取得する。
+var _recFullPromise=null,_recFullLastTry=0;
+function ensureRecordsFull(){
+  if(_recRange.full)return null;
+  if(_recFullPromise)return _recFullPromise;
+  if(Date.now()-_recFullLastTry<_LAZY_RETRY_MS)return null;
+  _recFullLastTry=Date.now();
+  _recFullPromise=fetchRecordsAll().then(function(v){
+    _recFullPromise=null;
+    if(v===null||v===undefined)return;
+    var arr=Array.isArray(v)?v.filter(Boolean):Object.values(v).filter(Boolean);
+    records=arr;
+    punchOutboxMergeInto(records);
+    _lsSet("tc5_records",JSON.stringify(records));
+    _recRange.full=true;_recRange.from="0000-00-00";_recRange.to="9999-99-99";
+    recordsReady=true;recordsStale=false;monthRecordsReady=true;_recLoadedDay=recToday();
+    if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+  }).catch(function(){_recFullPromise=null;});
+  return _recFullPromise;
+}
+// 打刻画面が「いま表示している内容」の根拠として必要とする日付範囲。
+// 起動時は当日分しか取っていないので、ログイン後にこの範囲まで広げる。
+// ★ 「とりあえず30日分」ではなく、画面上の各要素が実際に読む範囲だけを足している。
+function punchScreenRecordRange(){
+  var today=recToday();
+  // 打刻漏れアラート（`_cutoffD` = 14日前〜当日）。打刻画面に常時表示される。
+  var from=_recDayShift(-14);
+  var mFirst=getJSTMonthRange().first;
+  var widen=function(d){if(d&&d<from)from=d;};
+  // 「今月の打刻状況」カード（開閉状態は端末に保存されるため、ログイン直後に開いている場合がある）
+  if(monthPunchOpen)widen(mFirst);
+  // 賄いカレンダー（当月。月初確認から先月へ切り替えることがある）
+  if(mealFormOpen)widen((mealFormMonth||mFirst.slice(0,7))+"-01");
+  // 移動距離の自動集計（利用ON職員のみ）。クライアント側で計算するため、
+  // カードが表示している月（既定は当月。職員が月セレクタで過去月へ切り替えられる）が必要。
+  if(typeof mileage==="object"&&mileage&&mileage.enabled){
+    widen(mFirst);
+    if(mileage.myMonth)widen(mileage.myMonth+"-01");
+  }
+  return {from:from,to:today};
+}
+
+// 日付が変わったら当日分を取り直す（起動しっぱなしの端末が翌日を空のまま扱わないため）。
+var _recLoadedDay="";
+function refreshRecordsIfDayChanged(){
+  var d=recToday();
+  if(!_recLoadedDay||_recLoadedDay===d)return;
+  _recLoadedDay=d;
+  _recRange.full=false;_recRange.from="";_recRange.to="";monthRecordsReady=false; // 範囲を取り直す
+  // ★ 取得の成否に関わらず、まず描き直す。日付が変わった瞬間に画面が
+  //   前日の打刻状態（例: 退勤だけ押せる）を表示したままになるのを防ぐ。
+  render();
+  loadPunchRecords().then(function(v){
+    if(v!==null&&v!==undefined){mergeRecordsRange(d,d,v);recordsStale=false;}
+    // 取得できなければ「最新の打刻状態を取得できていません」を出す（通信断で日付をまたいだ場合）
+    else recordsStale=true;
+    render();
+  }).catch(function(){recordsStale=true;render();});
 }
 
 // ===== 起動時に取得しないデータの遅延取得 =====
@@ -1431,6 +1555,9 @@ function listenFirebase() {
     if(writePolicy==="sandbox")return;
     // 未送信の打刻の定期再送。実際の送信はバックオフ判定を通ったものだけ。
     punchOutboxFlush("poll");
+    // 日付が変わったら当日分を取り直す（起動しっぱなしの端末が翌日を「打刻なし」と誤認しないため）。
+    // 日付が変わっていなければ通信は発生しない。
+    refreshRecordsIfDayChanged();
     // tc5_pins は画面を問わず常時同期（スタッフ選択画面でも反映されるよう）
     authFetch(FB_URL + "/tc5_pins.json")
       .then(function(r){if(!r.ok)throw new Error("pins HTTP "+r.status);return r.json();})
@@ -1492,20 +1619,25 @@ function listenFirebase() {
       }
     }
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
-    authFetch(FB_URL + "/tc5_records.json")
-      .then(function(r){return r.json();})
-      .then(function(val){
-        if(val && savingCount===0){
-          var arr=Array.isArray(val)?val:Object.values(val);
-          punchOutboxMergeInto(arr); // 未送信の打刻を消さない（比較前に混ぜ戻して無駄な再描画も避ける）
-          recordsReady=true;recordsStale=false;
-          if(JSON.stringify(arr)!==JSON.stringify(records)){
-            records=arr;
-            _lsSet("tc5_records",JSON.stringify(records));
-            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
-          }
-        }
+    // ★ 変更前はここで tc5_records を毎回「全件」取得していた。
+    //   本番実測 1,008KB × 6回/分 = 約360MB/時。管理画面を開いている間ずっと流れ続けていた。
+    //   ポーリングが拾う必要があるのは「他端末で今まさに行われた打刻」であり、それは必ず当日に入る。
+    //   したがって当日分（実測 3.8KB）だけを取り直し、既存の範囲へマージする。
+    //   過去日の内容は画面へ入ったときの全件取得（ensureRecordsFull）と、
+    //   自分の編集操作（saveRecord / patchRecord が records を直接更新する）で最新に保たれる。
+    //   ※ 別の管理者が過去日を編集した場合、その反映は次に画面を開き直すまで遅れる。
+    (function(){
+      var _pd=recToday();
+      fetchRecordsRange(_pd,_pd).then(function(val){
+        if(val===null||val===undefined||savingCount!==0)return;
+        var incoming=Array.isArray(val)?val.filter(Boolean):Object.values(val).filter(Boolean);
+        var before=records.filter(function(r){return r&&r.date===_pd;});
+        recordsReady=true;recordsStale=false;
+        if(JSON.stringify(before)===JSON.stringify(incoming))return; // 変化なし＝再描画しない
+        mergeRecordsRange(_pd,_pd,val);
+        if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
       }).catch(function(){});
+    })();
     authFetch(FB_URL + "/tc5_approvals.json")
       .then(function(r){return r.json();})
       .then(function(val){
@@ -2561,6 +2693,10 @@ var recordsReady=false;
 // サーバから当日打刻を取得できず、端末キャッシュのまま打刻を許可している状態（変更前と同じ挙動）。
 // 真のときは打刻画面にその旨を表示する。
 var recordsStale=false;
+// 当月分の打刻を取得済みか。「今月の打刻状況」「賄いの出勤日全選択」など、
+// 当日以外の範囲を根拠に動く操作はこれを確認してから実行する（未取得のまま実行すると
+// 出勤日を取りこぼしたまま保存してしまう）。
+var monthRecordsReady=false;
 // 起動時に取得しないノードの「取得済み」フラグ。未取得のまま書き込むと
 // 既存データを消す経路（tc5_approvals の全体PUT 等）があるため、書込側でこれを必ず確認する。
 var approvalsLoaded=false;      // tc5_approvals（全体PUTで保存するため特に重要）
@@ -3054,9 +3190,24 @@ function _renderInner(){
   app.className=isAdminScreen?"wrap admin-mode":"wrap";
   // 管理・労務士画面でしか読まないデータは、この画面へ入った時点で初めて取得する（起動時は取得しない）。
   // 1度だけ走る（ensureAdminData 内でガード）。サンドボックスでは本番値を混ぜない。
-  if(isAdminScreen&&firebaseReady&&writePolicy!=="sandbox")ensureAdminData();
+  if(isAdminScreen&&firebaseReady&&writePolicy!=="sandbox"){
+    ensureAdminData();
+    // ★ 管理・労務士画面は tc5_records の全期間を使う。月だけに絞れない実装上の理由:
+    //   ・承認漏れサマリー（通知バッジ・勤怠一覧の未承認一覧）は「全期間の未承認日数」を数える
+    //   ・月セレクタの選択肢を records の月から作っている（勤怠一覧・スタッフ別・賄い・調整ログ）
+    //   ・月別出勤日数タブは年単位で集計する
+    //   ・移動距離の自動集計はクライアント側で計算し、サーバ側の計算と一致させる必要がある
+    //   月に絞るとこれらの表示値が変わるため、ここでは全件を1回だけ取得する。
+    //   毎回1MBを取り直していた10秒ポーリング側は当日分だけに変更してある（listenFirebase）。
+    ensureRecordsFull();
+  }
   // スタッフの打刻画面でしか読まないデータ（有給・賄い・本人向け通知）も同様。
-  if(screen==="punch"&&staffName&&firebaseReady&&writePolicy!=="sandbox")ensureStaffScopedData(staffName);
+  if(screen==="punch"&&staffName&&firebaseReady&&writePolicy!=="sandbox"){
+    ensureStaffScopedData(staffName);
+    // 打刻画面が実際に表示する期間だけを追加で取得する（起動時は当日分しか取っていない）。
+    var _pr=punchScreenRecordRange();
+    ensureRecordsRange(_pr.from,_pr.to);
+  }
 
 
   // ── 閲覧トークン認証待ち（Firebase読込中）──
@@ -3866,7 +4017,11 @@ function _renderInner(){
               +'<div style="line-height:1.9;">'+_times+'</div></div>';
           }).join("");
         }else{
-          _body='<div style="padding:12px 14px;border-top:1px solid #e5e7eb;font-size:.82rem;color:#94a3b8;">今月の打刻はまだありません</div>';
+          // ★ 当月分をまだ取得できていない状態を「打刻なし」と表示しない
+          //   （取得は開いた時点で始まり、届くと自動で再描画される）
+          _body=monthRecordsReady
+            ?'<div style="padding:12px 14px;border-top:1px solid #e5e7eb;font-size:.82rem;color:#94a3b8;">今月の打刻はまだありません</div>'
+            :'<div style="padding:12px 14px;border-top:1px solid #e5e7eb;font-size:.82rem;color:#94a3b8;">今月の打刻を読み込んでいます…</div>';
         }
       }
       return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #c7d2fe;overflow:hidden;">'+_head+_body+'</div>';
@@ -9432,7 +9587,9 @@ function mileageAutoDiff(snapDays,curRows){
 // ==== SHARED-AUTO-END ====
 
 // ---- 自動集計のクライアント側の入口（表示用。確定の正本はサーバの closeMonth）----
-// ★ 打刻（tc5_records）は起動時に全件取得済みなので、表示のたびにサーバへ取りに行かない。
+// ★ 打刻（tc5_records）は、この画面が表示する月が `records` に読み込み済みであることを前提にする。
+//   職員画面は punchScreenRecordRange()、管理画面は ensureRecordsFull() が範囲を保証する。
+//   表示のたびにサーバへ取りに行くことはしない。
 //   サーバは月次確定・要確認チェックのときだけ打刻を読み、同じ共有ロジックで計算し直す。
 var MILEAGE_AUTO_BADGE={
   auto:'<span style="background:#dcfce7;color:#166534;border:1px solid #86efac;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">自動計算済</span>',
@@ -11853,13 +12010,19 @@ async function initFirebase() {
     //
     // ここでは3段に分ける。取得の総量を減らし、かつ待ち順を実際の必要順に合わせる。
     //   第1段（await する）: スタッフ選択画面を操作可能にするのに要るものだけ … 約11KB
-    //   第2段（待たない）  : 打刻状態の判定に要る tc5_records … 打刻ボタンだけを recordsReady で守る
+    //   第2段（待たない）  : 打刻状態の判定に要る tc5_records の【当日分だけ】… 実測 3.8KB
+    //                        打刻ボタンはこれが届くまで押せない（recordsReady）
     //   第3段（取得しない）: 打刻画面・スタッフ選択画面が一切読まないもの
-    //                        → 管理/労務士画面を開いたとき(ensureAdminData)と
-    //                          スタッフがログインしたとき(ensureStaffScopedData)に取得する
+    //                        → 管理/労務士画面を開いたとき(ensureAdminData / ensureRecordsFull)と
+    //                          スタッフがログインしたとき(ensureStaffScopedData / ensureRecordsRange)に取得する
     //
     // ★ 「先に描いて速く見せる」ための変更ではない。打刻の可否判定は従来どおり
     //   サーバの最新 tc5_records で行い、届くまで打刻ボタンは押せない（recordsReady）。
+    // ★ 当日分だけで足りる根拠: 打刻状態の判定は `records.filter(r.date===dk)`（当日のみ）と
+    //   findOpenClockInAcrossFacilities(staffName, 当日) だけで、前日以前を参照しない。
+    //   対象施設に日付をまたぐ勤務は存在しない（AGENTS.md・2026-08-14 ユーザー確認）。
+    //   打刻漏れアラート（14日）・今月の打刻状況・賄い・移動距離が使う範囲は、
+    //   ログイン後に punchScreenRecordRange() で追加取得する（打刻の可否には影響しない）。
     var _recordsPromise=loadPunchRecords();
     var results=await Promise.all([
       fetchJson(FB_URL+"/tc5_staff.json"),

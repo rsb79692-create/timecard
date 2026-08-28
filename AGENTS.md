@@ -165,9 +165,10 @@
 　**読み取り専用**（`dbPut`/`dbPatch`/`dbPatchRoot` を1つも呼ばない）で、参照するのは
 　`tc5_records` と `tc5_correction_requests` の2つだけ。**`tc5_staff` / `tc5_pins` は参照しない**
 　（誰でも書けるため、本人特定に使うと成りすましが成立する。社員番号の正本は `/mileage/identity` のまま）。
-・`tc5_records` に `date` の索引は無く、索引追加は `database.rules.json` の変更＝人間の確認が必要なため、
-　既存の運用スクリプト（`scripts/morning-check.js` 等）と同じ**全件取得**にしている。
+・**サーバ側（`api/_lib/mileage-punch.js`）は従来どおり `tc5_records` を全件取得する。**
 　呼び出しは月次確定・確認のときだけなので、通信量は既存の日次バッチと同程度に収まる。
+　★ 2026-08-28 に `database.rules.json` へ `honomi/tc5_records/.indexOn: ["date"]` を追加した（下記）。
+　　クライアント側は日付範囲取得へ移行したが、**サーバ側は全件取得のまま変更していない**。
 
 **全件取得の実測値（2026-08-14 本番で実測。推測ではない）**
 
@@ -532,6 +533,66 @@ CSV形式を固定する。テスト件数は増減するため固定値を規�
 
 ---
 
+## tc5_records の取得範囲（2026-08-28）
+
+**クライアントは `tc5_records` を全件取得しない。画面が表示する日付範囲だけを取る。**
+
+`database.rules.json` に `honomi/tc5_records/.indexOn: ["date"]` を追加済み。
+RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、この索引が前提になる。
+索引指定だけで `.read` / `.write` は変更していない（権限は不変）。
+
+### 本番実測（2026-08-28）
+
+| 範囲 | 件数 | サイズ |
+|---|--:|--:|
+| 全件 | 4,248 | 1,008 KB |
+| 当日のみ | 10 | **3.8 KB** |
+| 当月 | 764 | 218 KB |
+
+`date` は全 4,248 件が `YYYY-MM-DD` 形式で存在し、**全件が `timestamp` の JST 日付と一致**する
+（欠損 0 / 不正形式 0 / 不一致 0）。日付クエリで取りこぼすレコードは無い。
+
+### どの画面がどの範囲を使うか
+
+| 契機 | 範囲 | 関数 |
+|---|---|---|
+| 起動時 | **当日のみ** | `loadPunchRecords()` → `applyPunchRecords()` |
+| スタッフのログイン後 | 直近14日（＋開いているカードに応じて当月・先月） | `punchScreenRecordRange()` → `ensureRecordsRange()` |
+| 管理・労務士・スタッフ別詳細 | **全期間（1回だけ）** | `ensureRecordsFull()` |
+| 10秒ポーリング（管理画面） | **当日のみ** | `listenFirebase()` 内 |
+| 日付が変わったとき | 当日を取り直す | `refreshRecordsIfDayChanged()` |
+
+★ **起動時が当日分だけで足りる根拠**: 打刻状態の判定は `records.filter(r.date===dk)`（当日のみ）と
+`findOpenClockInAcrossFacilities(staffName, 当日)` だけで、前日以前を参照しない。
+対象施設に日付をまたぐ勤務は存在しない（2026-08-14 ユーザー確認）。
+
+★ **日付の基準を `fmtDateKey()`（端末ローカル日付）から変えてはならない。**
+打刻を書くとき（`_execPunch` の `nr.date`）と画面が絞り込むとき（`r.date===dk`）が同じ関数なので、
+取得範囲と表示範囲が食い違わない。ここに `getTodayJSTStr()` を混ぜると、端末TZがJSTでない場合に
+「画面が探す日付」と「取ってきた日付」がずれて打刻が消える。
+
+★ **管理・労務士画面を月単位に絞ってはならない（現状の実装では）。** 次のものが全期間を前提にしている。
+承認漏れサマリー（全期間の未承認日数）／月セレクタの選択肢（`records` の月から生成）／
+月別出勤日数タブ（年単位）／移動距離の自動集計（サーバ側の計算と一致させる必要がある）。
+月に絞ると**表示値そのものが変わる**。絞るならこれら4つを先に作り替えること。
+
+★ **`ensureRecordsRange` / `ensureRecordsFull` は `render()` から呼ばれる。**
+取得済みなら通信しない・失敗時は5秒あけて再試行する、というガードを外すと
+通信断のあいだリクエストを撃ち続ける。
+
+### 未取得のまま書き込ませない（フェイルクローズ）
+
+範囲取得にしたことで「まだ読んでいない期間」が生じる。次の書き込みは取得済みを確認してから行う。
+
+| 書き込み | ガード |
+|---|---|
+| `mealSelectAttendance()`（賄いの出勤日全選択） | その月が `recordsRangeCovers()` を満たすまで実行しない |
+| `saveApprovals()`（`tc5_approvals` の全体PUT） | `approvalsLoaded` |
+| `mdSaveCell()`（月別出勤日数） | `monthlyDaysLoaded` |
+| `mealToggleDate()` / `mealSelectAttendance()` | `mealsLoaded` |
+
+---
+
 ## 打刻の端末永続保存と自動再送（2026-08-26）
 
 打刻は**押した瞬間に端末（IndexedDB）へ保存し、その保存成功を確認してから**画面を「打刻済み」にする。
@@ -765,7 +826,7 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
 
 | 項目 | 実態（確認できた事実） |
 |---|---|
-| Firebase Realtime Database | 使用。データは `…/honomi/` 配下（`tc5_records` ほか）。`database.rules.json` は `honomi` の `.read`/`.write` = `auth != null` |
+| Firebase Realtime Database | 使用。データは `…/honomi/` 配下（`tc5_records` ほか）。`database.rules.json` は `honomi` の `.read`/`.write` = `auth != null`。**`honomi/tc5_records` に `.indexOn: ["date"]` あり**（2026-08-28 追加。索引指定のみで権限は不変） |
 | Firebase Auth | Identity Toolkit でトークン取得（`accounts:signUp` + securetoken refresh）。詳細な認証方式（匿名 or その他）の Console 設定は**未確認** |
 | Firebase Cloud Messaging | 使用（打刻修正申請の Push）。`scripts/fcm-check.js` + `FIREBASE_SERVICE_ACCOUNT_KEY` |
 | Firebase Storage | `storage.rules` あり（書類/写真アップロード用と推測されるが詳細は**未確認**） |
