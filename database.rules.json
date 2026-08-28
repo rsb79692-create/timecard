@@ -2,7 +2,10 @@
   "rules": {
     "honomi": {
       ".read": "auth != null",
-      ".write": "auth != null"
+      ".write": "auth != null",
+      "tc5_records": {
+        ".indexOn": ["date"]
+      }
     }
   }
 }
