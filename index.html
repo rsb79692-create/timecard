@@ -3036,14 +3036,15 @@ var plSubmitting=false; // 申請ボタン二重クリック・非同期競合�
 var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
 var plHistMonth=""; // 履歴表示中の対象月（YYYY-MM。取得日基準。初期値は当月=JST）
 var plBalDetailOpen={}; // 有給残日数管理: スタッフ別の付与明細展開状態（表示のみ・Firebase保存なし）
-// 付与明細の開閉トグル（有給管理タブ表示中は _paidLeaveRenderGuard を一時解除して再描画）
+var plHistLimit={};     // 有給取得履歴: スタッフ別の表示件数（表示のみ・Firebase保存なし）
+var plHistVoid={};      // 有給取得履歴: 取消・却下を表示するか（表示のみ・Firebase保存なし）
+var PL_HIST_PAGE=10;    // 有給取得履歴の初期表示件数／「さらに表示」の追加件数
+// 有給残日数管理カードの再描画（有給管理タブ表示中は _paidLeaveRenderGuard を一時解除する）
 // 同一カード内の「新規付与を追加」フォームが再描画で消えないよう、入力値を退避・復元する
-function plToggleBalDetail(nm){
-  if(paidLeaveBalanceSaving)return; // 承認・却下処理中は再描画しない
+function _plBalRerender(){
   var _keep=["pl-bal-new-staff","pl-bal-new-grant-date","pl-bal-new-granted"].map(function(id){
     var el=document.getElementById(id);return{id:id,v:el?el.value:null};
   });
-  plBalDetailOpen[nm]=!plBalDetailOpen[nm];
   try{ _paidLeaveRenderGuard=false;render(); }
   finally{ _paidLeaveRenderGuard=true; }
   _keep.forEach(function(k){
@@ -3054,6 +3055,30 @@ function plToggleBalDetail(nm){
   var _gd=document.getElementById("pl-bal-new-grant-date");
   var _ex=document.getElementById("pl-bal-new-expiry-disp");
   if(_gd&&_ex&&_gd.value){var _e=calcExpiresAt(_gd.value);_ex.textContent=_e?"有効期限: "+_e:"";}
+}
+// 付与明細の開閉トグル
+function plToggleBalDetail(nm){
+  if(paidLeaveBalanceSaving)return; // 承認・却下処理中は再描画しない
+  plBalDetailOpen[nm]=!plBalDetailOpen[nm];
+  _plBalRerender();
+}
+// 氏名をキーにしたマップの安全な読み出し。
+// ★ 氏名は "constructor" 等になり得るため、プロトタイプ由来の値を拾わせない
+//   （拾うと表示件数が関数になり、履歴が黙って0件になる）。
+function _plOwn(map,key,dflt){
+  return Object.prototype.hasOwnProperty.call(map,key)?map[key]:dflt;
+}
+// 有給取得履歴「さらに表示」（表示件数を増やすだけ。通信しない）
+function plHistMore(nm){
+  if(paidLeaveBalanceSaving)return;
+  plHistLimit[nm]=_plOwn(plHistLimit,nm,PL_HIST_PAGE)+PL_HIST_PAGE;
+  _plBalRerender();
+}
+// 有給取得履歴「取消・却下を表示」切替（表示のみ。通信しない）
+function plHistToggleVoid(nm){
+  if(paidLeaveBalanceSaving)return;
+  plHistVoid[nm]=!_plOwn(plHistVoid,nm,false);
+  _plBalRerender();
 }
 var plHighlightId=null; // 通知から有給申請一覧へ移動した際にハイライトする申請ID（1回適用したらクリア）
 var pinRevealSet={}; // {staffName: true} スタッフ管理画面でPINを表示中の行を管理
@@ -6030,6 +6055,31 @@ function _renderInner(){
         if(staffOrder.indexOf(nm)<0)staffOrder.push(nm);
       });
 
+      // ── 有給取得履歴の1行（縦型。スマホ幅320pxでも折り返して読めるよう横長テーブルにしない）──
+      function plHistLine(e,fg,bg,label){
+        var p=String(e.date||"").split("-");
+        var dstr=(p.length>=3&&p[0]&&p[1]&&p[2])?(p[0]+"/"+parseInt(p[1],10)+"/"+parseInt(p[2],10)):String(e.date||"");
+        var sub=[];
+        if(e.createdAt)sub.push("申請 "+isoToJSTMonthDayTime(e.createdAt));
+        if(e.approvedAt)sub.push("承認 "+isoToJSTMonthDayTime(e.approvedAt));
+        if(e.groupSize>1)sub.push(e.groupSize+"日申請のうち1日");
+        return '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;padding:6px 2px;border-bottom:1px solid #eef2f7;">'
+          +'<span style="font-family:monospace;font-size:.84rem;font-weight:700;color:#0f172a;white-space:nowrap;">'+esc(dstr)+'</span>'
+          +'<span style="font-size:.82rem;color:#334155;white-space:nowrap;">'+esc(e.days)+'日</span>'
+          +'<span style="background:'+bg+';color:'+fg+';'+_plBadge+'white-space:nowrap;">'+esc(label)+'</span>'
+          +(e.isProxy?'<span title="管理者による代理申請" style="background:#e0e7ff;color:#3730a3;font-size:.6rem;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap;">管理者代理</span>':"")
+          +(sub.length?'<span style="flex-basis:100%;font-size:.68rem;color:#8496a7;">'+esc(sub.join(" ／ "))+'</span>':"")
+          +'</div>';
+      }
+
+      // 同じ社員番号のグループを既に出したか（改名で付与行が旧氏名・新氏名に分裂した場合の重複防止）
+      var _plHistSidSeen={};
+      // ★ 有給取得履歴は付与明細の表（明細展開中は min-width:640px で横スクロールする）の
+      //   「外」に置く。表の中へ入れると、スマホ幅では 640px の桁に引きずられて文字が切れる
+      //   （100vw から固定値を引く回避策は、カードの実パディングと連動しないため 320px で欠けた）。
+      //   代わりに各ブロックへ氏名を書いて、どの職員の履歴かを取り違えないようにする。
+      var plHistBlocks="";
+
       var plBalRows="";
       if(normBalances.length===0){
         plBalRows='<tr><td colspan="6" style="text-align:center;padding:20px;color:#8496a7;font-size:.88rem;">残日数データがありません</td></tr>';
@@ -6101,6 +6151,85 @@ function _renderInner(){
               +'<button class="btn-pl-bal-row-delete" data-balid="'+esc(b.id)+'" style="background:#fff;color:#dc2626;border:1px solid #dc2626;'+_plBtn+'">削除</button>'
               +'</td></tr>';
           });
+
+          // ── 有給取得履歴（表示専用）──
+          // ★ すでにメモリにある paidLeaveRequests（有給管理タブ入場時に取得済み）から組み立てるだけで、
+          //   詳細を開いても追加の通信を一切行わない。履歴用のデータも新設しない。
+          // ★ 実績（取得履歴）と未来日の取得予定は分けて表示する。残日数表示（buildFutureApprovedLeaveMap）と
+          //   同じ「JSTで今日以前＝消化済み」の境界を使う。ここを揃えないと残日数と履歴の日数が食い違う。
+          // ★ pending は「取得済み」と誤認させないため、必ず別枠・別ラベルで出す。
+          var _plh=plBuildLeaveHistory(paidLeaveRequests,{
+            staffId:tot.sid,staffName:nm,todayJst:plTodayJst,
+            getDates:getLeaveDates,getSid:getReqStaffId
+          });
+          var _hLim=_plOwn(plHistLimit,nm,PL_HIST_PAGE);
+          var _hShown=_plh.taken.slice(0,_hLim);
+          var _hRest=_plh.taken.length-_hShown.length;
+          var _hVoid=!!_plOwn(plHistVoid,nm,false);
+          var _hHead='<div style="font-size:.8rem;font-weight:700;color:#1e3a5f;margin:0 0 4px;">有給取得履歴：'+esc(nm)+'</div>';
+          // ★ 改名すると付与行が旧氏名・新氏名の2グループに分裂する（改名は tc5_paid_leave_balances の
+          //   staffName を書き換えない）。突き合わせは社員番号で行うため、同じ履歴と合計日数が
+          //   2回出て「2倍取得している」ように読めてしまう。2つ目以降は出さずに参照先だけ示す。
+          var _hSidKey=String(tot.sid||"");
+          var _hDupOf=_hSidKey?_plOwn(_plHistSidSeen,_hSidKey,""):"";
+          if(_hSidKey&&!_hDupOf)_plHistSidSeen[_hSidKey]=nm;
+          var _hSec,_hPlan,_hPend,_hOther;
+          if(_hDupOf){
+            _hSec=_hHead+'<div style="font-size:.76rem;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:4px;padding:6px 8px;">'
+              +'同じ社員番号（'+esc(_hSidKey)+'）の履歴は「'+esc(_hDupOf)+'」に表示しています。'
+              +'改名などで付与行の表示名が分かれているため、ここでは重複表示しません。</div>';
+            _hPlan=_hPend=_hOther="";
+          }else{
+          _hSec=_hHead;
+          if(_plh.taken.length===0){
+            _hSec+='<div style="font-size:.78rem;color:#8496a7;padding:6px 2px;">承認済みの取得実績はありません</div>';
+          }else{
+            // ★ 「実績 合計」は本システムで承認した分だけである。付与行の remainDays には
+            //   運用開始前にすでに消化していた分（carryIn）が織り込まれているため、
+            //   「付与日数 − 残日数」とは一致しない（本番実測で 40付与行中14行にこの差がある）。
+            //   ここを一致させようとして残日数を修正すると、取得済みの有給が復活する。
+            _hSec+='<div title="運用開始前にすでに消化していた分（付与登録時に残日数から差し引いた分）は申請データが無いため履歴に出ません。「付与日数 − 残日数」とは一致しません。" style="font-size:.7rem;color:#475569;margin-bottom:2px;">実績 合計 '+_plh.takenDays+'日（本システムで承認した分のみ／'+esc(plTodayJst)+' 時点）</div>'
+              +_hShown.map(function(e){return plHistLine(e,"#166534","#dcfce7","承認済");}).join("");
+            if(_hRest>0){
+              _hSec+='<button onclick="plHistMore(&#39;'+escJs(nm)+'&#39;)" style="margin-top:6px;width:100%;background:#f3f4f6;color:#374151;border:1px solid #adb5bd;border-radius:2px;padding:8px;font-size:.76rem;font-weight:700;cursor:pointer;font-family:inherit;">さらに表示（残り'+_hRest+'件）</button>';
+            }
+          }
+          // ★ ここの日数は「承認済み・明日以降の取得日の実数」。上のサマリー行「残 N日（M）」の M は
+          //   buildFutureApprovedLeaveMap が付与行へ戻せる量で上限を切った値なので、一致しないことがある。
+          //   同じ数字だと思って片方に合わせてはならない。
+          _hPlan=_plh.planned.length
+            ?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
+             +'<div style="font-size:.78rem;font-weight:700;color:#92400e;margin-bottom:2px;">取得予定（承認済・明日以降の取得日）'+_plh.plannedDays+'日</div>'
+             +'<div style="font-size:.66rem;color:#8496a7;margin-bottom:2px;">上の「残 …日（ ）」の括弧内は残日数の内数のため、この日数と一致しないことがあります。</div>'
+             +_plh.planned.map(function(e){return plHistLine(e,"#92400e","#fef3c7","承認済・予定");}).join("")
+             +'</div>'
+            :"";
+          _hPend=_plh.pending.length
+            ?'<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
+             +'<div style="font-size:.78rem;font-weight:700;color:#92400e;margin-bottom:2px;">申請中（未承認。取得済みではありません）'+_plh.pending.length+'日</div>'
+             +_plh.pending.map(function(e){return plHistLine(e,"#92400e","#fef3c7","申請中");}).join("")
+             +'</div>'
+            :"";
+          _hOther='<div style="margin-top:10px;padding-top:8px;border-top:1px dashed #e5e7eb;">'
+            +(_plh.other.length===0&&!_hVoid
+              ?'<div style="font-size:.72rem;color:#8496a7;">取消・却下・引戻の申請はありません</div>'
+              :'<button onclick="plHistToggleVoid(&#39;'+escJs(nm)+'&#39;)" style="background:'+(_hVoid?"#e0e7ff":"#f3f4f6")+';color:'+(_hVoid?"#1e40af":"#6b7280")+';border:1px solid '+(_hVoid?"#a5b4fc":"#adb5bd")+';border-radius:2px;font-size:.72rem;font-weight:700;padding:6px 10px;cursor:pointer;font-family:inherit;">'
+               +(_hVoid?"取消・却下を隠す":"取消・却下を表示（"+_plh.other.length+"件）")+'</button>')
+            +(_hVoid
+              ?(_plh.other.length
+                // 未知の status も捨てずに素のまま出す（データ異常を隠さない）。
+                // ★ status は誰でも書ける値なので、プロトタイプ由来の値を色・ラベルへ拾わせない。
+                ?_plh.other.map(function(e){
+                    return plHistLine(e,_plOwn(plStatusColor,e.status,"#991b1b"),_plOwn(plStatusBg,e.status,"#fee2e2"),_plOwn(plStatusLabel,e.status,"")||String(e.status||"不明"));
+                  }).join("")
+                :'<div style="font-size:.76rem;color:#8496a7;padding:6px 2px;">取消・却下はありません</div>')
+              :"")
+            +'</div>';
+          }
+          // 表の外へ出すため、幅はカードに任せる（100vw から固定値を引かない）。
+          plHistBlocks+='<div style="margin-top:10px;padding:10px 2px 4px;border-top:2px solid #adb5bd;max-width:620px;">'
+            +_hSec+_hPlan+_hPend+_hOther
+            +'</div>';
         });
       }
 
@@ -6264,6 +6393,8 @@ function _renderInner(){
         +'<tbody>'+plBalRows+'</tbody>'
         +'</table>'
         +'</div>'
+        // 有給取得履歴は横スクロールする表の外に置く（上記「plHistBlocks」の注記を参照）
+        +plHistBlocks
         +'<div style="font-size:.82rem;font-weight:700;color:#374151;margin-bottom:8px;margin-top:4px;">新規付与を追加</div>'
         +'<div style="display:flex;flex-direction:column;gap:8px;">'
         +'<select id="pl-bal-new-staff" style="width:100%;padding:7px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'+plStaffOpts+'</select>'
@@ -12039,6 +12170,76 @@ function getLeaveDates(req){
   if(req.date)return [req.date];
   return [];
 }
+
+// ===== PL-HISTORY-BEGIN =====
+// 有給取得履歴の抽出（表示専用）。
+// ★ 正本を一切書き換えない。remainDays / grantedDays / usedDays / FIFO消化 /
+//   buildFutureApprovedLeaveMap には関与しない。履歴のための保存先も新設しない
+//   （既に取得済みの tc5_paid_leave_requests から組み立てるだけなので通信も増えない）。
+//
+// 引数 requests : tc5_paid_leave_requests の配列
+//      opts     : {staffId, staffName, todayJst, getDates, getSid}
+//        staffId  … 突き合わせ先の社員番号（付与行グループの staffId）
+//        staffName… 付与行グループのキー（氏名）。社員番号が無い旧データ用のフォールバック
+//        todayJst … 今日（JST, YYYY-MM-DD）。実績と予定の境界
+//        getDates … 申請 → 取得日配列（getLeaveDates）
+//        getSid   … 申請 → 社員番号（getReqStaffId）
+//
+// 戻り値 {taken, planned, pending, other, takenDays, plannedDays}
+//   taken   … 承認済み かつ 取得日 <= todayJst（＝実績＝「取得履歴」）
+//   planned … 承認済み かつ 取得日 >  todayJst（＝「取得予定」。実績と混ぜない）
+//   pending … 申請中（「取得済み」と誤認させないため必ず別枠にする）
+//   other   … 却下 / 引戻済 / 取消済 / 未知のstatus（既定は非表示。未知も捨てない）
+//
+// ★ 実績と予定の境界は buildFutureApprovedLeaveMap（残日数表示）と同じ「JSTで今日以前＝消化済み」。
+//   ここを変えると、残日数表示と履歴の日数が食い違う。
+// ★ 1申請で複数日を申請できるため、要素は「取得日単位」に展開する。
+//   1日あたりの消化量は 1 日（承認時の FIFO 消化が leaveDates.length 日で行われるため）。
+//   半休は現行仕様に存在しない（申請フォームに日数の入力が無い）。
+function plBuildLeaveHistory(requests,opts){
+  opts=opts||{};
+  var sid=String(opts.staffId||"").trim();
+  var nm=String(opts.staffName||"").trim();
+  var today=String(opts.todayJst||"");
+  var getDates=opts.getDates||function(r){return (r&&r.leaveDates)||(r&&r.date?[r.date]:[]);};
+  var getSid=opts.getSid||function(r){return (r&&r.staffId)||"";};
+  var out={taken:[],planned:[],pending:[],other:[],takenDays:0,plannedDays:0};
+  (requests||[]).forEach(function(r){
+    if(!r)return;
+    // 突き合わせ: 社員番号が両方あるときは番号一致だけを採用する（同姓同名の取り違え防止）。
+    // どちらかが無い旧データのときだけ氏名照合へフォールバックする。
+    var rsid=String(getSid(r)||"").trim();
+    var match=(sid&&rsid)?(rsid===sid):(nm!==""&&String(r.staffName||"").trim()===nm);
+    if(!match)return;
+    var dates=(getDates(r)||[]).filter(function(d){return typeof d==="string"&&d;});
+    if(dates.length===0)return; // 取得日が無い異常データは日数を推測しない
+    var st=r.status;
+    var isProxy=(r.adminProxy===true)||(r.requestSource==="admin_proxy");
+    dates.slice().sort().forEach(function(d){
+      var e={date:d,days:1,status:st,reqId:r.id||"",createdAt:r.createdAt||"",
+             approvedAt:r.approvedAt||"",groupSize:dates.length,isProxy:isProxy};
+      if(st==="approved"){
+        if(today&&d>today){out.planned.push(e);out.plannedDays++;}
+        else{out.taken.push(e);out.takenDays++;}
+      }else if(st==="pending"){out.pending.push(e);}
+      else{out.other.push(e);}
+    });
+  });
+  function descByDate(a,b){
+    if(a.date!==b.date)return a.date<b.date?1:-1;
+    return String(b.createdAt||"").localeCompare(String(a.createdAt||""));
+  }
+  function ascByDate(a,b){
+    if(a.date!==b.date)return a.date<b.date?-1:1;
+    return String(a.createdAt||"").localeCompare(String(b.createdAt||""));
+  }
+  out.taken.sort(descByDate);   // 履歴は新しい取得日を上にする
+  out.other.sort(descByDate);
+  out.planned.sort(ascByDate);  // 予定は近い日を上にする
+  out.pending.sort(ascByDate);
+  return out;
+}
+// ===== PL-HISTORY-END =====
 
 // staffId\u57FA\u6E96\u306E\u6709\u52B9\u6B8B\u65E5\u6570\uFF08\u671F\u9650\u5185\u30FB\u6B8B>0\u306E\u4ED8\u4E0E\u884C\u306E\u307F\u5408\u8A08\uFF09
 function getValidRemainDays(staffId){
