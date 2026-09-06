@@ -94,23 +94,6 @@ function getTodayJST() {
   return `${y}-${m}-${d}`;
 }
 
-// ===== JST 昨日の日付 yyyy-mm-dd =====
-function getYesterdayJST() {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  const parts = new Intl.DateTimeFormat("ja-JP", {
-    timeZone: "Asia/Tokyo",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(d);
-  const y  = parts.find((p) => p.type === "year").value;
-  const m  = parts.find((p) => p.type === "month").value;
-  const da = parts.find((p) => p.type === "day").value;
-  return `${y}-${m}-${da}`;
-}
-
-// ===== JST 昨日の日付 yyyy-mm-dd =====
 function getYesterdayJST() {
   const d = new Date();
   d.setDate(d.getDate() - 1);
@@ -216,8 +199,16 @@ async function fetchRTDB(path, accessToken) {
 }
 
 // ===== LINE Push 送信 =====
+// ⚠⚠ このジョブからの LINE 通知は 0e7ceab で**意図的に止めてある**（無効化のための return）。
+//    裸の return だと、集計まで済ませたあと1通も送らずに「[DONE] 処理完了」を出すため、
+//    運用側は送られたと誤解する。止めていること自体は変えずに、ログへ必ず出す形にした。
+//    再開するときは、この定数を false にするだけでよい。
+const LINE_PUSH_DISABLED = true;
 async function sendLineMessage(text) {
-  return;
+  if (LINE_PUSH_DISABLED) {
+    console.warn("[LINE]  送信は無効化されています（LINE_PUSH_DISABLED=true）。1通も送っていません。");
+    return;
+  }
   const toPrefix = LINE_TO.charAt(0);
   const toLength = LINE_TO.length;
   console.log("[LINE]  Push送信開始");

@@ -12662,10 +12662,12 @@ async function initFirebase() {
       var _ar=await establishSessionEx("admin",{adminToken:adminParam||""},12000);
       if(_ar&&_ar.ok){
         adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;
-        screen="admin";adminTab="records";initFcmForAdmin();
+        screen="admin";adminTab="records";
         // establishSessionEx が既に admin ロールを確立済み。
-        // 後続の管理系API（PIN変更・トークン変更）が待てるようにしておく。
+        // 後続の管理系API（PIN変更・トークン変更）と afterElevation() が待てるようにしておく。
+        // ★ initFcmForAdmin() より**先に**代入する（PIN経路と順序を揃える）。
         _adminElevatePromise=Promise.resolve(true);
+        initFcmForAdmin();
       } else {
         adminTokenValid=false;adminTokenInvalid=true;
         // ★ 失敗理由を区別する。通信障害・準備中・過負荷を「トークンが違う」と

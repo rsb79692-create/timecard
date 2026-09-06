@@ -237,7 +237,12 @@ async function main() {
   await patchRTDB("tc5_fcm_state", accessToken, {
     lastSentCount: pendingCount,
     lastSentAt: new Date().toISOString(),
-  }).catch((e) => console.warn("[RTDB]  state 保存失敗:", e.message));
+  }).catch((e) => {
+    // ⚠ ここが失敗し続けると lastSentCount が更新されず、30分おきに同じ通知を送り続ける。
+    //   warn だけだとワークフローは緑のままで気づけない。exit code を落として見えるようにする。
+    console.error("[ERROR] state 保存失敗:", e.message);
+    process.exitCode = 1;
+  });
 
   console.log(`[DONE]  ${successCount}/${tokenList.length} 端末への通知完了`);
 }
