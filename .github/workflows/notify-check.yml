@@ -30,8 +30,8 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO_ID: ${{ secrets.LINE_TO_ID }}
-          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
           DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
           LANG: C.UTF-8

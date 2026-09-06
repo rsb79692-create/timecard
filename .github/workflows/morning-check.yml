@@ -37,6 +37,9 @@ jobs:
         env:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO_ID: ${{ secrets.LINE_TO_ID }}
+          # ⚠⚠ この Secret は消さないこと。fcm-notify / notify-check はサービスアカウントへ
+          #    移したが、morning-check だけは今も匿名サインイン（accounts:signUp）で入る。
+          #    読むのは tc5_records と master/locations だけで、どちらも匿名 read が残っている。
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
           TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}

@@ -34,7 +34,9 @@
 
 - ✅ **適用する汎用安全原則**: **本番 DB（Firebase RTDB の `tc5_*`）を変更しない**／**データの破壊的操作（削除・上書き）は事前にリスク提示・人間承認必須**／**変更前に現状確認**／**secret・接続情報・トークンを出力しない**。
 - ❌ **適用しない Supabase/SQL 固有部**: **migration ファイル・`supabase/migrations/`・連番/タイムスタンプ命名**（timecard に **migration の概念は無い**）／**RLS / `CREATE POLICY` / `auth.uid()` / service role**／**`supabase db push` / `db diff` / `db reset`**／`@supabase/*` クライアント。
-- timecard の実態: **Firebase Realtime Database**（REST `…/honomi/<path>.json`）／認証は **Firebase Auth**（`database.rules.json` の `.read`/`.write` = `auth != null`。Anonymous 想定だが Console 設定詳細は未確認）／**スキーマ相当＝`database.rules.json`**（変更は **`firebase-agent` が方針提示し人間が確認**。本タスクでは変更禁止）。
+- timecard の実態: **Firebase Realtime Database**（REST `…/honomi/<path>.json`）／認証は **Firebase Auth**（Anonymous ＋ `/api/auth/*` が発行するカスタムトークン）／**スキーマ相当＝`database.rules.json`**（変更は **`firebase-agent` が方針提示し人間が確認**）。
+  ⚠⚠ **`database.rules.json` は honomi-board と同居している。**（下記「RTDB のルールは honomi-board と共有」）
+  ⚠ **`/honomi` の `.read`/`.write` はもう `auth != null` ではない**（2026-09-06 に変更）。同節を必ず読むこと。
 
 ### DEPLOY.md の読み替え（Type C）
 
@@ -226,8 +228,9 @@ CPU は 0.2 秒未満**（合成データ実測: 31,000件=4.29MB で 34.5ms、1
 
 ★ **サーバから `/honomi/master/locations` を読む方式にしてはならない。**
 ただし理由を取り違えないこと。**入力データの信頼度はどちらでも同じ**である
-（画面が持つ `masterFacilities` も同じ `/honomi/master/locations` から読んでおり、そこは
-`auth != null` ＝匿名認証で誰でも書ける）。**「クライアント経由だから安全」ではない。**
+（画面が持つ `masterFacilities` も同じ `/honomi/master/locations` から読んでいる。
+2026-09-06 以降、`master` の**書き**は役割トークンが要るようになったが、**読み**は匿名でも通る）。
+**「クライアント経由だから安全」ではない。**
 
 実際に効いている防御は次の2つだけである。
 
@@ -266,7 +269,8 @@ CPU は 0.2 秒未満**（合成データ実測: 31,000件=4.29MB で 34.5ms、1
 
 **RTDB のルート直下 `/mileage`。`/honomi` の外＝`database.rules.json` に未定義＝デフォルト拒否。**
 
-`/honomi` は `.read`/`.write` = `auth != null` であり匿名でも読み書きできるため、
+`/honomi` は 2026-09-06 まで `.read`/`.write` = `auth != null` で、匿名でも全部読み書きできた。
+いまは役割トークンが要るが、**`tc5_records` と `tc5_pins` は打刻のために匿名のまま開けてある**。
 そこへ置くと職員が開発者ツールから「自分の利用ON/OFFフラグ」「区間距離」「km単価」「承認状態」を
 書き換えられる。したがってこの機能のデータは `/honomi` に置かない。
 
@@ -292,8 +296,8 @@ CPU は 0.2 秒未満**（合成データ実測: 31,000件=4.29MB で 34.5ms、1
 `/api/auth/staff` が発行するトークンの uid は `"s:" + subjectKey(氏名)` である。
 これを社員番号へ変換する対応表を **`/mileage/identity/{subject}` に置き、`tc5_staff` は一切参照しない。**
 
-**`tc5_staff` から引いてはならない理由**：`tc5_staff` は `/honomi` 配下にあり Rules が `auth != null` なので、
-匿名サインインした第三者でも行を追加・書き換えできる。そこから社員番号を引くと、
+**`tc5_staff` から引いてはならない理由**：`tc5_staff` は `/honomi` 配下にあり、
+**読みは匿名でも通る**（2026-09-06 以降、書きは役割トークンが要る）。そこから社員番号を引くと、
 
 1. 攻撃者が `tc5_staff` へ「任意の氏名 ＋ 被害者の社員番号」の行を足す
 2. その氏名で PIN を登録して staff ロールのトークンを取る
@@ -347,7 +351,8 @@ CPU は 0.2 秒未満**（合成データ実測: 31,000件=4.29MB で 34.5ms、1
    旧形式PINが自動昇格した場合も `updatedAt` が更新されるため、48時間の警告が出る。
    警告＝不正ではない。「見覚えのない氏名かどうか」で判断すること。
 7. **自動集計の金額は「打刻データと同じ信頼度」までしか保証できない（2026-08-14 追加）。**
-   `/honomi` の Rules は `auth != null` であり、匿名認証を通せば `tc5_records` は書き換えられる。
+   `/honomi/tc5_records` は打刻のため**匿名でも書ける**ままなので、匿名認証を通せば書き換えられる
+   （2026-09-06 の変更でもここは塞いでいない。塞ぐと打刻ができなくなるため）。
    応援打刻を正本にする以上、打刻を偽造されれば距離も偽造される。
    ★ **これは本機能で新たに増えたリスクである。「偽造すれば賃金も動くから移動距離だけの追加リスクにはならない」
    というのは誤りなので、その理由で許容してはならない**（2026-08-14 の監査で訂正）。

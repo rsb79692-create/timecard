@@ -11,8 +11,8 @@ const https = require("https");
 const crypto = require("crypto");
 
 // ===== Secrets バリデーション =====
+// ⚠ FIREBASE_API_KEY はもう使わない（RTDB を匿名で叩くのをやめたため）。
 const REQUIRED_SECRETS = [
-  "FIREBASE_API_KEY",
   "FIREBASE_DATABASE_URL",
   "FIREBASE_SERVICE_ACCOUNT_KEY",
 ];
@@ -22,7 +22,6 @@ if (missing.length) {
   process.exit(1);
 }
 
-const FB_API_KEY = process.env.FIREBASE_API_KEY;
 const FB_DB_URL = process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "");
 const DRY_RUN = (process.env.DRY_RUN || "").trim() === "true";
 
@@ -32,6 +31,14 @@ try {
 } catch (e) {
   console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY が有効な JSON ではありません");
   process.exit(1);
+}
+// ⚠ 値は絶対に出さない。欠けているキー名だけを出す。
+{
+  const lack = ["client_email", "private_key", "project_id"].filter((k) => !SERVICE_ACCOUNT[k]);
+  if (lack.length) {
+    console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY に次のキーがありません: " + lack.join(", "));
+    process.exit(1);
+  }
 }
 
 // ===== HTTPS リクエストヘルパー =====
@@ -45,6 +52,9 @@ function httpRequest(url, options, body) {
       headers: (options && options.headers) || {},
     };
     const req = https.request(opts, (res) => {
+      // ⚠ setEncoding を入れないと、chunk の境界でマルチバイト文字が壊れる（氏名が U+FFFD になる）。
+      //   RTDB の応答は本番 1MB 超で必ず複数 chunk に割れる。
+      res.setEncoding("utf8");
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
@@ -58,24 +68,22 @@ function httpRequest(url, options, body) {
   });
 }
 
-// ===== Firebase Anonymous Auth（RTDB アクセス用）=====
-async function getFirebaseIdToken() {
-  const res = await httpRequest(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_API_KEY}`,
-    { method: "POST", headers: { "Content-Type": "application/json" } },
-    JSON.stringify({ returnSecureToken: true })
-  );
-  if (res.status !== 200 || !res.body || !res.body.idToken) {
-    throw new Error(`Firebase Auth 失敗 HTTP ${res.status}: ${JSON.stringify(res.body).slice(0, 200)}`);
-  }
-  return res.body.idToken;
-}
+// ===== Firebase RTDB（サービスアカウントで読み書きする）=====
+// ⚠⚠ 以前はここで accounts:signUp の匿名アカウントを作って ?auth= で叩いていた。
+//    その経路は 2026-09-06 に廃止した。匿名アカウントは公開 apiKey で誰でも作れるため、
+//    「匿名なら読める」というルールを残すと、このジョブと攻撃者を区別できない。
+//    このジョブが読む tc5_correction_requests / tc5_fcm_state / tc5_fcm_tokens は
+//    役割トークンを持つ人だけが触れる領域になった。ジョブは人ではないので、
+//    FCM 送信と同じサービスアカウントの資格で入る。
+// ⚠ 打刻に要る tc5_records / tc5_pins / tc5_staff / master / tc_master_depts は、
+//    いまも匿名で読める（打刻端末は起動時に役割を持てないため）。**穴が全部塞がったわけではない。**
+// ⚠ アクセストークンは絶対にログへ出さない。
 
 // ===== Firebase RTDB GET =====
-async function fetchRTDB(path, idToken) {
+async function fetchRTDB(path, accessToken) {
   const logUrl = `${FB_DB_URL}/${path}.json`;
   console.log(`[RTDB]  GET ${logUrl}`);
-  const res = await httpRequest(`${logUrl}?auth=${idToken}`);
+  const res = await httpRequest(logUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
   console.log(`[RTDB]  HTTP ${res.status}`);
   if (res.status !== 200) {
     throw new Error(`RTDB GET 失敗 (${path}): HTTP ${res.status} ${JSON.stringify(res.body).slice(0, 200)}`);
@@ -84,12 +92,23 @@ async function fetchRTDB(path, idToken) {
 }
 
 // ===== Firebase RTDB PATCH =====
-async function patchRTDB(path, idToken, data) {
-  const url = `${FB_DB_URL}/${path}.json?auth=${idToken}`;
+// ⚠ httpRequest は通信エラーでしか reject しない。401/403 でも resolve するので、
+//   ここでステータスを見ないと呼び出し側の .catch が一生発火しない。
+//   その場合 tc5_fcm_state が更新されず、30分ごとに同じ通知を送り続ける。
+async function patchRTDB(path, accessToken, data) {
+  const url = `${FB_DB_URL}/${path}.json`;
   return httpRequest(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-  }, JSON.stringify(data));
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+  }, JSON.stringify(data)).then((res) => {
+    if (res.status !== 200) {
+      throw new Error(`RTDB PATCH 失敗 (${path}): HTTP ${res.status} ${JSON.stringify(res.body).slice(0, 200)}`);
+    }
+    return res;
+  });
 }
 
 // ===== FCM v1 API: サービスアカウント JWT → OAuth2 アクセストークン =====
@@ -99,7 +118,13 @@ function createGoogleJWT(sa) {
   const claim = Buffer.from(JSON.stringify({
     iss: sa.client_email,
     sub: sa.client_email,
-    scope: "https://www.googleapis.com/auth/firebase.messaging",
+    // ⚠ RTDB も同じアクセストークンで叩く。firebase.database と userinfo.email を
+    //    外すと RTDB REST が 401 を返す（FCM だけなら messaging で足りる）。
+    scope: [
+      "https://www.googleapis.com/auth/firebase.messaging",
+      "https://www.googleapis.com/auth/firebase.database",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ].join(" "),
     aud: "https://oauth2.googleapis.com/token",
     iat: now,
     exp: now + 3600,
@@ -154,12 +179,12 @@ async function main() {
   console.log(`[CONFIG] DRY_RUN=${DRY_RUN}`);
   console.log("========================================");
 
-  // RTDB 認証
-  const idToken = await getFirebaseIdToken();
-  console.log("[AUTH]  idToken 取得完了");
+  // RTDB 認証（サービスアカウント。匿名サインインは廃止した）
+  const accessToken = await getAccessToken(SERVICE_ACCOUNT);
+  console.log("[AUTH]  アクセストークン取得完了");
 
   // 修正申請取得
-  const raw = await fetchRTDB("tc5_correction_requests", idToken);
+  const raw = await fetchRTDB("tc5_correction_requests", accessToken);
   const requests = raw == null
     ? []
     : Array.isArray(raw) ? raw.filter(Boolean) : Object.values(raw).filter(Boolean);
@@ -172,7 +197,7 @@ async function main() {
   }
 
   // 前回送信と同件数なら重複送信しない
-  const stateRaw = await fetchRTDB("tc5_fcm_state", idToken).catch(() => null);
+  const stateRaw = await fetchRTDB("tc5_fcm_state", accessToken).catch(() => null);
   const lastSentCount = (stateRaw && stateRaw.lastSentCount != null) ? stateRaw.lastSentCount : -1;
   if (lastSentCount === pendingCount) {
     console.log(`[SKIP]  前回送信 (${lastSentCount}件) と変化なし → 再送スキップ`);
@@ -180,7 +205,7 @@ async function main() {
   }
 
   // FCM トークン取得
-  const tokensRaw = await fetchRTDB("tc5_fcm_tokens", idToken).catch(() => null);
+  const tokensRaw = await fetchRTDB("tc5_fcm_tokens", accessToken).catch(() => null);
   const tokenList = tokensRaw
     ? Object.values(tokensRaw).map((t) => t && t.token).filter(Boolean)
     : [];
@@ -196,10 +221,6 @@ async function main() {
     return;
   }
 
-  // OAuth2 アクセストークン取得（FCM v1 API 用）
-  const accessToken = await getAccessToken(SERVICE_ACCOUNT);
-  console.log("[AUTH]  FCM アクセストークン取得完了");
-
   // 各端末へ送信
   let successCount = 0;
   for (const token of tokenList) {
@@ -213,7 +234,7 @@ async function main() {
   }
 
   // 送信済み件数を RTDB に記録
-  await patchRTDB("tc5_fcm_state", idToken, {
+  await patchRTDB("tc5_fcm_state", accessToken, {
     lastSentCount: pendingCount,
     lastSentAt: new Date().toISOString(),
   }).catch((e) => console.warn("[RTDB]  state 保存失敗:", e.message));

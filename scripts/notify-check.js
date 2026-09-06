@@ -6,12 +6,14 @@
 "use strict";
 
 const https = require("https");
+const crypto = require("crypto");
 
 // ===== Secrets バリデーション =====
+// ⚠ FIREBASE_API_KEY はもう使わない（RTDB を匿名で叩くのをやめたため）。
 const REQUIRED_SECRETS = [
   "LINE_CHANNEL_ACCESS_TOKEN",
-  "FIREBASE_API_KEY",
   "FIREBASE_DATABASE_URL",
+  "FIREBASE_SERVICE_ACCOUNT_KEY",
 ];
 const missing = REQUIRED_SECRETS.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -26,8 +28,23 @@ if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
   process.exit(1);
 }
 
-const FB_API_KEY = process.env.FIREBASE_API_KEY;
 const FB_DB_URL  = process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "");
+
+let SERVICE_ACCOUNT;
+try {
+  SERVICE_ACCOUNT = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+} catch (e) {
+  console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY が有効な JSON ではありません");
+  process.exit(1);
+}
+// ⚠ 値は絶対に出さない。欠けているキー名だけを出す。
+{
+  const lack = ["client_email", "private_key", "project_id"].filter((k) => !SERVICE_ACCOUNT[k]);
+  if (lack.length) {
+    console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY に次のキーがありません: " + lack.join(", "));
+    process.exit(1);
+  }
+}
 const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁止
 const LINE_TO    = LINE_TO_ENV;
 
@@ -45,6 +62,8 @@ function httpRequest(url, options, body) {
       headers: (options && options.headers) || {},
     };
     const req = https.request(opts, (res) => {
+      // ⚠ setEncoding を入れないと、chunk の境界でマルチバイト文字が壊れる（氏名が U+FFFD になる）。
+      res.setEncoding("utf8");
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
@@ -138,27 +157,55 @@ function getNowJSTWithSeconds() {
   }).format(new Date());
 }
 
-// ===== Firebase Anonymous Auth =====
-async function getFirebaseIdToken() {
-  const res = await httpRequest(
-    `https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${FB_API_KEY}`,
-    { method: "POST", headers: { "Content-Type": "application/json" } },
-    JSON.stringify({ returnSecureToken: true })
-  );
-  if (res.status !== 200 || !res.body || !res.body.idToken) {
-    throw new Error(
-      `Firebase Anonymous Auth 失敗 (HTTP ${res.status}): ${JSON.stringify(res.body).slice(0, 300)}`
-    );
+// ===== Firebase RTDB（サービスアカウントで読む）=====
+// ⚠⚠ 以前は accounts:signUp の匿名アカウントを作って ?auth= で叩いていた。
+//    2026-09-06 に廃止した。匿名アカウントは公開 apiKey で誰でも作れるため、
+//    「匿名なら読める」というルールを残すと、このジョブと攻撃者を区別できない。
+//    このジョブが読む tc5_approvals / tc5_paid_leave_requests は
+//    役割トークンを持つ人だけが触れる領域になった。ジョブは人ではないので
+//    サービスアカウントの資格で入る。
+// ⚠ 打刻に要る tc5_records などは、いまも匿名で読める。**穴が全部塞がったわけではない。**
+// ⚠ アクセストークンは絶対にログへ出さない。
+function createGoogleJWT(sa) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const claim = Buffer.from(JSON.stringify({
+    iss: sa.client_email,
+    sub: sa.client_email,
+    // ⚠ RTDB REST は firebase.database と userinfo.email の両方が要る。
+    scope: [
+      "https://www.googleapis.com/auth/firebase.database",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ].join(" "),
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  })).toString("base64url");
+  const sigInput = `${header}.${claim}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(sigInput, "ascii");
+  const sig = signer.sign({ key: sa.private_key, padding: crypto.constants.RSA_PKCS1_PADDING }, "base64url");
+  return `${sigInput}.${sig}`;
+}
+
+async function getAccessToken(sa) {
+  const jwt = createGoogleJWT(sa);
+  const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
+  const res = await httpRequest("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+  }, body);
+  if (!res.body || !res.body.access_token) {
+    throw new Error(`OAuth2 アクセストークン取得失敗: ${JSON.stringify(res.body).slice(0, 300)}`);
   }
-  return res.body.idToken; // ログ出力禁止
+  return res.body.access_token; // ログ出力禁止
 }
 
 // ===== Firebase RTDB GET =====
-async function fetchRTDB(path, idToken) {
+async function fetchRTDB(path, accessToken) {
   const logUrl = `${FB_DB_URL}/${path}.json`;
   console.log(`[RTDB]  GET ${logUrl}`);
-  const fullUrl = `${logUrl}?auth=${idToken}`;
-  const res = await httpRequest(fullUrl);
+  const res = await httpRequest(logUrl, { headers: { Authorization: `Bearer ${accessToken}` } });
   console.log(`[RTDB]  HTTP ${res.status}`);
   if (res.status !== 200) {
     throw new Error(
@@ -361,12 +408,12 @@ async function main() {
   console.log(`[DATE]  通知対象日(前日): ${yesterday}`);
 
   // ── Firebase 認証 ──
-  console.log("[AUTH]  Firebase Anonymous Auth 開始");
-  const idToken = await getFirebaseIdToken();
-  console.log("[AUTH]  idToken 取得完了");
+  console.log("[AUTH]  サービスアカウントで OAuth2 アクセストークンを取得");
+  const accessToken = await getAccessToken(SERVICE_ACCOUNT);
+  console.log("[AUTH]  アクセストークン取得完了");
 
   // ── tc5_records 取得 ──
-  const rawRecords = await fetchRTDB("tc5_records", idToken);
+  const rawRecords = await fetchRTDB("tc5_records", accessToken);
   const allRecords = rawRecords == null
     ? []
     : Array.isArray(rawRecords)
@@ -376,14 +423,14 @@ async function main() {
   console.log(`[RTDB]  tc5_records 総件数: ${records.length}`);
 
   // ── tc5_approvals 取得 ──
-  const rawApprovals = await fetchRTDB("tc5_approvals", idToken);
+  const rawApprovals = await fetchRTDB("tc5_approvals", accessToken);
   const approvals = (rawApprovals && typeof rawApprovals === "object") ? rawApprovals : {};
   console.log(`[RTDB]  tc5_approvals 件数: ${Object.keys(approvals).length}`);
 
   // ── tc5_paid_leave_requests 取得（承認済み有給日を除外に使う）──
   let approvedPaidLeaveDates = {};
   try {
-    const rawPL = await fetchRTDB("tc5_paid_leave_requests", idToken);
+    const rawPL = await fetchRTDB("tc5_paid_leave_requests", accessToken);
     if (rawPL && typeof rawPL === "object") {
       const plArr = Array.isArray(rawPL) ? rawPL : Object.values(rawPL);
       plArr.filter(Boolean).forEach((r) => {

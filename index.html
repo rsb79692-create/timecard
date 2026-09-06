@@ -298,6 +298,21 @@ function elevateShareSession(kind,token){
   return _shareElevatePromise;
 }
 
+/** 進行中の役割昇格（スタッフ／管理者／共有）をすべて待ってから続ける。
+ *  ⚠⚠ 2026-09-06 から、打刻に要る最小限（tc5_staff / tc5_pins / tc_master_depts /
+ *     master / tc5_records）以外は「役割トークンを持つ人」しか読めない（RTDBルール）。
+ *     昇格は画面遷移を待たせないため裏で走らせているので、役割つきの領域を読む前に
+ *     ここで必ず待ち合わせる。待たないと匿名トークンのまま 401 になる。
+ *  ⚠ 失敗しても止めない。従来どおり再試行に任せる（オフラインでも画面は出す）。 */
+function afterElevation(){
+  /* ⚠ 待ち時間は最大でおよそ 20 秒（establishSessionEx の 12 秒 ＋ exchangeCustomToken の 5 秒
+     ＋ _authInFlight のレース 3 秒）。回線が悪いと管理画面の「資料」タブなどが
+     その間スピナーのままになる。打刻はこの Promise に依存しないので影響しない。 */
+  var ps=[_elevatePromise,_adminElevatePromise,_shareElevatePromise].filter(Boolean);
+  if(!ps.length)return Promise.resolve();
+  return Promise.all(ps.map(function(p){return Promise.resolve(p)["catch"](function(){});}));
+}
+
 // ===== 匿名セッションの端末保存（起動時の認証待ちをなくす）=====
 // 従来はページを開くたびに accounts:signUp を呼び、そのつど新しい匿名ユーザーを作っていた。
 // 本番実測で 1回あたり 531ms（中央値・n=5）かかり、しかも initFirebase は
@@ -1760,7 +1775,12 @@ function ensureAdminData(){
   if(_adminDataPromise)return _adminDataPromise;
   if(Date.now()-_adminDataLastTry<_LAZY_RETRY_MS)return null;
   _adminDataLastTry=Date.now();
-  _adminDataPromise=Promise.all([
+  // ⚠⚠ 役割トークンの確立を必ず待つ。ここで読むノードは 2026-09-06 から
+  //    「timecard が発行した役割トークンを持つ人」しか読めない（RTDBルール）。
+  //    待たずに走らせると匿名トークンのまま 401 になり、承認・有給・賄いが
+  //    再試行まで空のままになる。失敗しても進む（従来どおり再試行に任せる）。
+  _adminDataPromise=afterElevation().then(function(){
+  return Promise.all([
     fetchJson(FB_URL+"/tc5_approvals.json"),
     fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
     fetchJson(FB_URL+"/tc5_monthly_review_status.json"),
@@ -1789,6 +1809,7 @@ function ensureAdminData(){
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
     if(!approvalsLoaded||!monthlyDaysLoaded||!reviewStatusLoaded||!mealsLoaded)_adminDataPromise=null; // 再試行を許す
     if(changed&&!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+  });
   }).catch(function(){_adminDataPromise=null;});
   return _adminDataPromise;
 }
@@ -1802,7 +1823,12 @@ function ensureStaffScopedData(name){
   if(_staffDataFor===(name||"")&&Date.now()-_staffDataLastTry<_LAZY_RETRY_MS)return null;
   _staffDataFor=(name||"");
   _staffDataLastTry=Date.now();
-  _staffDataPromise=Promise.all([
+  // ⚠⚠ 役割トークンの確立を必ず待つ（ensureAdminData と同じ理由）。
+  //    elevateStaffSession は sOk が裏で走らせているだけなので、待たないと
+  //    ここは匿名トークンで走り、有給・通知・賄いが 401 で空になる。
+  //    ★ 打刻そのものはこの Promise に依存しない（tc5_records は起動面のまま）。
+  _staffDataPromise=afterElevation().then(function(){
+  return Promise.all([
     fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
     fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
     sid?fetchJson(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+".json"):Promise.resolve(null),
@@ -1824,6 +1850,7 @@ function ensureStaffScopedData(name){
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
     if(!paidLeaveLoaded||!mealsLoaded)_staffDataPromise=null; // 再試行を許す
     if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard)render();
+  });
   }).catch(function(){_staffDataPromise=null;});
   return _staffDataPromise;
 }
@@ -8874,6 +8901,10 @@ async function pinOk(){
   }
   if(res&&res.ok){
     isAdminAuthenticated=true;screen="admin";adminTab="records";pinInput="";pinError=false;pinErrorMsg="";
+    // ★ 管理者URL経路（establishSessionEx を await する側）と対称にしておく。
+    //   ここが null のままだと afterElevation() が「待つものなし」と判断する。
+    //   いまは上で await 済みなので実害は無いが、非同期化した瞬間に 401 が出る作りになる。
+    _adminElevatePromise=Promise.resolve(true);
     render();initFcmForAdmin();
     return;
   }
@@ -9285,7 +9316,9 @@ function sendUploadNotify(docId,sName,fName,uploadedAt){
   });
 }
 function loadDocumentList(callback){
-  authFetch(DB_DOCS+'.json')
+  /* ⚠ documents は役割つきしか読めない。昇格を待ってから引く（afterElevation 参照）。 */
+  afterElevation()
+    .then(function(){return authFetch(DB_DOCS+'.json');})
     .then(function(r){return r.json();})
     .then(function(data){
       if(!data){if(callback)callback([]);return;}

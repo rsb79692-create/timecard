@@ -26,7 +26,6 @@ jobs:
 
       - name: Run fcm-check
         env:
-          FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
           FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
