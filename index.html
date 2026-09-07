@@ -4669,6 +4669,10 @@ function _renderInner(){
     if(months2.indexOf(selMonth)<0)months2.unshift(selMonth);
     var monOpts3=months2.map(function(m){return'<option value="'+esc(m)+'"'+(m===selMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
     var mRecsStaff=records.filter(function(r){return r.staff===nm&&monthKey(r.date)===selMonth;});
+    // ★ この月の打刻を実際に取得できているか。取得前は「打刻が無い日」と断定できない。
+    //   未取得のまま未打刻セルを編集させると、サーバにある打刻を見落として同じ日に
+    //   2つ目のノードを作り、calcMs() の実働時間＝賃金の基礎が変わる。
+    var monthKnown=recordsMonthKnown(selMonth);
     var year=parseInt(selMonth.split("-")[0]),mon=parseInt(selMonth.split("-")[1])-1;
     var daysInMonth=new Date(year,mon+1,0).getDate();
     var allDates=[];
@@ -4708,7 +4712,24 @@ function _renderInner(){
         var reasonLine=(wasEdited&&rec.adjustReason)
           ?'<div style="font-size:.68rem;color:#92400e;margin-top:1px;">修正理由：'+esc(rec.adjustReasonLabel)+(rec.adjustComment?' / '+esc(rec.adjustComment):'')+'</div>':"";
         if(locked2)return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+'">'+(rec?esc(time):"−")+'</span>'+badge+reasonLine;
-        return'<span class="time-cell" data-id="'+esc(id)+'" data-nm="'+esc(nm)+'" data-type="'+type+'" data-date="'+dk+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid '+(rec?"#adb5bd":"transparent")+';padding-bottom:1px;">'+(rec?esc(time):"−")+'</span>'+badge+reasonLine;
+        // ★ サーバから取得できていない日は、未打刻セルを編集させない（フェイルクローズ）。
+        //   打刻があっても「未打刻」に見えるため、ここで入力すると save() の重複判定
+        //   （メモリ上の records 検索）が空振りし、同じ日に2つ目の打刻ノードができる。
+        //   calcMs() は clockIn を後勝ちで上書きするので、実働時間＝賃金の基礎が変わる。
+        //   打刻済みセル（rec あり）は data-id を持つので上書き更新になり、重複しない。
+        // ★ 当日より後の日も対象にする。recMonthEnd() が当月の取得上限を当日で丸めるため、
+        //   「明日〜月末」と未来月はどの経路でも取得されず、monthKnown が真でも未取得である。
+        //   端末時計が進んだ端末の打刻など、未来日付のレコードが実在しうる。
+        if(!rec&&(!monthKnown||dk>recToday()))return'<span style="font-family:monospace;font-size:.88rem;font-weight:700;color:#c8ccd2;">−</span>'+badge+reasonLine;
+        // ★ 未打刻のセルも編集できる（クリック→時刻入力→新規レコード作成）。
+        //   未打刻は "--:--" ＋下線で表す。勤怠一覧（日別）の未打刻セルと同じ表現にそろえてある。
+        //   旧実装は下線が transparent で "−" 1文字ぶんの当たり判定しかなく、
+        //   クリックできることが分からなかった。
+        // ★ 表示文字は "--:--" か "−" のいずれかにすること。attachTimeCellHandlers() は
+        //   この2つだけを「空欄」として扱うため、他の文字にすると既存値として拾われる。
+        // ★ 編集できないセル（承認済み・この月が未取得）は下線の無い "−" のままにする。
+        //   "--:--"＋下線＝入力できる / "−"＝入力できない、の区別が崩れる。
+        return'<span class="time-cell" data-id="'+esc(id)+'" data-nm="'+esc(nm)+'" data-type="'+type+'" data-date="'+dk+'" title="'+(rec?"クリックして修正":"クリックして入力")+'" style="font-family:monospace;font-size:.88rem;font-weight:700;cursor:pointer;color:'+(rec?"#0f172a":"#c8ccd2")+';border-bottom:1px solid #adb5bd;padding-bottom:1px;">'+(rec?esc(time):"--:--")+'</span>'+badge+reasonLine;
       }
       function brkPairDisp(bsR,beR){
         if(locked2){
@@ -4730,9 +4751,9 @@ function _renderInner(){
       return'<tr style="border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
         +'<td style="padding:4px 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:4px 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;">'+(hasData?tCell(cin,"clockIn"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
-        +'<td style="padding:4px 8px;text-align:center;">'+(hasData?brkDisplay:'<span style="color:#c8ccd2;">−</span>')+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;">'+(hasData?tCell(cout,"clockOut"):'<span style="color:#c8ccd2;">−</span>')+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cin,"clockIn")+'</td>'
+        +'<td style="padding:4px 8px;text-align:center;">'+brkDisplay+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cout,"clockOut")+'</td>'
         +'<td style="padding:4px 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
         +'<td style="padding:4px 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
         +'</tr>';
@@ -4751,6 +4772,10 @@ function _renderInner(){
           +'<button id="btn-bulk-approve-detail" style="background:#1e40af;color:#fff;border:none;padding:7px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
       +'</div>'
+      // ★ 未取得の月を「打刻が無い月」と見せない（フェイルクローズ）。
+      //   下のサマリー（出勤日数・総実働・残業）も取得済みの日だけの部分集計になるため、
+      //   数字より先に読めるようサマリーバーの「上」へ置く。順序を入れ替えてはならない。
+      +(monthKnown?"":'<div style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:4px;padding:8px 12px;font-size:.82rem;font-weight:700;margin-bottom:12px;">この月の打刻データを読み込んでいます。<br>下の出勤日数・総実働時間・残業時間は読み込めた日だけの集計で、まだ確定値ではありません。<br>未打刻に見える日でも打刻が存在する可能性があるため、読み込みが終わるまで未打刻の日は入力できません。通信状態を確認して画面を再読み込みしてください。</div>')
       // ② サマリーバー
       +'<div style="background:#fff;border-radius:2px;padding:12px 16px;margin-bottom:12px;display:flex;gap:0;border:1px solid #adb5bd;">'
         +'<div style="flex:1;text-align:center;border-right:1px solid #dee2e6;">'
