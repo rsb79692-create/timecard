@@ -1513,12 +1513,25 @@ ship-agent    ── git add 済み前提で commit → push origin main → Git
 
 ## commit / push / deploy 確認ルール
 
-- **commit / push はユーザーが明示的に承認するまで行わない**。Agent が勝手に commit/push しない。
+- **通常実装は、ユーザーの明示的な停止指示がない限り、commit → push → GitHub Pages 反映確認 → 本番確認まで進める**
+  （共通 [`../_shared_claude/RULES.md`](../_shared_claude/RULES.md)「Git・出荷」／[`../_shared_claude/DEPLOY.md`](../_shared_claude/DEPLOY.md)）。
+  ローカル確認だけで停止してはならない。**出荷前に共通 `AGENTS.md` の出荷条件（Critical 0 / High 0 / review 完了 /
+  QA 完了）を満たしていること**が前提であり、未達なら出荷しない。
+  ★ 共通側の「Vercel READY 確認」は本 repo では **GitHub Actions の成否と本番 URL の反映確認**へ読み替える
+  （`PROJECT_TYPES.md` Type C）。
+  「commit しない」「push しない」「本番へ出さない」「調査だけ」等の**範囲指定があれば従う**。
+  ★ **下の「出荷フローに含めない」項目（ワークフロー・Secrets・Firebase Rules・cron-job.org）は
+  この自律出荷の対象外である。** 自律で進めてよいのは通常のアプリコード変更に限る。
 - `git add` は今回触ったファイルのみ個別に指定（`git add -A` / `git add .` は原則禁止）。commit 前に `git diff --staged` を確認。
 - commit message は内容が分かる短い形式（例: `fix: 打刻処理の修正` / `feat: …` / `chore: …` / `docs: …`）。
 - **push 先は `origin main`**。`git push --force` は提案しない。remote に差分がある場合は `git pull --rebase` を提案。
 - **デプロイは push 後の GitHub Pages 自動反映が前提**（30秒〜数分）。状況は `https://github.com/rsb79692-create/timecard/actions` と本番 URL で確認。**手動 `vercel --prod` はしない**。
 - ワークフロー・Secrets・Firebase Rules・cron-job.org の変更は出荷フローに含めない（人間の確認が必要）。
+  ★ **`database.rules.json` は honomi-board と同一の Firebase プロジェクト `honomi-timecard` に同居している**
+  （`PROJECT_TYPES.md` Type C）。`firebase deploy --only database` はルール全体を置換するため、
+  timecard 側から出すと honomi-board の `rooms` / `members` / `config` / `field` /
+  `shares` / `shareKeys` / `guestOf` が消え、共有ボードが即座に止まる。
+  この repo の自律出荷に Rules のデプロイを含めてはならない。
 
 ---
 
@@ -1538,7 +1551,8 @@ ship-agent    ── git add 済み前提で commit → push origin main → Git
 未確認事項           : （箇条書き。無ければ「なし」）
 禁止事項の遵守       : Firebaseデータ変更なし / Rules変更なし / Secrets変更なし / cron-job変更なし / 削除なし / secret非表示
 QA結果               : 構文 / JSON / SW整合 / dryRun（実施した場合）。未実施なら「未実施」
-commit / push        : 未実施（ユーザー承認待ち）/ 実施（commit ID・push先 origin main）
+commit / push        : 実施（commit ID・push先 origin main）/ 未実施（理由。範囲指定・出荷条件未達・失敗のいずれか）
 本番反映             : 反映待ち（GitHub Pages 自動）/ 反映済み / 未デプロイ
-次アクション・要確認 : （commit 可否など）
+本番確認             : 実施（確認内容）/ 未確認（理由）
+次アクション・要確認 : （残課題・未確認事項。無ければ「なし」）
 ```
