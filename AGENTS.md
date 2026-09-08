@@ -16,6 +16,9 @@
 > [`../_shared_claude/`](../_shared_claude/) を **single source of truth** として参照する。本 AGENTS.md には
 > **timecard 固有の事実とルール** を残し、共通項は重複させず参照に寄せる。共通ルールと矛盾した場合は、
 > **timecard 固有の「事実」（Firebase/GitHub Pages/index.html 単体/通知系など。下記各セクション）を優先**する。
+> **ただし「レビュー範囲」は本例外の対象外である。** 初回レビューと再確認の範囲、および
+> **広いレビューへ戻す条件**は [`../_shared_claude/AGENTS.md`](../_shared_claude/AGENTS.md)「レビュー範囲」を正本とし、
+> 本書・`CLAUDE.md`・`.claude/**`・`docs/**` で同節より狭い範囲を定めない（同節が timecard 側の記載に優先する）。
 
 作業開始時、まず以下の共通ファイルを前提として読む。timecard は技術構成タイプ **Type C（Firebase + GitHub Pages）**。Type A/B（Supabase/Neon・Vercel・npm ビルド）の前提を持ち込まない。
 
