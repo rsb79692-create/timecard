@@ -234,12 +234,20 @@ section("4. 管理・労務士画面の入口（全件取得をしない）");
     t.net.calls.some((u) => /startAt=%222026-08-01%22/.test(u)));
 }
 {
-  const t = makeCtx({ handler: () => ({}), adminTab: "monthlyDays", monthlyDaysYear: 2026,
-                      ls: { tc5_records_oldest: "2026-04-01" } });
-  t.ctx._recAddIv("2026-08-01", "2026-08-31");
+  // ★ ensureAdminRecordRanges() は「未取得の need を 1つ見つけたら return」するため、
+  //   選択年の範囲へ到達させるには selMonth / selDate / 当日 を先に埋める必要がある。
+  //   固定日付で書くと「その月だけ通る」テストになるので実日付から組み立てる。
+  const base = makeCtx({}).ctx;
+  const today = base.recToday();
+  const curYm = today.substring(0, 7);
+  const year = parseInt(today.substring(0, 4), 10);
+  const t = makeCtx({ handler: () => ({}), adminTab: "monthlyDays", monthlyDaysYear: year,
+                      selMonth: curYm, selDate: today,
+                      ls: { tc5_records_oldest: year + "-01-01" } });
+  t.ctx._recAddIv(curYm + "-01", today);
   t.ctx.ensureAdminRecordRanges();
   check("月別出勤日数タブは選択年の範囲を取得する",
-    t.net.calls.some((u) => /startAt=%222026-01-01%22/.test(u)));
+    t.net.calls.some((u) => u.indexOf("startAt=%22" + year + "-01-01%22") >= 0));
   check("月別出勤日数タブでも全件取得はしない",
     t.net.calls.filter((u) => /tc5_records\.json$/.test(u)).length === 0);
 }
@@ -255,25 +263,241 @@ section("4. 管理・労務士画面の入口（全件取得をしない）");
 
 section("5. 全期間の分割取得（承認漏れ・有給付与）");
 {
-  const t = makeCtx({ handler: () => ({}), screen: "admin", ls: { tc5_records_oldest: "2026-04-01" } });
+  // ★ ここで固定するのは「取得完了のたびに次へ連鎖すること」と
+  //   「同時取得が上限を超えないこと」である。
+  //   連鎖が壊れると見張りタイマー任せ（月数 × 2.5秒）の待ち時間が戻る。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const months = [];                                  // 新しい月 → 古い月（6か月）
+  for (let i = 0; i < 6; i++) months.push(base.addYm(curYm, -i));
+  const oldestYm = months[months.length - 1];
+
+  const pend = [];                                    // 未解決の取得
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: oldestYm + "-01" },
+    handler: (url) => {
+      const m = /startAt=%22(\d{4}-\d{2})-\d{2}%22/.exec(url);
+      if (!m) return {};
+      return new Promise((res) => {
+        pend.push({ ym: m[1], url: url, done: () => res({ ok: true, status: 200, json: () => Promise.resolve({}) }) });
+      });
+    }
+  });
   const c = t.ctx;
   check("開始時点では確定していない（0件と断定しない）", c.recordsHistoryReady() === false);
-  // 当月から古い月へ1か月ずつ
-  const seen = [];
-  for (let i = 0; i < 8; i++) {
-    c._recHistoryWant = true;
-    c._recHistoryStep();
-    const last = t.net.calls[t.net.calls.length - 1] || "";
-    const m = last.match(/startAt=%22(\d{4}-\d{2})-01%22/);
-    if (m && seen.indexOf(m[1]) < 0) { seen.push(m[1]); c._recAddIv(m[1] + "-01", m[1] + "-31"); }
-    c._recRangePromise = null; c._recRangeWant = ""; c._recRangeLastTry = 0;
-  }
-  check("新しい月から順に取得する（2026-08 → 2026-04）",
-    JSON.stringify(seen) === JSON.stringify(["2026-08", "2026-07", "2026-06", "2026-05", "2026-04"]));
+
+  c._recHistoryWant = true;
+  c._recHistoryStep();
+  check("★ 同時取得は上限 HISTORY_CONCURRENCY を超えない",
+    c.HISTORY_CONCURRENCY >= 1 && c.HISTORY_CONCURRENCY <= 4 && pend.length === c.HISTORY_CONCURRENCY);
+  check("★ 背景の同時取得は変更前（1本）を超えない（対話操作から帯域を奪わない）",
+    c.HISTORY_CONCURRENCY === 1);
+  check("新しい月から順に取りに行く",
+    pend.map((x) => x.ym).join(",") === months.slice(0, c.HISTORY_CONCURRENCY).join(","));
   check("1回の取得は1か月分だけ（1MBを一度に取らない）",
-    t.net.calls.filter((u) => /tc5_records\.json$/.test(u)).length === 0);
-  check("運用開始月まで取り終えたら確定する", c.recordsHistoryReady() === true);
-  check("確定後は全期間が covered", c.recordsRangeCovers("2026-04-01", "2026-08-31") === true);
+    t.net.calls.filter((u) => /tc5_records\.json$/.test(u)).length === 0 &&
+    t.net.calls.every((u) => {
+      const a = /startAt=%22(\d{4}-\d{2})-\d{2}%22/.exec(u), b = /endAt=%22(\d{4}-\d{2})-\d{2}%22/.exec(u);
+      return !a || !b || a[1] === b[1];
+    }));
+
+  // 表示用の取得が飛行中のあいだは新規の過去分を始めない
+  asyncChecks.push((async () => {
+    const beforeN = pend.length;
+    c._recRangePromise = Promise.resolve();            // 画面が待っている取得
+    c._recRangeLastTry = Date.now();
+    pend[0].done();
+    for (let i = 0; i < 6; i++) await tick();
+    check("★ 表示用の取得が飛行中なら過去分を新規に始めない（画面を優先）",
+      pend.length === beforeN);
+    c._recRangePromise = null;
+
+    // ★ 表示用の取得がハングしたままになっても集計が永久に止まらないこと
+    c._recRangePromise = Promise.resolve();
+    c._recRangeLastTry = Date.now() - (c.RECORDS_RANGE_STUCK_MS + 1000);
+    const beforeStuck = pend.length;
+    c._recHistoryStep();
+    check("★ 表示用の取得が停滞しているときは過去分を再開する（永久停止しない）",
+      pend.length > beforeStuck);
+    c._recRangePromise = null;
+
+    // 以降は「完了 → 即座に次へ連鎖」だけで進むことを見る。
+    // ★ _recHistoryStep() / 見張りタイマーを一切呼ばない。
+    const seen = [pend[0].ym];
+    let guard = 0;
+    while (pend.length > 1 || (!c.recordsHistoryReady() && guard < 40)) {
+      guard++;
+      const nxt = pend.find((x) => seen.indexOf(x.ym) < 0);
+      if (!nxt) break;
+      seen.push(nxt.ym);
+      nxt.done();
+      for (let i = 0; i < 6; i++) await tick();
+      if (c.recordsHistoryReady()) break;
+    }
+    check("★ 取得完了のたびに次の月へ連鎖する（見張りタイマーを待たない）",
+      seen.length === months.length);
+    check("新しい月から古い月へ順に取得する",
+      seen.slice().sort().reverse().join(",") === seen.join(","));
+    check("取得したのは運用開始月〜当月だけ（期間を広げていない）",
+      seen.slice().sort().join(",") === months.slice().sort().join(","));
+    check("運用開始月まで取り終えたら確定する", c.recordsHistoryReady() === true);
+    check("確定後は全期間が covered",
+      c.recordsRangeCovers(oldestYm + "-01", c.recToday()) === true);
+  })());
+}
+{
+  // ★ 表示用と過去分が同じ月を二重取得しないこと。
+  //   二重取得は約230KBの重複転送になるうえ、表示用の単一実行枠（_recRangePromise）を塞ぎ、
+  //   背景スキャンまでその重複の完了まで止める。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const prevYm = base.addYm(curYm, -1);
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: base.addYm(curYm, -5) + "-01" },
+    handler: () => new Promise(() => {})                    // settle しない
+  });
+  const c = t.ctx;
+  c._recAddIv(curYm + "-01", c.recMonthEnd(curYm));          // 当月は取得済み＝背景は前月から
+  c._recHistoryWant = true;
+  c._recHistoryStep();                                       // 背景が前月を取得中
+  const n1 = t.net.calls.length;
+  check("前提: 背景が前月を取得中", c._recHistBusy(prevYm) === true);
+  c.ensureRecordsRange(prevYm + "-01", prevYm + "-31");
+  check("★ 背景が取得中の月を表示用が二重に取りに行かない", t.net.calls.length === n1);
+  check("表示用の単一実行枠を塞がない（背景が止まらない）", !c._recRangePromise);
+  // 背景が停滞したら表示用が自分で取りに行く（待ち続けない）
+  Object.keys(c._recHistInflight).forEach((k) => {
+    c._recHistInflight[k].at = Date.now() - (c.RECORDS_RANGE_STUCK_MS + 1000);
+  });
+  c.ensureRecordsRange(prevYm + "-01", prevYm + "-31");
+  check("★ 背景が停滞したら表示用が自分で取りに行く（永久に待たない）", t.net.calls.length > n1);
+}
+{
+  // ★ 抑止するのは「月まるごとの要求」だけ。selDate などの単日要求（数KB）まで待たせると、
+  //   スキャン中は日付を選ぶたびに背景の着地を待つことになる。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const prevYm = base.addYm(curYm, -1);
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: base.addYm(curYm, -5) + "-01" },
+    handler: () => new Promise(() => {})
+  });
+  const c = t.ctx;
+  c._recAddIv(curYm + "-01", c.recMonthEnd(curYm));
+  c._recHistoryWant = true;
+  c._recHistoryStep();                                       // 背景が前月を取得中
+  check("前提: 背景が前月を取得中", c._recHistBusy(prevYm) === true);
+  const n0 = t.net.calls.length;
+  c.ensureRecordsRange(prevYm + "-15", prevYm + "-15");       // selDate 相当の単日要求
+  check("★ 単日要求（selDate）は背景の着地を待たずに取りに行く",
+    t.net.calls.length === n0 + 1);
+}
+{
+  // ★ 連鎖もれ: 2回目以降の ensureRecordsHistory() は見張りタイマーを待たずステップすること。
+  //   ここを return だけにすると、表示用取得の着地後・最古日の確定後に 2.5秒の空待ちが戻る。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: base.addYm(curYm, -3) + "-01" },
+    handler: () => new Promise(() => {})
+  });
+  const c = t.ctx;
+  c.ensureRecordsHistory();                                  // 1回目＝タイマー予約のみ
+  check("1回目は入口の描画を優先する（すぐ取りに行かない）", t.net.calls.length === 0);
+  c.ensureRecordsHistory();                                  // 2回目＝即ステップ
+  check("★ 2回目以降は見張りタイマーを待たずステップする", t.net.calls.length > 0);
+}
+{
+  // ★ 過去分の取得が1本ハングしても、その月が永久に再発行されないままにならないこと。
+  //   authFetch にタイムアウトが無いため、ここを塞ぐと `_recFull` が永久に立たず
+  //   「集計中です…」が消えなくなる（全件承認・有給の自動算出が復旧不能になる）。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const hung = [];
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: base.addYm(curYm, -5) + "-01" },
+    handler: (url) => {
+      const m = /startAt=%22(\d{4}-\d{2})-\d{2}%22/.exec(url);
+      if (!m) return {};
+      return new Promise(() => { hung.push(m[1]); });          // 永久に settle しない
+    }
+  });
+  const c = t.ctx;
+  c._recHistoryWant = true;
+  c._recHistoryStep();
+  const n1 = hung.length;
+  check("前提: 上限まで発行して全部ハングしている",
+    n1 === c.HISTORY_CONCURRENCY && c._recHistActiveN() === c.HISTORY_CONCURRENCY);
+  c._recHistoryStep();
+  check("停滞前は同じ月を撃ち直さない", hung.length === n1);
+  // 全部が停滞判定に入るまで時間を進める
+  Object.keys(c._recHistInflight).forEach((k) => {
+    c._recHistInflight[k].at = Date.now() - (c.RECORDS_RANGE_STUCK_MS + 1000);
+  });
+  check("★ 停滞した取得は同時実行の席を占有しない", c._recHistActiveN() === 0);
+  const stalledMonths = Object.keys(c._recHistInflight);
+  c._recHistoryStep();
+  check("★ 過去分がハングしても取り直せる（集計が永久に止まらない）", hung.length > n1);
+  // ★ 「別の月へ前進しただけ」ではなく、停滞した月そのものを取り直していること。
+  //   ここを見ないと、停滞判定を外しても未取得の別月を拾って PASS してしまう。
+  check("★ 取り直すのは停滞した月そのもの",
+    hung.slice(n1).some((m) => stalledMonths.indexOf(m) >= 0));
+  check("取り直しても同時実行の上限は超えない", c._recHistActiveN() === c.HISTORY_CONCURRENCY);
+  check("ハング中は確定させない（フェイルクローズ）", c.recordsHistoryReady() === false);
+}
+{
+  // ★ 停滞で同じ月の2本目が飛んだあと、遅れて着地した古い応答で
+  //   新しいデータを塗り替えないこと（ensureRecordsRange の追い越しガードと対称）。
+  //   covered 済みになるため二度と取り直されず、古い値で固まる。
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const box = [];
+  const t = makeCtx({
+    screen: "admin",
+    ls: { tc5_records_oldest: base.addYm(curYm, -2) + "-01" },
+    handler: () => new Promise((res) => { box.push(res); })
+  });
+  const c = t.ctx;
+  const ok = (recs) => ({ ok: true, status: 200, json: () => Promise.resolve(recs) });
+  c._recHistoryWant = true;
+  c._recHistoryStep();                                        // A（古い方）を発行
+  const ymA = Object.keys(c._recHistInflight)[0];
+  c._recHistInflight[ymA].at = Date.now() - (c.RECORDS_RANGE_STUCK_MS + 1000);  // 停滞させる
+  c._recHistoryStep();                                        // B（新しい方）を発行
+  check("前提: 同じ月の2本目が飛んでいる", box.length === 2);
+  asyncChecks.push((async () => {
+    box[1](ok({ n1: { id: "n1", date: ymA + "-05", staff: "山田", type: "clockIn" } }));  // B が先に着地
+    for (let i = 0; i < 6; i++) await tick();
+    const afterNew = c.records.length;
+    box[0](ok({}));                                           // A（古い方）が遅れて着地
+    for (let i = 0; i < 6; i++) await tick();
+    check("★ 追い越された古い応答が新しいデータを巻き戻さない",
+      c.records.length === afterNew && afterNew === 1);
+  })());
+}
+{
+  // 取得失敗したときに連鎖で撃ち続けない（間隔を置いて見張りタイマーに任せる）
+  const base = makeCtx({}).ctx;
+  const curYm = base.recToday().substring(0, 7);
+  const t = makeCtx({ handler: () => "fail", screen: "admin",
+                      ls: { tc5_records_oldest: base.addYm(curYm, -3) + "-01" } });
+  const c = t.ctx;
+  c._recHistoryWant = true;
+  c._recHistoryStep();
+  const n1 = t.net.calls.length;
+  asyncChecks.push((async () => {
+    for (let i = 0; i < 6; i++) await tick();
+    c._recHistoryStep();
+    check("★ 取得失敗後は間隔を置く（失敗を連鎖で撃ち続けない）",
+      t.net.calls.length === n1);
+    check("取得失敗のあいだは確定しない（フェイルクローズ）",
+      c.recordsHistoryReady() === false);
+  })());
 }
 {
   const t = makeCtx({ handler: () => ({}), screen: "punch", ls: { tc5_records_oldest: "2026-04-01" } });
@@ -519,7 +743,10 @@ section("9. sw.js（app shell キャッシュ）");
   check("POST/PUT/PATCH をキャッシュ対象にしない", /if \(event\.request\.method !== 'GET'\) return;/.test(sw));
 }
 
-Promise.all(asyncChecks).then(() => {
+Promise.all(asyncChecks).catch((e) => {
+  fail++;
+  console.log("  FAIL  非同期チェックが例外で停止: " + (e && e.message ? e.message : e));
+}).then(() => {
   console.log("\n────────────────────────────");
   console.log("  PASS " + pass + " / FAIL " + fail);
   console.log("────────────────────────────");
