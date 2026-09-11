@@ -402,6 +402,22 @@ check("CHECK_HOUR を後続ステップへ渡す", /CHECK_HOUR=\$\{HOUR\}" >> "\
 check("手動・外部スケジューラから判定時刻を指定できる", /checkHour:/.test(WF));
 check("inputs 空の workflow_dispatch は6時（既存の外部スケジューラ経路）",
   /inputs 空の workflow_dispatch[\s\S]{0,200}?HOUR=6/.test(WF));
+// ⚠ 7時通知の本番経路は cron ではなく外部スケジューラ（cron-job.org）からの
+//   workflow_dispatch + inputs.checkHour である。この写像を固定する。
+check("inputs.checkHour が指定されていれば最優先で採用する",
+  /if \[ -n "\$\{INPUT_CHECK_HOUR\}" \][\s\S]{0,300}?HOUR="\$\{INPUT_CHECK_HOUR\}"/.test(WF));
+check("inputs.checkHour を採ったことがログへ残る（決定元の表示）",
+  /SRC="inputs\.checkHour"/.test(WF) && /決定元: \$\{SRC\}/.test(WF));
+check("inputs.checkHour の判定は schedule の cron 判定より前にある",
+  WF.indexOf('if [ -n "${INPUT_CHECK_HOUR}" ]') !== -1 &&
+  WF.indexOf('elif [ "${EVENT_NAME}" = "schedule" ]') !== -1 &&
+  WF.indexOf('if [ -n "${INPUT_CHECK_HOUR}" ]') < WF.indexOf('elif [ "${EVENT_NAME}" = "schedule" ]'));
+// ⚠ 未信頼値は run: へ直接展開せず env: 経由で渡すこと（シェル注入の防止）。
+check("inputs.checkHour を run: へ直接展開していない",
+  !/run:[\s\S]{0,800}?\$\{\{\s*github\.event\.inputs/.test(WF));
+check("inputs / schedule は env: 経由で渡している",
+  /INPUT_CHECK_HOUR: \$\{\{ github\.event\.inputs\.checkHour \}\}/.test(WF) &&
+  /EVENT_SCHEDULE: \$\{\{ github\.event\.schedule \}\}/.test(WF));
 check("FIREBASE_API_KEY の受け渡しを維持している",
   /FIREBASE_API_KEY: \$\{\{ secrets\.FIREBASE_API_KEY \}\}/.test(WF));
 check("実行コマンドを変えていない", /run: node scripts\/morning-check\.js/.test(WF));
