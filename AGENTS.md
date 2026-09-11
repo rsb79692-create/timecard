@@ -137,7 +137,45 @@ PIN 画面を出すまでに必ず要る。ここを締めると打刻ができ�
 - **月別出勤日数**: `tc5_monthly_days_import`（`scripts/fix-monthly-days-year.js` は年度補正用の保守スクリプト）。関連: ルートの `勤務日数管理.xlsx`。
 - **ピン留め等**: `tc5_pins`。
 - **通知系**:
-  - 朝出勤確認 LINE通知（`scripts/morning-check.js`、`.github/workflows/morning-check.yml`、毎日 06:03 JST）
+  - 朝出勤確認 LINE通知（`scripts/morning-check.js`、`.github/workflows/morning-check.yml`、**判定時刻ごとに1日2回**）
+    - **未打刻の判定時刻は施設ごとに持つ**（2026-09-11 追加）。6時の回と7時の回で対象施設が排他に分かれるため、同じ施設へ二重通知されない。
+      - 現在の割り当て: **ハルイロ / ミュゲの泉 = 7時**、その他 = 6時（ハーベストは従来どおり `NOTIFY_EXCLUDE` で通知対象外）。
+      - ⚠⚠ **判定時刻の正本は `morning-check.js` の `LATE_CHECK_FACILITIES`（コード側）である。施設マスタ側には持たせない。**
+        `master/locations` は `/honomi` の `.write` を継承し、管理者だけでなく**一般スタッフ（`auth.token.r === 's'`）でも書ける**。
+        そこへ判定時刻を置くと、6時の回の直前に「全施設=7時」、7時の回の直前に「全施設=6時」と書き換えるだけで、
+        **その日の未打刻通知を1件も出さずに Actions を success のまま終わらせられる**（画面に出ないフィールドなので誰も気づけない）。
+        移動距離申請が `master/locations` をサーバ側の判断材料にしていないのと同じ理由。施設マスタは「どの施設が在るか」の正本としてだけ使う。
+      - 施設マスタの施設名との突き合わせは `normalizeFacility`（NFKC＋空白除去）で行い、`LATE_CHECK_FACILITIES` に書いた施設名が
+        マスタに見当たらない場合は `findMissingLateFacilities` が `[WARN]` を出す（改名・表記ゆれの検知）。
+      - 有効な判定時刻は `CHECK_HOURS = [6, 7]` だけ。`CHECK_HOUR` が不正なら**既定へ倒さず `exit 1`**（黙って6時として走ると、6時の施設へ二重通知しつつ7時の施設が誰にも判定されない）。
+      - ⚠ **`CHECK_HOURS` へ時刻を足すときは `morning-check.yml` の cron も必ず足す。** cron の無い時刻を指定した施設は誰にも判定されず、通知が消える。
+        この対応は `scripts/test-morning-check.js` が `CHECK_HOURS` から導出して機械的に検証する。
+      - **監視が黙って落ちないようにしてある**（2026-09-11）。施設マスタの改名・削除・件数異常で「対象0件 → 静かに正常終了」になると、
+        その日の未打刻通知が消えたことを誰も知れないため、次はログではなく **LINE へ「設定異常」通知**を送る:
+        - `LATE_CHECK_FACILITIES` の施設名が施設マスタに見当たらない（改名・表記ゆれ・削除）
+        - コード側の期待件数（`DEFAULT_FACILITIES` から導出）が 1 件以上あるのに、その回の対象が 0 件
+
+        施設マスタが `MAX_FACILITIES`（50件）を超えた場合は採用せず `DEFAULT_FACILITIES` へ倒す（黙って切り詰めない）。
+      - 施設名は LINE 本文とログへ入る前に `safeFacilityLabel()` を通す（改行・制御文字・ゼロ幅・双方向制御の除去、URL スキームの無害化、40コードポイントで切り詰め）。**照合には使わない**（照合は `normalizeFacility`）。
+      - ⚠⚠ **これで「朝通知の抑止」が防げるようになったわけではない。** `tc5_records` の `.write` は `auth != null`（**匿名でも可**）なので、
+        施設ごとに偽の `clockIn` を1件ずつ書けば、その日の未打刻通知は今も消せる。打刻自体を止められない以上ここは塞げず、既存リスクとして許容している。
+        判定時刻をコード側へ移したのは、**画面に一切現れない隠しフィールドで**同じことができる状態を作らないため、という限定的な目的である。
+      - どの回かは起動経路（cron 式 / `inputs.checkHour`）から決めて `CHECK_HOUR` で渡す。**実行時の現在時刻からは決めない**（下記の遅延のため、6時の回が7時台に走ると6時の施設が飛ばされ7時の施設へ二重通知される）。未知の cron 式ならワークフローが `exit 1` する。
+    - ⚠⚠ **時刻どおりの通知は cron ではなく外部スケジューラからの `workflow_dispatch` が担っている**（2026-09-11 実測）。
+      `schedule` の cron は**このリポジトリでは全く当てにならない**:
+
+      | 指定 | 実際の起動（直近10日・UTC） | 遅れ |
+      |---|---|---|
+      | `"3 21 * * *"`（21:03 UTC） | 22:48 / 22:51 / 22:58 / 23:04 / 23:08 / 23:12 / 23:14 / 23:14 / 23:18 / 23:25 | **1時間45分〜2時間22分** |
+
+      過去には 8時間遅れも観測されている（2026-08-28）。`fcm-notify` は30分間隔指定に対し1日数回しか走っておらず、**取りこぼしも起きている**。
+      PUBLIC リポジトリの scheduled run は GitHub 側の負荷で遅延・ドロップされるためで、こちらでは制御できない。
+      - **6時分**: 外部スケジューラが毎日 **21:03:03 UTC ちょうど**に `workflow_dispatch`（`inputs` 空 → 6時判定）。これが確実な経路。
+      - **7時分**: 外部スケジューラに **22:03 UTC / `inputs: {"checkHour": "7"}`** を登録する（2026-09-11 時点でユーザー作業として依頼済み）。
+        ⚠ 値は**文字列 `"7"` ちょうど**であること。`"07"` / `" 7 "` / JSON 数値の `7` はワークフローの allowlist が `exit 1` で弾き、**その日の7時通知が失われる**（フェイルクローズなので静かには壊れないが、run が赤くなる）。
+        登録後、初回実行のログで `判定時刻: 7時（決定元: inputs.checkHour）` が出ていることを1度だけ目視確認する。
+      - `morning-check.yml` の cron 2本は、外部スケジューラが止まったときの取りこぼし防止（遅れてでも通知する）として残す。**時刻の正確さを cron に期待しない。**
+      - ⚠ **外部スケジューラ（cron-job.org 等）の設定はリポジトリ外にあり、Agent からは変更しない**（本書の禁止事項）。必要なら人間に依頼する。
   - 通知確認 LINE通知（`scripts/notify-check.js`、`.github/workflows/notify-check.yml`、手動 `workflow_dispatch` のみ）
   - 打刻修正申請 FCM Push通知（`scripts/fcm-check.js`、`.github/workflows/fcm-notify.yml`、JST 8–22時に30分間隔）
   - 写真アップロード通知（管理者向け。LINE: `api/line-notify.js` / Discord: `api/discord-notify.js`、いずれも Vercel）
@@ -1522,6 +1560,7 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
   - **承認漏れサマリー・通知件数集計の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-unapproved-summary.js`。`index.html` の `UNAPPROVED-SUMMARY-BEGIN/END` ブロックと `validateAttendanceRecord` / `isPastDate` を抽出し、過去日の未承認だけを数えること・当日を数えないこと・承認済みを誤検出しないこと・打刻の無い日や削除済みだけの日を承認漏れにしないこと・出勤のみ／退勤のみ／時刻欠落／勤務時間異常の判定・**索引版が素朴版（`records` 全件 filter）と完全一致すること**・正本を書き換えないことを検証する。**承認漏れの集計・通知件数・打刻漏れ判定に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - **承認漏れ集計の所要時間の計測（回帰テストではない・依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/bench-history-scan.js`。`index.html` の `RECORDS-RANGE` ブロックを実タイマーで動かし、ネットワークを「RTT ＋ 共有帯域」で模擬して、集計完了・表示月確保・月切替の待ち時間を測る。第1引数に別の `index.html` を渡すと修正前と比較できる。**合否は判定しない**（AGENTS.md に載せた数値の追試用）。
   - **打刻イベントの適用確認（本番データを読むだけ・書き込みなし）**: `node scripts/verify-punch-events.js`。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` を環境変数で渡す。`eventId` の重複・ノード名との一致・サーバ受信時刻の妥当性を確認する。
+  - **朝出勤未確認の施設別判定時刻の回帰テスト（依存パッケージなし・送信なし・本番データ非アクセス）**: `node scripts/test-morning-check.js`。`scripts/morning-check.js` の `MORNING-CHECK-HOURS-BEGIN/END` ブロックを抽出し、施設ごとの判定時刻の決定（**施設マスタ側の値で判定時刻を動かせないこと**・施設名の正規化・表記ゆれ重複の寄せ・継承プロパティを引かないこと）、6時の回と7時の回が排他であること（二重通知の不在）、改名・表記ゆれの検出、施設名のサニタイズ（LINE 本文への改行・制御文字の注入対策）、**公開 Actions ログへ氏名・施設トークン・LINE 宛先を出さないこと**、`CHECK_HOURS` の各時刻に対応する cron と `case` 分岐が `morning-check.yml` に在ること（導出で検証）、および既存の未打刻判定・LINE送信経路を変えていないことを検証する。**朝出勤未確認 LINE通知・判定時刻・`morning-check.yml` の cron に関係する変更では実行必須**（全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
   - 通知ロジック dryRun（送信なし）: `DRY_RUN=true node scripts/morning-check.js`（PowerShell: `$env:DRY_RUN="true"; node scripts/morning-check.js`）。`FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` 未設定時はスキップ。
 - **deploy**:
   - アプリ本体: `git push origin main` → **GitHub Pages が自動デプロイ**（`https://rsb79692-create.github.io/timecard/`）。本リポジトリに Pages 用ワークフローや `CNAME` は無く、ブランチ配信前提（Pages 設定自体はリポジトリ設定側で管理＝リポジトリ内からは設定値まで未確認）。
@@ -1548,8 +1587,8 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
 
 ## cron-job.org / GitHub PAT / 通知系の扱い
 
-- **定期実行の実態**: スケジュール実行は **GitHub Actions の cron** で行われている（`morning-check.yml` = 毎日 06:03 JST、`fcm-notify.yml` = JST 8–22時に30分間隔）。
-- **cron-job.org**: 本リポジトリ内に cron-job.org への参照・設定は**見つからない（未確認）**。外部で cron-job.org を併用しているかは本リポジトリからは判断できない。**cron-job.org の設定は変更しない**（変更が必要なら人間に依頼）。
+- **定期実行の実態**: ⚠ **`schedule` の cron は指定時刻どおりには走らない**（2026-09-11 実測で 1時間45分〜2時間22分遅れ、過去には8時間遅れ。`fcm-notify` は取りこぼしも発生）。**時刻どおりの通知は外部スケジューラからの `workflow_dispatch`** が担っている（`morning-check` の6時分＝毎日 21:03:03 UTC ちょうど）。詳細と7時分の登録内容は上記「主要機能」の朝出勤確認 LINE通知を参照。`morning-check.yml` の cron 2本（`"3 21 * * *"` / `"3 22 * * *"`）は取りこぼし防止の位置づけ。
+- **cron-job.org**: 本リポジトリ内に cron-job.org への参照・設定は**見つからない**。ただし **`morning-check` を毎日 21:03:03 UTC ちょうどに `workflow_dispatch` で起動している外部スケジューラが実在する**（2026-09-11 に `gh run list` で実測。actor は `rsb79692-create`）。その実体が cron-job.org かどうかは本リポジトリからは判断できない。**外部スケジューラの設定は Agent から変更しない**（変更が必要なら人間に依頼）。
 - **GitHub PAT**: 本リポジトリ内に PAT（`ghp_…` / `github_pat_…`）や `api.github.com` / `dispatches` 呼び出しは**見つからない（未確認）**。アプリから GitHub API を叩く実装は確認できなかった。
 - **通知系まとめ**:
   - LINE Push: GitHub Actions（`morning-check` / `notify-check`）から直接送信（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID`）。アップロード通知は Vercel `api/line-notify.js`。
@@ -1644,8 +1683,9 @@ IndexedDB が開けない端末では、打刻画面とスタッフ選択画面�
 10. **有給取得履歴の回帰テスト**: `node scripts/test-paid-leave-history.js`（全件 PASS / 0 FAIL を確認）。**有給取得履歴の表示・`plBuildLeaveHistory`・実績/予定の境界に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 11. **管理者の勤怠編集の回帰テスト**: `node scripts/test-admin-attendance-edit.js`（全件 PASS / 0 FAIL を確認）。**管理者の勤怠編集・時刻セルの描画条件・`attachTimeCellHandlers` に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 12. **承認漏れサマリー・通知件数集計の回帰テスト**: `node scripts/test-unapproved-summary.js`（全件 PASS / 0 FAIL を確認）。**承認漏れの集計・通知件数・打刻漏れ判定・全期間スキャンに関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
-13. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）
-14. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
+13. **朝出勤未確認の施設別判定時刻の回帰テスト**: `node scripts/test-morning-check.js`（全件 PASS / 0 FAIL を確認）。**朝出勤未確認 LINE通知・施設別の判定時刻・`morning-check.yml` の cron に関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+14. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）。判定時刻ごとに確認する場合は `CHECK_HOUR=6` / `CHECK_HOUR=7` を付ける
+15. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 
 総合判定は「出荷可 / 要修正」。要修正なら ship に進まない。
 

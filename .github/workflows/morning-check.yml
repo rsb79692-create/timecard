@@ -2,7 +2,17 @@ name: 朝出勤確認 LINE通知
 
 on:
   schedule:
-    - cron: "3 21 * * *"  # 毎日 21:03 UTC = 06:03 JST
+    # 判定時刻ごとに cron を分ける。どの回かは github.event.schedule で判別し CHECK_HOUR へ渡す。
+    #
+    # ⚠⚠ このリポジトリでは schedule の cron は当てにならない。2026-09 の実測で、
+    #    "3 21 * * *"（21:03 UTC 指定）の実際の起動は 22:48〜23:25 UTC＝1時間45分〜2時間22分遅れ。
+    #    fcm-notify では取りこぼしも起きている。PUBLIC リポジトリの scheduled run は
+    #    GitHub 側の負荷で遅延・ドロップされるため、時刻の正確さを cron に頼ってはならない。
+    #    **時刻どおりの通知は外部スケジューラからの workflow_dispatch が担う**
+    #    （6時分は毎日 21:03:03 UTC ちょうどに届いている。7時分は 22:03 UTC / checkHour=7 を登録する）。
+    #    ここの cron は、その外部スケジューラが止まったときの取りこぼし防止（遅れてでも通知する）。
+    - cron: "3 21 * * *"  # 毎日 21:03 UTC = 06:03 JST（判定時刻 6時の施設）
+    - cron: "3 22 * * *"  # 毎日 22:03 UTC = 07:03 JST（判定時刻 7時の施設：ハルイロ / ミュゲの泉）
   workflow_dispatch:
     inputs:
       testNotify:
@@ -12,6 +22,11 @@ on:
         type: boolean
       targetDate:
         description: "判定対象日 yyyy-mm-dd（空欄 = JST 今日）"
+        required: false
+        default: ""
+        type: string
+      checkHour:
+        description: "判定時刻（6 または 7。空欄 = 6）"
         required: false
         default: ""
         type: string
@@ -32,6 +47,49 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
+
+      # 判定時刻はこのステップだけが決める。
+      # ⚠ 実行時の現在時刻からは決めない（Actions のスケジュールは数十分〜数時間遅れるため）。
+      # ⚠ 決められないときは既定へ倒さず失敗させる。既定の6時へ黙って倒すと、
+      #    6時の施設へ二重通知しつつ7時の施設は誰にも判定されないまま success で終わる。
+      - name: 判定時刻を決める
+        env:
+          INPUT_CHECK_HOUR: ${{ github.event.inputs.checkHour }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
+        run: |
+          set -eu
+          if [ -n "${INPUT_CHECK_HOUR}" ]; then
+            # 手動実行・外部スケジューラからの workflow_dispatch で明示指定された場合
+            HOUR="${INPUT_CHECK_HOUR}"
+            SRC="inputs.checkHour"
+          elif [ "${EVENT_NAME}" = "schedule" ]; then
+            # cron 起動。cron 式と判定時刻の対応はここだけで定義する。
+            case "${EVENT_SCHEDULE}" in
+              "3 21 * * *") HOUR=6 ;;
+              "3 22 * * *") HOUR=7 ;;
+              *)
+                echo "::error::未知の cron 式です: '${EVENT_SCHEDULE}'。判定時刻を確定できないため実行しません。"
+                echo "::error::cron を足した／変えたときは、このステップの case にも同じ式を追加してください。"
+                exit 1
+                ;;
+            esac
+            SRC="cron '${EVENT_SCHEDULE}'"
+          else
+            # inputs 空の workflow_dispatch（外部スケジューラの 21:03 UTC 呼び出しがこの経路）
+            HOUR=6
+            SRC="既定（inputs 空の ${EVENT_NAME}）"
+          fi
+          # GITHUB_ENV へ書く前に許可値へ丸める。改行を含む値による環境変数注入も同時に塞ぐ。
+          case "${HOUR}" in
+            6|7) ;;
+            *)
+              echo "::error::判定時刻は 6 または 7 のみ指定できます（受け取った値は不正です）。"
+              exit 1
+              ;;
+          esac
+          echo "CHECK_HOUR=${HOUR}" >> "$GITHUB_ENV"
+          echo "判定時刻: ${HOUR}時（決定元: ${SRC}）"
 
       - name: Run morning-check
         env:
