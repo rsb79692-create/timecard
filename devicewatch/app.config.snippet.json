@@ -1,0 +1,48 @@
+{
+  "_comment": [
+    "create-expo-app で作った app.json へ、この内容をマージする。",
+    "★ バージョン番号を書いた package.json はここに置かない。依存の版は必ず",
+    "  `npx expo install expo-location expo-task-manager expo-secure-store` に決めさせる",
+    "  （SDK と不整合な版を固定すると、ビルドが通らない・背景位置が動かない）。",
+    "★ ios.infoPlist.UIBackgroundModes に location が無いと、アプリ終了後に",
+    "  ジオフェンスで起こされない（＝持ち出しを検知できない）。",
+    "★ Android は ACCESS_BACKGROUND_LOCATION と FOREGROUND_SERVICE_LOCATION が必要。"
+  ],
+  "expo": {
+    "name": "施設端末監視",
+    "slug": "honomi-devicewatch",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "jp.honomi.devicewatch",
+      "supportsTablet": false,
+      "infoPlist": {
+        "UIBackgroundModes": ["location"],
+        "NSLocationWhenInUseUsageDescription": "施設からの持ち出しを検知するために、この端末の位置を確認します。",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "アプリを閉じているあいだも施設からの持ち出しを検知するため、位置情報を常に利用します。位置情報以外は送信しません。",
+        "NSLocationAlwaysUsageDescription": "アプリを閉じているあいだも施設からの持ち出しを検知するため、位置情報を常に利用します。"
+      }
+    },
+    "android": {
+      "package": "jp.honomi.devicewatch",
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "isAndroidBackgroundLocationEnabled": true,
+          "isIosBackgroundLocationEnabled": true,
+          "locationAlwaysAndWhenInUsePermission": "アプリを閉じているあいだも施設からの持ち出しを検知するため、位置情報を常に利用します。"
+        }
+      ]
+    ]
+  }
+}

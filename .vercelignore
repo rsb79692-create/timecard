@@ -16,11 +16,37 @@ serviceAccount*.json
 service-account*.json
 *.pem
 *.p12
+*.pfx
+*.der
 *.key
+
+# --- モバイルの署名資格情報（.gitignore と同じ内容。多層防御）---
+# ⚠ Vercel も本番でリポジトリ直下の静的ファイルを配信している。
+#   ローカルから vercel --prod を実行した場合、git 管理外のファイルも上がるため
+#   .gitignore とは別にここでも除外する（このファイル冒頭の方針どおり）。
+*.keystore
+*.jks
+*.p8
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+keystore.properties
+credentials.json
+google-services.json
+GoogleService-Info.plist
+eas.json
+*.apk
+*.aab
+*.ipa
 
 # --- 環境変数 ---
 .env
 .env.*
+# ★ Dropbox の競合コピーは「.env (… の競合コピー …)」のように**空白区切り**になるため
+#   .env.* では一致しない。.gitignore と同じパターンをここにも置く。
+*競合コピー*
+*conflicted copy*
 
 # --- 個人情報を含む業務データ（配信不要かつ機微）---
 勤務日数管理.xlsx
@@ -31,3 +57,8 @@ service-account*.json
 .github
 .claude
 scripts
+
+# --- 施設端末監視アプリ（Expo。Vercel では配信もビルドもしない）---
+# ★ ここを除外しないと、Vercel がルート以外の package.json / 依存を拾いうる。
+#   アプリのビルドは EAS またはローカルで行う（devicewatch/README.md）。
+devicewatch

@@ -1261,6 +1261,318 @@ function punchOutboxInstallTriggers(){
 // ===== PUNCH-OUTBOX-END =====
 
 
+// ===== FACECAM-BEGIN =====
+/**
+ * 打刻時の顔撮影（スタッフごとに ON/OFF）
+ *
+ * ★ この機能の目的は「心理的な不正抑止」だけである。本人確認ではない。
+ *   したがって次を絶対に行わない（行える実装にもしない）。
+ *   ・顔認証・本人判定をしない
+ *   ・写真をサーバへ送らない（fetch も authFetch も呼ばない）
+ *   ・端末へ保存しない（localStorage / IndexedDB / Cache Storage へ書かない）
+ *   ・Blob も dataURL も作らない（＝残せる形のデータを一切生成しない）
+ *   ・管理画面から写真を見る導線を作らない
+ *   撮影はキャンバスへ1枚描いた時点で完了し、その場で破棄する。
+ *
+ * ★ 既定は OFF。判定は `facePhoto === true` のときだけ ON とする
+ *   （未設定・null・"false"・0・"true"・1 はすべて OFF。フェイルセーフ）。
+ *   勝手に ON へ移行する処理は持たない。
+ *
+ * ★ 打刻を止めない。撮影は「端末保存が成功して画面が打刻済みになった後」に
+ *   非同期で始め、カメラが使えない・拒否された場合も打刻はそのまま成立させる。
+ *   カメラの起動を待って打刻を遅らせてはならない（即時打刻を壊さない）。
+ */
+
+// 撮影オーバーレイを出しておく上限（ms）。
+// ★ 打刻後の画面遷移（punchTimer＝1500ms）より短くする。長いとホーム（スタッフ一覧）の上に
+//   オーバーレイが残り、`pointer-events:none` のため「見えていないスタッフ名を押せる」状態になる。
+//   画面遷移側からも faceCamClose() を呼ぶ（二重の保険）。
+var FACECAM_SHOW_MS=1300;
+var FACECAM_MAX_MS=2600;
+// running: 表示中 / busy: 撮影が飛行中（表示が閉じても撮影は続きうる）
+// busyAt: 撮影を開始した時刻。★ 権限ダイアログが未応答のまま getUserMedia が解決しないと
+//   busy が立ったままになり、その端末では以後一切撮影されなくなる（気づけない）。
+//   一定時間が過ぎた busy は無効として扱う。
+var FACECAM_BUSY_MAX_MS=15000;
+var _faceCam={running:false,busy:false,busyAt:0,box:null,strip:null,hardTimer:null,closeTimer:null,stream:null};
+/**
+ * 開示文（画面**上端**の固定ストリップへ出す）。
+ *
+ * ★★ 下端にも本文にも置けない。理由:
+ *   ・下端は更新バナー（bottom:0 / z-index 9998。打刻端末では誰も押さないので出たままになる）と
+ *     打刻時刻に挟まれて、320px 幅では安全な位置が存在しない。
+ *   ・本文（流し込み）は、打刻完了ブロック自体が 320px の可視高（約460px）を超えるため、
+ *     未送信打刻バナー・お知らせ・氏名の折返しのいずれかで**画面外へ押し出される**。
+ *   上端に置けば、覆うのは「← もどる」だけである（打刻直後に押す導線ではない）。
+ * ★ 撮影できたかどうかで文言を差し替える（DOM を直接書き替えるので render を待たない）。
+ */
+var FACECAM_STRIP_BEFORE="📷 管理者設定により撮影します（保存・送信なし）";
+var FACECAM_STRIP_OK="📷 撮影しました（保存・送信はしません）";
+var FACECAM_STRIP_NG="📷 カメラを使用できませんでした";
+
+/** スタッフ個別の ON/OFF。★ true 以外はすべて OFF。 */
+function faceCamStaffEnabled(s){
+  return !!(s&&typeof s==="object"&&s.facePhoto===true);
+}
+
+/** いまの環境（テストから差し替えられるようにまとめて取る）。 */
+function faceCamEnv(){
+  return {
+    writePolicy:(typeof writePolicy!=="undefined")?writePolicy:"",
+    viewerMode:!!(typeof viewerMode!=="undefined"&&viewerMode),
+    demoMode:!!(typeof demoMode!=="undefined"&&demoMode),
+    staffDemoMode:!!(typeof staffDemoMode!=="undefined"&&staffDemoMode),
+    hasCamera:!!(typeof navigator!=="undefined"&&navigator.mediaDevices&&navigator.mediaDevices.getUserMedia)
+  };
+}
+
+/**
+ * 撮影するか。
+ * ★ 出勤・退勤だけ。休憩・施設変更では撮影しない。
+ * ★ スタッフテスト画面（sandbox）・管理者デモ・閲覧用URLでは動かさない
+ *   （本番の打刻端末以外でカメラを起こさない）。
+ */
+function faceCamShouldCapture(type,s,env){
+  var e=env||{};
+  if(type!=="clockIn"&&type!=="clockOut")return false;
+  if(!faceCamStaffEnabled(s))return false;
+  if(e.writePolicy!=="full")return false;
+  if(e.viewerMode)return false;
+  if(e.demoMode)return false;
+  if(e.staffDemoMode)return false;
+  if(!e.hasCamera)return false;
+  return true;
+}
+
+/** 映像の1フレーム目が来るまで待つ（最大 1.2 秒）。来なくても撮影を試みる。 */
+function faceCamWaitFrame(video){
+  return new Promise(function(res){
+    var done=false;
+    var fin=function(){if(done)return;done=true;res();};
+    try{
+      if(video&&video.readyState>=2)return fin();
+      if(video&&video.addEventListener)video.addEventListener("loadeddata",fin,{once:true});
+    }catch(e){}
+    setTimeout(fin,1200);
+  });
+}
+
+/**
+ * インカメラで1枚だけ撮る。撮ったものは finally で必ず破棄する。
+ * deps を差し替えられるようにしてあるのは回帰テスト用（本番は faceCamBrowserDeps）。
+ */
+async function faceCamCaptureOnce(deps){
+  var d=deps||{};
+  if(typeof d.getUserMedia!=="function")return {ok:false,reason:"unsupported"};
+  var stream=null,video=null,canvas=null;
+  try{
+    stream=await d.getUserMedia({
+      video:{facingMode:"user",width:{ideal:640},height:{ideal:480}},audio:false
+    });
+    if(typeof d.onStream==="function")d.onStream(stream);   // 表示側が閉じるときに止められるように
+    video=d.makeVideo();
+    try{video.muted=true;video.playsInline=true;video.setAttribute&&video.setAttribute("playsinline","");}catch(e){}
+    video.srcObject=stream;
+    if(typeof video.play==="function"){try{await video.play();}catch(e){}}
+    await (d.waitFrame?d.waitFrame(video):faceCamWaitFrame(video));
+    canvas=d.makeCanvas();
+    var w=Number(video.videoWidth)||640,h=Number(video.videoHeight)||480;
+    canvas.width=w;canvas.height=h;
+    var ctx=canvas.getContext("2d");
+    if(!ctx)return {ok:false,reason:"no_context"};
+    // ★ ここが「1枚の撮影」。この後どこへも渡さず、finally で破棄する。
+    ctx.drawImage(video,0,0,w,h);
+    return {ok:true,w:w,h:h};
+  }catch(e){
+    // 権限拒否・カメラ占有・非対応。打刻には影響させない。
+    return {ok:false,reason:"error"};
+  }finally{
+    // ★ 画像データの破棄。ここを削ってはならない。
+    try{
+      if(canvas){
+        var c2=canvas.getContext?canvas.getContext("2d"):null;
+        if(c2&&c2.clearRect)c2.clearRect(0,0,canvas.width||0,canvas.height||0);
+        canvas.width=0;canvas.height=0;
+      }
+    }catch(e){}
+    try{if(video){video.srcObject=null;if(video.remove)video.remove();}}catch(e){}
+    try{
+      if(stream&&stream.getTracks)stream.getTracks().forEach(function(t){if(t&&t.stop)t.stop();});
+    }catch(e){}
+    canvas=null;video=null;stream=null;
+  }
+}
+
+/**
+ * オーバーレイを置く下端からの距離（px）。
+ * ★ 更新バナー（bottom:0 / z-index 9998）が出ているときは、その高さぶん持ち上げる。
+ *   持ち上げないと、バナーがオーバーレイより前面にあるため
+ *   「管理者設定による撮影です」の開示文がまるごと隠れる（隠れてはならない文言）。
+ * ★ z-index を上げる対応は不可（pointer-events:none なので、見えないバナーの
+ *   「再読み込み」「後で」が押せてしまう）。
+ */
+function faceCamBottomPx(){
+  try{
+    var b=document.getElementById("app-update-banner");
+    if(b&&b.offsetHeight>0)return b.offsetHeight+12;
+  }catch(e){}
+  return 12;
+}
+
+/** 撮影中の表示。★ #app の外（body直下）へ置く。render() で消えないようにするため。 */
+/**
+ * プレビューを表示できる余裕があるか。
+ * ★ 基準は**打刻時刻の行**（`#punch-time-line`）。これを覆ってはならない。
+ *   収まらないならプレビューを出さない。開示は上端のストリップが担うので、
+ *   プレビューが無くても「なぜ撮影されたか」は伝わる。
+ * ★ 基準が取れないときは false（出さない）。判定できないなら出さない側へ倒す。
+ */
+function faceCamHasRoom(boxH){
+  try{
+    var vh=window.innerHeight||0;
+    if(!vh)return false;
+    var a=document.getElementById("punch-time-line");
+    if(!a||!a.getBoundingClientRect)return false;
+    var top=vh-faceCamBottomPx()-boxH;
+    return (a.getBoundingClientRect().bottom+12)<=top;
+  }catch(e){return false;}
+}
+
+function faceCamOpenOverlay(){
+  faceCamClose();
+  // ① 開示のストリップ。★ 必ず出す（撮影する打刻で開示が出ない状態を作らない）。
+  var strip=document.createElement("div");
+  strip.id="facecam-strip";
+  strip.style.cssText="position:fixed;left:0;right:0;top:0;z-index:900;"
+    +"background:rgba(15,23,42,.92);color:#fff;font-size:11px;font-weight:700;"
+    +"padding:6px 10px;text-align:center;pointer-events:none;line-height:1.4;"
+    +"box-sizing:border-box;";
+  strip.textContent=FACECAM_STRIP_BEFORE;
+  document.body.appendChild(strip);
+  _faceCam.strip=strip;
+  // ② プレビュー。余裕が無いときも box 自体は作る（映像を再生させないと撮影できない端末が
+  //    あるため）。その場合は視覚的な footprint をゼロにして、開示はストリップに任せる。
+  var visible=faceCamHasRoom(64);
+  var box=document.createElement("div");
+  box.id="facecam-box";
+  if(!visible){
+    box.style.cssText="position:fixed;left:0;bottom:0;width:1px;height:1px;overflow:hidden;"
+      +"opacity:0.01;pointer-events:none;z-index:1;";
+    var vwrap0=document.createElement("div");
+    vwrap0.style.cssText="width:1px;height:1px;overflow:hidden;";
+    box.appendChild(vwrap0);
+    document.body.appendChild(box);
+    _faceCam.box=box;
+    _faceCam.hardTimer=setTimeout(faceCamClose,FACECAM_MAX_MS);
+    return {box:box,vwrap:vwrap0,msg:null};
+  }
+  // ★★ 画面中央へ置いてはならない。打刻完了画面の「✅ 打刻完了」と**打刻時刻**が中央にあり、
+  //   中央のオーバーレイはその両方を覆う（顔撮影ONのスタッフが打刻時刻を読めない）。
+  // ★★ 幅を明示すること。left:50% ＋ width:auto だと利用可能幅がビューポートの50%に制限され、
+  //   文言が2行ずつ折り返して背が高くなり、320px 幅では下端へ置いても打刻時刻に届いてしまう。
+  //   映像と文言を横並びにして、高さを 1 行ぶん（約64px）に抑える。
+  box.style.cssText="position:fixed;left:50%;bottom:"+faceCamBottomPx()+"px;transform:translateX(-50%);"
+    +"z-index:900;background:rgba(15,23,42,.92);border-radius:8px;padding:8px;"
+    +"box-shadow:0 8px 28px rgba(0,0,0,.35);pointer-events:none;"
+    +"width:264px;max-width:calc(100vw - 24px);box-sizing:border-box;"
+    +"display:flex;align-items:center;gap:8px;text-align:left;";
+  var vwrap=document.createElement("div");
+  vwrap.style.cssText="width:64px;height:48px;flex:0 0 64px;overflow:hidden;border-radius:6px;background:#000;";
+  var txt=document.createElement("div");
+  txt.style.cssText="flex:1;min-width:0;";
+  var msg=document.createElement("div");
+  msg.id="facecam-msg";
+  msg.style.cssText="color:#fff;font-size:11px;font-weight:700;line-height:1.4;";
+  msg.textContent="カメラを起動中…";
+  var note=document.createElement("div");
+  note.style.cssText="margin-top:2px;color:#cbd5e1;font-size:10px;line-height:1.4;";
+  // ★ 「なぜ撮影されているか」を必ず出す。本人が知らないうちにインカメラが起動する状態を作らない
+  //   （このフラグは管理者が設定する。本人の操作では入らない）。
+  note.textContent="管理者設定による撮影です／保存・送信はしません";
+  txt.appendChild(msg);txt.appendChild(note);
+  box.appendChild(vwrap);box.appendChild(txt);
+  document.body.appendChild(box);
+  _faceCam.box=box;
+  // ★ 何があっても閉じる。撮影が固まっても表示が残らないようにする。
+  _faceCam.hardTimer=setTimeout(faceCamClose,FACECAM_MAX_MS);
+  return {box:box,vwrap:vwrap,msg:msg};
+}
+
+function faceCamClose(){
+  try{if(_faceCam.hardTimer)clearTimeout(_faceCam.hardTimer);}catch(e){}
+  try{if(_faceCam.closeTimer)clearTimeout(_faceCam.closeTimer);}catch(e){}
+  _faceCam.hardTimer=null;_faceCam.closeTimer=null;
+  try{if(_faceCam.box&&_faceCam.box.parentNode)_faceCam.box.parentNode.removeChild(_faceCam.box);}catch(e){}
+  try{if(_faceCam.strip&&_faceCam.strip.parentNode)_faceCam.strip.parentNode.removeChild(_faceCam.strip);}catch(e){}
+  _faceCam.box=null;_faceCam.strip=null;
+  // ★ 表示を閉じる時点で、飛行中のカメラも止める（撮影側の finally と二重の保険）。
+  try{
+    var _st=_faceCam.stream;
+    if(_st&&_st.getTracks)_st.getTracks().forEach(function(t){if(t&&t.stop)t.stop();});
+  }catch(e){}
+  _faceCam.stream=null;
+  _faceCam.running=false;
+}
+
+/** 本番用の deps。プレビュー用の video はオーバーレイへ入れる（本人に見えるようにする）。 */
+function faceCamBrowserDeps(ui){
+  return {
+    getUserMedia:function(c){return navigator.mediaDevices.getUserMedia(c);},
+    makeVideo:function(){
+      var v=document.createElement("video");
+      v.style.cssText="width:64px;height:48px;object-fit:cover;transform:scaleX(-1);";
+      if(ui&&ui.vwrap)ui.vwrap.appendChild(v);
+      return v;
+    },
+    makeCanvas:function(){return document.createElement("canvas");},
+    onStream:function(st){_faceCam.stream=st;},
+    waitFrame:faceCamWaitFrame
+  };
+}
+
+/**
+ * 打刻の直後に呼ぶ。★ 呼び出し側は待たない（await しない）。
+ */
+function faceCamAfterPunch(type){
+  try{
+    var s=null;
+    if(typeof staffList!=="undefined"&&typeof staffName!=="undefined"&&staffName){
+      s=staffList.find(function(x){return x&&x.name===staffName;})||null;
+    }
+    if(!faceCamShouldCapture(type,s,faceCamEnv()))return;
+    // ★ 表示が閉じたあとも撮影は飛行しうる（権限ダイアログが未応答のまま等）。
+    //   running（表示中）だけで弾くと、表示を閉じた直後の次の打刻でカメラを二重に起こす。
+    if(_faceCam.running)return;
+    if(_faceCam.busy&&(Date.now()-_faceCam.busyAt)<FACECAM_BUSY_MAX_MS)return;
+    // ★ running を立てるのは faceCamOpenOverlay() の**後**。
+    //   faceCamOpenOverlay() は先頭で faceCamClose() を呼び、その faceCamClose() が
+    //   running=false へ戻すため、先に立てるとこの再入ガードが無効になる
+    //   （出勤→退勤を続けて押すとカメラを二重に起動する）。
+    var ui=faceCamOpenOverlay();
+    _faceCam.running=true;_faceCam.busy=true;_faceCam.busyAt=Date.now();
+    var t0=Date.now();
+    faceCamCaptureOnce(faceCamBrowserDeps(ui)).then(function(r){
+      _faceCam.busy=false;
+      // ★ いま表示されているのが自分のオーバーレイでなければ何も書かない
+      //   （遅れて着地した前回の撮影結果を、新しい表示へ書き込まないため）。
+      if(!_faceCam.box||_faceCam.box!==ui.box)return;
+      // ★ 撮れたかどうかを開示ストリップへ反映する（DOM を直接書き替えるので render を待たない）。
+      if(_faceCam.strip){
+        _faceCam.strip.textContent=(r&&r.ok)?FACECAM_STRIP_OK:FACECAM_STRIP_NG;
+      }
+      if(ui.msg)ui.msg.textContent=(r&&r.ok)?"撮影しました":"カメラを使用できませんでした";
+      var rest=Math.max(400,FACECAM_SHOW_MS-(Date.now()-t0));
+      _faceCam.closeTimer=setTimeout(faceCamClose,rest);
+    }).catch(function(){_faceCam.busy=false;faceCamClose();});
+  }catch(e){
+    // 撮影の失敗で打刻処理を巻き込まない
+    _faceCam.busy=false;
+    faceCamClose();
+  }
+}
+// ===== FACECAM-END =====
+
+
 // ===== tc5_approvals 書込ヘルパー =====
 function saveApprovals(approvalsObj) {
   if(demoWriteBlocked())return;
@@ -1486,7 +1798,7 @@ function ensureRecordsOldest(){
       _lsSet("tc5_records_oldest",JSON.stringify(d));
       if(d!==_prev||d!==_recOldestDate){
         _recOldestDate=d;
-        if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+        if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
       }
     }).catch(function(){_recOldestPromise=null;});
   return _recOldestPromise;
@@ -1622,7 +1934,7 @@ function ensureRecordsRange(from,to){
     _recRangePromise=null;
     if(v===null||v===undefined)return;           // 失敗。次の描画で再試行される
     mergeRecordsRange(f,t,v);
-    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
   }).catch(function(){if(_recRangePromise===p)_recRangePromise=null;});
   _recRangePromise=p;
   return p;
@@ -1730,7 +2042,7 @@ function _recHistFetch(ym){
     mergeRecordsRange(f,t,v);
     _recHistoryStep();   // ★ 次の月へ即座に連鎖する（見張りタイマーを待たない）
     if(_recFull)return;  // 確定時の再描画は _recHistoryStep 側が行う
-    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
   }).catch(function(){done();_recHistRetryAt=Date.now()+_LAZY_RETRY_MS;});
   return true;
 }
@@ -1757,7 +2069,7 @@ function _recHistoryStep(){
   // 運用開始月〜当月をすべて取得済み
   _recFull=true;monthRecordsReady=true;_recHistoryPumping=false;
   setTimeout(function(){
-    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
   },0);
 }
 // 分割取得の進行状態を文言にする。
@@ -1896,7 +2208,7 @@ function ensureAdminData(){
     if(r[2]!==null)reviewStatusLoaded=true;
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
     if(!approvalsLoaded||!monthlyDaysLoaded||!reviewStatusLoaded||!mealsLoaded)_adminDataPromise=null; // 再試行を許す
-    if(changed&&!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+    if(changed&&!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
   });
   }).catch(function(){_adminDataPromise=null;});
   return _adminDataPromise;
@@ -1937,7 +2249,7 @@ function ensureStaffScopedData(name){
     if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];}
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
     if(!paidLeaveLoaded||!mealsLoaded)_staffDataPromise=null; // 再試行を許す
-    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard)render();
+    if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard)render();
   });
   }).catch(function(){_staffDataPromise=null;});
   return _staffDataPromise;
@@ -1960,7 +2272,7 @@ function listenFirebase() {
         staffPinsLoaded=true; // 取得できた（不在＝PIN未登録も含む）。失敗時はここへ来ない
         if(val && JSON.stringify(val)!==JSON.stringify(staffPins)){
           staffPins=val;
-          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard) render();
         }
       }).catch(function(){});
     // 精査完了フラグ(tc5_monthly_review_status)を画面を問わず常時同期。
@@ -1972,7 +2284,7 @@ function listenFirebase() {
         if(val && typeof val==="object")reviewStatusLoaded=true;
         if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
           reviewStatus=val;
-          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
         }
       }).catch(function(){});
     // 打刻画面でも修正申請を同期（管理者の承認/却下で pending から外れた申請を「申請中の修正」表示から即時に消す。
@@ -1988,7 +2300,7 @@ function listenFirebase() {
               correctionRequests=newReqs;
               _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
               // 修正申請フォーム・有給フォーム入力中は再描画しない（入力状態のリセット防止）
-              if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
+              if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard) render();
             }
           }
         }).catch(function(){});
@@ -2008,7 +2320,7 @@ function listenFirebase() {
               Object.keys(cur).forEach(function(k){if(!val[k])val[k]=cur[k];});
               staffNotifications[_snPollSid]=val;
               // 他 polling と同じガード（打刻保存中・修正入力中・有給フォーム入力中は再描画しない）
-              if(savingCount===0&&!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard) render();
+              if(savingCount===0&&!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard) render();
             }
           }).catch(function(){});
       }
@@ -2030,7 +2342,7 @@ function listenFirebase() {
         recordsReady=true;recordsStale=false;
         if(JSON.stringify(before)===JSON.stringify(incoming))return; // 変化なし＝再描画しない
         mergeRecordsRange(_pd,_pd,val);
-        if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+        if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
       }).catch(function(){});
     })();
     authFetch(FB_URL + "/tc5_approvals.json")
@@ -2040,7 +2352,7 @@ function listenFirebase() {
         if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           _lsSet("tc5_approvals",JSON.stringify(approvals));
-          if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+          if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
         }
       }).catch(function(){});
     authFetch(FB_URL + "/tc5_correction_requests.json")
@@ -2052,7 +2364,7 @@ function listenFirebase() {
           if(JSON.stringify(newReqs)!==JSON.stringify(correctionRequests)){
             correctionRequests=newReqs;
             _lsSet("tc5_correction_requests",JSON.stringify(correctionRequests));
-            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }
       }).catch(function(){});
@@ -2068,7 +2380,7 @@ function listenFirebase() {
             if(JSON.stringify(next)!==JSON.stringify(paidLeaveRequests)){
               paidLeaveRequests=next;
               // 残日数入力フォーム編集中・タブ閲覧中・月別出勤日数入力中はrenderをスキップ（UI状態リセット防止）
-              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
             }
           }
         }).catch(function(){});
@@ -2084,7 +2396,7 @@ function listenFirebase() {
             if(val&&!paidLeaveBalanceDirty&&!paidLeaveBalanceSaving&&!_plBalEditModalOpen){
               var arr=typeof val==="object"&&!Array.isArray(val)?Object.values(val):val;
               paidLeaveBalances=(arr||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});
-              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+              if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
             }
           }).catch(function(){});
       }
@@ -2096,7 +2408,7 @@ function listenFirebase() {
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
             mealsData=val;
-            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
       // 月初確認状況もスタッフ本人の回答を反映（read-only表示のため再描画は安全）
@@ -2105,7 +2417,7 @@ function listenFirebase() {
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealConfData)){
             mealConfData=val;
-            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
+            if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
     }
@@ -3575,6 +3887,10 @@ var DEMO_BLOCK_SELECTORS=[
   ".btn-pin-view",".btn-pin-change",".btn-pin-reset",
   // マスター（部門・拠点）
   "#btn-add-dept","#new-dept",".btn-del-dept",
+  // 端末持ち出し監視（デモでは devWatchFacilityHtml が手前で返すため描画されないが、
+  // 既存の作法どおり二重に封じる）
+  ".btn-dw-save",".btn-dw-code",".btn-dw-revoke",".btn-dw-orphan",
+  ".dw-en",".dw-lat",".dw-lng",".dw-rad",".btn-dw-here",
   "#btn-add-loc","#new-loc-name","#new-loc-token",".btn-del-loc",".btn-copy-url",
   // 管理者PIN・管理者トークン（デモでは非描画だが二重に封じる）
   "#btn-change-pin","#new-admin-pin","#btn-change-token","#new-admin-token",
@@ -4477,7 +4793,8 @@ function _renderInner(){
         ?'<div style="text-align:center;padding:36px 20px;">'
           +'<div style="font-size:3.5rem;margin-bottom:12px;">✅</div>'
           +'<div style="font-size:1.2rem;font-weight:900;color:#1e40af;">打刻完了</div>'
-          +'<div style="font-size:.95rem;color:#0f172a;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
+          // ★ id は顔撮影のプレビューの位置決めの基準にも使う（この行を覆ってはならない）
+          +'<div id="punch-time-line" style="font-size:.95rem;color:#0f172a;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
           +'<div style="font-size:.78rem;color:#8496a7;margin-top:18px;">まもなく画面が戻ります…</div>'
           +'</div>'
         :_done
@@ -5504,6 +5821,13 @@ function _renderInner(){
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-meal-required" style="width:16px;height:16px;cursor:pointer;">'
         +'賄い 要（打刻画面に賄い入力欄を表示）</label></div>'
+        // 打刻時の顔撮影。★ 既定はOFF。写真は保存も送信もしない（心理的な不正抑止のみ）。
+        +'<div style="grid-column:1/-1;">'
+        +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
+        +'<input type="checkbox" id="modal-face-photo" style="width:16px;height:16px;cursor:pointer;">'
+        +'打刻時の顔撮影（初期値は撮影しない）</label>'
+        +'<div style="font-size:11px;color:#8496a7;margin-left:24px;margin-top:2px;">'
+        +'ONにすると出勤・退勤の打刻時にインカメラで1枚撮影します。写真は保存も送信もされず、その場で破棄されます（顔認証・本人判定は行いません）。</div></div>'
         // 移動距離申請の利用可否。★ tc5_staff には保存しない（/honomi は誰でも書けるため）。
         //   サーバ側の /mileage/enabled が正本で、保存時に /api/mileage 経由で更新する。
         +'<div style="grid-column:1/-1;">'
@@ -5555,6 +5879,9 @@ function _renderInner(){
           +'<button class="btn-del-dept" data-idx="'+i+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">削除</button>'
           +'</div>';
       }).join("");
+      // ★ locItems の生成より前に呼ぶ。devWatchFacilityHtml が devWatch.dupes を読むため、
+      //   後ろで呼ぶと表記ゆれの警告が1描画ぶん遅れる。
+      devWatchRefreshMasterIndex();
       var locItems=masterFacilities.map(function(f,i){
         var facUrl="https://rsb79692-create.github.io/timecard/?token="+encodeURIComponent(f.token||"");
         return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
@@ -5569,8 +5896,12 @@ function _renderInner(){
              +'<div style="font-size:.72rem;color:#475569;font-family:monospace;word-break:break-all;flex:1;">'+esc(facUrl)+'</div>'
              +'<button class="btn-copy-url" data-url="'+esc(facUrl)+'" style="flex-shrink:0;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">コピー</button>'
              +'</div>')
+          // 端末持ち出し監視（既存の施設行の中へ最小限で足す。新しい管理画面は作らない）
+          +devWatchFacilityHtml(f.name)
           +'</div>';
       }).join("");
+      // 監視設定はサーバ（/devmon）にしかない。マスター管理タブを開いた時点で1度だけ取得する。
+      devWatchEnsure();
       tc='<div class="admin-card">'
         +'<div class="admin-title">部門マスター</div>'
         +(deptItems||'<div class="empty">未登録</div>')
@@ -5581,6 +5912,7 @@ function _renderInner(){
         +'<div class="admin-card">'
         +'<div class="admin-title">拠点トークン管理</div>'
         +(locItems||'<div class="empty">未登録</div>')
+        +devWatchOrphanHtml()
         +'<div style="margin-top:14px;">'
         +'<div style="display:flex;gap:8px;margin-bottom:8px;">'
         +'<input id="new-loc-name" type="text" placeholder="拠点名（例: 第一事業所）" style="flex:1;">'
@@ -7820,6 +8152,10 @@ function _renderInner(){
         s.canSupportWork=!!(cswEl2&&cswEl2.checked);
         var mrEl2=document.getElementById("modal-meal-required");
         s.mealRequired=!!(mrEl2&&mrEl2.checked);
+        // 打刻時の顔撮影。★ チェックが入っているときだけ true を保存する
+        //   （判定側は facePhoto===true のみをONとするため、未設定・false はOFF）。
+        var fpEl2=document.getElementById("modal-face-photo");
+        if(fpEl2&&fpEl2.checked)s.facePhoto=true; else delete s.facePhoto;
         if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
       } else {
         if(staffList.find(function(s){return s.name===newN;})){showAlert("同名のスタッフが既に存在します");return;}
@@ -7827,6 +8163,9 @@ function _renderInner(){
         var mrEl3=document.getElementById("modal-meal-required");
         var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat,canSupportWork:!!(cswEl3&&cswEl3.checked),mealRequired:!!(mrEl3&&mrEl3.checked)};
         if(wwd)newStaff.weeklyWorkDays=parseInt(wwd,10);
+        // ★ 新規登録でも顔撮影の既定は OFF。チェックが入っているときだけキーを持たせる。
+        var fpEl3=document.getElementById("modal-face-photo");
+        if(fpEl3&&fpEl3.checked)newStaff.facePhoto=true;
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
       }
@@ -7877,8 +8216,11 @@ function _renderInner(){
       b.onclick=function(){
         var f=masterFacilities[parseInt(b.dataset.idx)];
         showConfirm((f?f.name:"拠点")+"を削除しますか？",function(){
+          var _dn=f?f.name:"";
           masterFacilities.splice(parseInt(b.dataset.idx),1);
           saveFacilities();render();
+          // ★ その施設の端末持ち出し監視も止める（設定だけ残すと存在しない施設名で通知が続く）
+          if(_dn)devWatchOnFacilityDeleted(_dn);
         });
       };
     });
@@ -7895,6 +8237,8 @@ function _renderInner(){
         }
       };
     });
+    // 端末持ち出し監視のハンドラ（render のたびに張り直す）
+    devWatchWire();
     // 管理者PIN変更
     var changePinBtn=document.getElementById("btn-change-pin");
     if(changePinBtn)changePinBtn.onclick=function(){
@@ -8365,6 +8709,9 @@ function openHrmEdit(nm){
   if(cswEl)cswEl.checked=!!(s&&s.canSupportWork);
   var mrEl=document.getElementById("modal-meal-required");
   if(mrEl)mrEl.checked=!!(s&&s.mealRequired); // 既存スタッフ（mealRequired未設定）は初期値=不要
+  var fpEl=document.getElementById("modal-face-photo");
+  // ★ 既存スタッフ（facePhoto未設定・null・"false" 等）はすべて OFF 表示にする（フェイルセーフ）。
+  if(fpEl)fpEl.checked=faceCamStaffEnabled(s);
   mileageFillStaffModal(s); // 移動距離申請の利用可否（サーバの値を反映）
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
@@ -8393,6 +8740,7 @@ function closeHrmModal(){
 }
 function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?null:nm;render();}
 function goHome(){
+  faceCamClose();   // ★ 打刻直後に「もどる」を押しても、スタッフ一覧の上に表示を残さない
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
   staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
@@ -8573,13 +8921,20 @@ async function _execPunch(type,d){
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
   punchTimer=setTimeout(function(){
+    // ★ 画面がホーム（スタッフ一覧）へ戻る時点で撮影表示を必ず閉じる。
+    //   残すと、見えていないスタッフ名を次の人が押せる（pointer-events:none のため）。
+    faceCamClose();
     punchMsg=null;staffName=null;selectedWorkFacility=null;facilityChangeTo=null;
     // サンドボックス中はホームではなくスタッフ選択画面へ戻す
     screen=staffDemoMode?"staffDemoPick":"home";
     render();
   },1500);
   render();
-  // ③ サーバ送信は非同期。結果を待たない。
+  // ③ 顔撮影（ONのスタッフの出勤・退勤だけ）。★ ここでは待たない。
+  //    打刻はすでに端末へ保存され画面も打刻済みになっているため、
+  //    カメラの起動・拒否・失敗は打刻に一切影響しない。
+  faceCamAfterPunch(type);
+  // ④ サーバ送信は非同期。結果を待たない。
   punchOutboxFlush("punch");
 }
 function doPunch(type){
@@ -13658,6 +14013,567 @@ window.addEventListener("online",function(){
   _appVersionWatchTries=0;
   startAppVersionWatch();
 });
+
+// ===== DEVWATCH-BEGIN =====
+/**
+ * 施設端末の持ち出し監視（管理画面側）
+ *
+ * ★ 新しい管理画面は作らない。既存「マスター管理」タブの「拠点トークン管理」の
+ *   各施設の中へ、監視ON/OFF・基準位置・許容半径・登録端末だけを足す。
+ *
+ * ★ 設定の正本はサーバの /devmon（RTDB ルート直下・Rules 未定義＝到達不能）。
+ *   master/locations（＝誰でも書ける）へ基準位置や監視ON/OFFを置いてはならない。
+ *   置くと、監視対象の端末自身が基準位置を自宅へ書き換えて検知を無効化できる。
+ *
+ * ★ 施設の対応づけは「施設名の正規化（NFKC＋空白除去）」で行う。サーバ側の
+ *   normFacilityName と同じ規則。施設マスタに改名機能が無く、改名＝削除＋追加に
+ *   なるため、改名した施設は設定を作り直す必要がある（AGENTS.md に明記）。
+ */
+var DEVICE_API="https://timecard-rho.vercel.app/api/device";
+
+var devWatch={
+  booted:false,booting:false,failed:false,failMsg:"",
+  settings:{dwellSec:180,staleSec:86400,defaultRadiusM:150},
+  // ★ 索引のキーは施設名（master/locations 由来＝一般スタッフでも書ける）である。
+  //   素の {} を使うと "__proto__" という名前の施設1件でプロトタイプが差し替わり、
+  //   for..in 走査で TypeError になって bootstrap が恒久的に失敗する。
+  //   既存の mileageAutoDict / mileageAutoSafeKey と同じ扱いにする。
+  facs:mileageAutoDict(),   // 正規化した施設名 → {fkey,name,lat,lng,radiusM,enabled,updatedAt}
+  devs:mileageAutoDict(),   // 正規化した施設名 → [端末]
+  open:mileageAutoDict(),   // 正規化した施設名 → 開閉状態
+  draft:mileageAutoDict(),  // 正規化した施設名 → 入力中の値（再描画で消えないように保持する）
+  dupes:mileageAutoDict(),  // 正規化した施設名 → 同じキーへ寄る施設名の配列（表記ゆれの衝突）
+  orphans:[],               // 施設マスタに対応が無い監視設定（管理導線を失わせない）
+  busy:false,saving:""      // saving は保存中の施設キー（再描画をまたいで保つ）
+};
+
+/**
+ * 施設マスタとの突き合わせ（孤立した監視設定・表記ゆれの衝突）を作り直す。
+ * ★ bootstrap 時だけに計算してはならない。拠点の追加・削除は render() だけで反映されるため、
+ *   追加直後に衝突警告が出ない／削除後も孤立警告が残る（偽陽性・偽陰性の両方）。
+ *   描画のたびに作り直す（施設50件・端末50件なので費用は無視できる）。
+ */
+function devWatchRefreshMasterIndex(){
+  var masterKeys=mileageAutoDict();
+  (typeof masterFacilities!=="undefined"?masterFacilities:[]).forEach(function(mf){
+    var mk=devWatchNorm(mf&&mf.name);
+    if(!mileageAutoSafeKey(mk))return;
+    if(!masterKeys[mk])masterKeys[mk]=[];
+    masterKeys[mk].push(String(mf.name||""));
+  });
+  devWatch.dupes=mileageAutoDict();
+  for(var mk2 in masterKeys){if(masterKeys[mk2].length>1)devWatch.dupes[mk2]=masterKeys[mk2];}
+  devWatch.orphans=[];
+  if(!devWatch.booted)return;
+  for(var fk in devWatch.facs){if(!masterKeys[fk])devWatch.orphans.push(devWatch.facs[fk]);}
+}
+
+/** サーバ側 api/_lib/device.js の normFacilityName と同じ規則。 */
+function devWatchNorm(s){
+  var v=(typeof s==="string")?s:"";
+  try{v=v.normalize("NFKC");}catch(e){}
+  return v.replace(/\s+/g,"");
+}
+
+/** /api/device を呼ぶ。失敗しても例外は投げず {ok:false,...} を返す。 */
+async function devWatchApi(action,params,timeoutMs){
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort();},timeoutMs||12000):null;
+  try{
+    // ★ getAuthToken() にはタイムアウトが無い（AbortController は fetch にしか効かない）。
+    //   ここで滞留すると devWatch.busy / saving が残り、保存ボタンが無反応になる。
+    //   必ず settle させる。
+    var _tokTimer=null;
+    var tok=await Promise.race([
+      getAuthToken().catch(function(){return "";}),
+      new Promise(function(res){_tokTimer=setTimeout(function(){res("");},timeoutMs||12000);})
+    ]);
+    if(_tokTimer)clearTimeout(_tokTimer);
+    if(!tok)return {ok:false,status:0,data:null};
+    var payload=Object.assign({idToken:tok,action:action},params||{});
+    var r=await fetch(DEVICE_API,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify(payload),signal:ctl?ctl.signal:undefined
+    });
+    var d=null;try{d=await r.json();}catch(e){d=null;}
+    return {ok:r.ok,status:r.status,data:d};
+  }catch(e){return {ok:false,status:0,data:null};}
+  finally{if(timer)clearTimeout(timer);}
+}
+
+function devWatchErrText(res){
+  var c=(res&&res.data&&res.data.error)||"";
+  if(res&&res.status===0)return "通信できませんでした。電波の良い場所で、もう一度お試しください。";
+  if(c==="session_revoked")return "この管理画面のセッションは無効化されています。新しい管理者PIN（またはURL）で入り直してください。";
+  if(c==="forbidden")return "権限がありません。";
+  if(c==="base_position_required")return "監視を有効にするには基準位置（緯度・経度）が必要です。";
+  if(c==="bad_radius")return "許容半径は 50〜2000 m の範囲で入力してください。";
+  if(c==="bad_position")return "緯度・経度が正しくありません。数値で入力してください（例 34.444210 / 135.370120）。";
+  if(c==="too_frequent")return "報告の間隔が短すぎます。しばらく待ってからお試しください。";
+  if(c==="bad_name")return "施設名が正しくありません。";
+  if(c==="too_many_facilities")return "登録できる施設数の上限を超えています。";
+  if(c==="too_many_devices")return "登録できる端末数の上限を超えています。使わない端末を解除してください。";
+  if(c==="too_many_codes")return "未使用の登録コードが多すぎます。期限切れを待つか、先に端末を登録してください。";
+  if(c==="rate_limited")return "操作が短時間に集中したため、一時的に受け付けられません。しばらく待ってからお試しください。";
+  if(c==="not_found")return "対象が見つかりません。画面を再読み込みしてください。";
+  return "保存できませんでした。通信状態を確認してください。";
+}
+
+// 取得失敗時の再試行ゲート。
+// ★★ これを外してはならない。devWatchEnsure() は render()（マスター管理タブの描画のたび）から
+//   無条件に呼ばれる。失敗すると booted も booting も false に戻るため、間隔と回数の上限が無いと
+//   「失敗 → render() → 再取得 → 失敗」の全描画ループに入り、/api/device を撃ち続ける。
+//   通信断・session_revoked・rate_limited のいずれでも起きる（429 もまた失敗なので止まらない）。
+//   既存の _adminDataLastTry ＋ _LAZY_RETRY_MS、ADMIN_TOKEN_STATE_MAX_RETRY と同じ扱いにする。
+var DEVWATCH_MAX_TRY=3;
+var _devWatchLastTry=0,_devWatchTries=0;
+
+/** 手動の再取得（ボタン・端末の登録や解除の直後）。ゲートを戻してから取り直す。 */
+function devWatchReload(){
+  devWatch.booted=false;_devWatchLastTry=0;_devWatchTries=0;
+  devWatchEnsure();
+}
+
+/** マスター管理タブを開いたときに1度だけ設定を取得する。 */
+function devWatchEnsure(){
+  if(devWatch.booted||devWatch.booting)return;
+  if(typeof writePolicy!=="undefined"&&writePolicy!=="full")return;  // sandbox では本番値を混ぜない
+  if(typeof viewerMode!=="undefined"&&viewerMode)return;
+  if(typeof demoMode!=="undefined"&&demoMode)return;                 // デモでは呼ばない（403になるだけ）
+  if(_devWatchTries>=DEVWATCH_MAX_TRY)return;                        // 「再取得」ボタンで戻す
+  var _now=Date.now();
+  if(_devWatchLastTry&&_now-_devWatchLastTry<_LAZY_RETRY_MS)return;
+  _devWatchLastTry=_now;_devWatchTries++;
+  devWatch.booting=true;
+  (async function(){
+    if(typeof _adminElevatePromise!=="undefined"&&_adminElevatePromise){
+      try{await _adminElevatePromise;}catch(e){}
+    }
+    var res=await devWatchApi("bootstrap",{});
+    devWatch.booting=false;
+    if(!res.ok||!res.data||!res.data.ok){
+      devWatch.failed=true;devWatch.failMsg=devWatchErrText(res);
+      // ★ 回復しない失敗（セッション失効・権限なし）では自動再試行の予算を使い切る。
+      //   撃ち続けても通らないため。利用者は「再取得」で明示的にやり直せる。
+      var _ec=(res.data&&res.data.error)||"";
+      if(_ec==="session_revoked"||_ec==="forbidden")_devWatchTries=DEVWATCH_MAX_TRY;
+      render();return;
+    }
+    devWatch.failed=false;devWatch.failMsg="";
+    _devWatchTries=0;              // 成功したら再試行の予算を戻す
+    var d=res.data;
+    if(d.settings)devWatch.settings=d.settings;
+    devWatch.facs=mileageAutoDict();devWatch.devs=mileageAutoDict();
+    var byFkey=mileageAutoDict();
+    (d.facilities||[]).forEach(function(f){
+      var key=devWatchNorm(f.name);
+      if(!mileageAutoSafeKey(key))return;   // "__proto__" 等は索引に入れない
+      devWatch.facs[key]=f;
+      if(typeof f.fkey==="string"&&mileageAutoSafeKey(f.fkey))byFkey[f.fkey]=key;
+    });
+    (d.devices||[]).forEach(function(dv){
+      // 端末は fkey で紐づいている。施設名側から引けるよう、名前で索引を作る。
+      var key=(typeof dv.fkey==="string")?byFkey[dv.fkey]:"";
+      if(!key)return;
+      if(!devWatch.devs[key])devWatch.devs[key]=[];
+      devWatch.devs[key].push(dv);
+    });
+    devWatchRefreshMasterIndex();
+    // ★ 入力中でない下書きは捨てて、サーバの値を正本として読み直す。
+    //   捨てないと「登録コード発行 → 端末登録で基準位置がサーバへ入った」後も
+    //   古い空の下書きが残り、保存時に「基準位置が必要です」と誤って弾かれる。
+    if(!devWatchEditing()){devWatch.draft=mileageAutoDict();}
+    devWatch.booted=true;
+    // ★ 入力中に再描画するとフォーカスとキャレットが飛ぶ。次の通常描画に任せる。
+    if(!devWatchEditing())render();
+  })().catch(function(){devWatch.booting=false;devWatch.failed=true;
+    devWatch.failMsg="設定を読み込めませんでした。";render();});
+}
+
+/**
+ * 監視設定を編集中か。★ 10秒ポーリングの render() でフォーカスとキャレットが飛ぶのを防ぐ。
+ *   既存の mileageBlocksRerender / monthlyDaysEditing と同じ作法。
+ *   値そのものは devWatch.draft が保持するが、入力中に要素が作り直されると入力が中断される。
+ */
+function devWatchEditing(){
+  try{
+    var a=document.activeElement;
+    if(a&&a.classList&&(a.classList.contains("dw-lat")||a.classList.contains("dw-lng")
+      ||a.classList.contains("dw-rad")))return true;
+  }catch(e){}
+  // ★ devWatch.saving を含めてはならない。保存の通信が settle しない状況で、
+  //   管理画面全体の10秒ポーリング再描画が止まってしまう。
+  //   保存中の表示は devWatch.saving から導出しているので、再描画されても壊れない。
+  return false;
+}
+
+/** 入力中の値（再描画をまたいで保持する）。 */
+function devWatchDraft(key){
+  if(!devWatch.draft[key]){
+    var f=devWatch.facs[key]||null;
+    devWatch.draft[key]={
+      en:!!(f&&f.enabled),
+      lat:(f&&f.lat!=null)?String(f.lat):"",
+      lng:(f&&f.lng!=null)?String(f.lng):"",
+      rad:(f&&f.radiusM!=null)?String(f.radiusM):String(devWatch.settings.defaultRadiusM||150)
+    };
+  }
+  return devWatch.draft[key];
+}
+
+function devWatchStamp(ms){
+  var n=Number(ms)||0;
+  if(!n)return "—";
+  var d=new Date(n);
+  var p=function(v){return (v<10?"0":"")+v;};
+  return (d.getMonth()+1)+"/"+d.getDate()+" "+p(d.getHours())+":"+p(d.getMinutes());
+}
+
+function devWatchStatusLabel(key){
+  if(typeof demoMode!=="undefined"&&demoMode)return {t:"デモでは非表示",c:"#8496a7"};
+  if(devWatch.failed)return {t:"読込失敗",c:"#b91c1c"};
+  if(!devWatch.booted)return {t:"読込中…",c:"#8496a7"};
+  var f=devWatch.facs[key];
+  if(!f)return {t:"未設定",c:"#8496a7"};
+  if(!f.enabled)return {t:"OFF",c:"#8496a7"};
+  // ★ サーバの facilityReady() と同じ条件を鏡写する。基準位置や半径が欠けていると
+  //   サーバは一切判定しないため、「判定待ち（待てば直る）」に見せてはならない。
+  if(f.lat==null||f.lng==null||!(Number(f.radiusM)>0))return {t:"監視ON（基準位置が未設定）",c:"#b91c1c"};
+  var ds=(devWatch.devs[key]||[]).filter(function(d){return !d.revoked;});
+  if(!ds.length)return {t:"監視ON（端末未登録）",c:"#b45309"};
+  var out=ds.filter(function(d){return d.state==="outside";}).length;
+  if(out)return {t:"範囲外",c:"#b91c1c"};
+  var staleMs0=(devWatch.settings.staleSec||86400)*1000;
+  var stale=ds.filter(function(d){
+    return d.lastSeenAt&&(Date.now()-d.lastSeenAt)>staleMs0;
+  }).length;
+  if(stale)return {t:"受信途絶",c:"#b91c1c"};
+  // ★ 「報告は届くが位置を判定できていない」端末を正常として出してはならない。
+  //   出すと、検知が死んでいるのに管理画面が緑（監視中）のままになる。
+  var unj=ds.filter(function(d){return devWatchUnjudged(d,staleMs0);}).length;
+  if(unj)return {t:"位置を判定できていません",c:"#b91c1c"};
+  // ★ 権限の異常（赤）は「判定待ち」「確認中」（琥珀）より先に出す。
+  //   後ろへ置くと、登録直後に「常に許可」を取れていない端末が
+  //   「監視ON（判定待ち）＝待てば直る」に見えて、原因の提示が最大24時間遅れる。
+  var lost=ds.filter(function(d){return d.permState==="lost"||!!d.permDetail;}).length;
+  if(lost)return {t:"権限に問題あり",c:"#b91c1c"};
+  var pend=ds.filter(function(d){return d.state==="pending"||d.pendingSince;}).length;
+  if(pend)return {t:"範囲外を確認中",c:"#b45309"};
+  // ★ 1度も位置を判定していない端末があるなら緑（監視中）にしてはならない。
+  //   登録直後の24時間は unjudged のしきい値に達しないため、ここが無いと
+  //   「常に許可」を取れていない端末が設置直後の1日だけ正常に見える。
+  // ★ 「1度も判定していない」だけでなく「判定をやり直す状態（unknown）」も緑にしない。
+  //   基準位置・半径・ON/OFF を保存すると、サーバが該当端末を unknown へ戻す
+  //   （古い観測で通知しないため）。このとき lastJudgedAt は残るので、
+  //   lastJudgedAt だけを見ていると「判定していないのに監視中（緑）」になる。
+  var never=ds.filter(function(d){
+    return !(Number(d.lastJudgedAt)>0)||!d.state||d.state==="unknown";
+  }).length;
+  if(never)return {t:"監視ON（判定待ち）",c:"#b45309"};
+  return {t:"監視中",c:"#166534"};
+}
+
+/**
+ * 「報告は届くが位置を判定できていない」端末か。
+ * ★ 判定が成立していない状態は、持ち出しを検知できない状態そのものである。
+ *   lastSeenAt（受信）だけを見ていると、位置を送らない端末が永久に正常扱いになる。
+ */
+function devWatchUnjudged(d,staleMs){
+  if(!d)return false;
+  var base=Number(d.lastJudgedAt)||0;
+  if(!base){
+    // 1度も判定できていない端末は、登録からの経過で見る（createdAt は ISO 文字列）。
+    var t=Date.parse(d.createdAt||"");
+    base=isFinite(t)?t:(Number(d.lastSeenAt)||0);
+  }
+  if(!base)return false;
+  return (Date.now()-base)>staleMs;
+}
+
+var DW_IN="font-size:12px;padding:6px 8px;border:1px solid #adb5bd;border-radius:2px;font-family:inherit;box-sizing:border-box;";
+var DW_BTN="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:5px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;";
+
+/** 施設1件ぶんの監視UI。既存の拠点行の中へ差し込む。 */
+function devWatchFacilityHtml(name){
+  var key=devWatchNorm(name);
+  var st=devWatchStatusLabel(key);
+  var open=!!devWatch.open[key];
+  var h='<div style="margin-top:8px;border-top:1px dashed #e5e7eb;padding-top:8px;">'
+    +'<button class="btn-dw-toggle" data-key="'+esc(key)+'" style="background:none;border:none;padding:0;'
+    +'font-size:12px;font-weight:700;color:#475569;cursor:pointer;font-family:inherit;'
+    +'text-align:left;white-space:normal;">'
+    +(open?"▲":"▼")+' 端末持ち出し監視：<span style="color:'+st.c+';">'+esc(st.t)+'</span></button>';
+  if(!open)return h+'</div>';
+
+  if(typeof demoMode!=="undefined"&&demoMode){
+    return h+'<div style="font-size:12px;color:#8496a7;margin-top:6px;">管理者デモでは監視設定を表示しません。</div></div>';
+  }
+  if(devWatch.failed){
+    // ★ 自動再試行は回数で止める（全描画ループを作らない）。行き止まりにしないため
+    //   手動の「再取得」を必ず出す。
+    return h+'<div style="font-size:12px;color:#b91c1c;margin-top:6px;">'+esc(devWatch.failMsg)+'</div>'
+      +'<button class="btn-dw-retry" style="'+DW_BTN+'margin-top:6px;">再取得</button></div>';
+  }
+  if(!devWatch.booted){
+    return h+'<div style="font-size:12px;color:#8496a7;margin-top:6px;">読み込み中…</div></div>';
+  }
+
+  var dr=devWatchDraft(key);
+  var f=devWatch.facs[key]||null;
+  // ★ 施設名の正規化（NFKC＋空白除去）で同じキーへ寄る施設が複数あると、
+  //   同じ設定が2行に出て、片方の保存が他方を上書きする。黙って壊さず警告する。
+  if(devWatch.dupes[key]&&devWatch.dupes[key].length>1){
+    h+='<div style="margin-top:6px;padding:8px;background:#fef2f2;border:1px solid #fecaca;'
+      +'border-radius:6px;font-size:11px;color:#b91c1c;line-height:1.6;">'
+      +'⚠ 次の拠点名は監視設定の上で同じ施設として扱われます（空白の有無だけの違い）。<br>'
+      +esc(devWatch.dupes[key].join(" / "))+'<br>'
+      +'どちらか一方の拠点名を変更するか、不要な拠点を削除してください。</div>';
+  }
+  var ds=(devWatch.devs[key]||[]).filter(function(d){return !d.revoked;});
+  h+='<div style="margin-top:8px;">'
+    +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px;font-weight:600;color:#475569;">'
+    +'<input type="checkbox" class="dw-en" data-key="'+esc(key)+'" style="width:15px;height:15px;cursor:pointer;"'
+    +(dr.en?" checked":"")+'> この施設の端末持ち出しを監視する</label>'
+    +'<div style="font-size:11px;color:#8496a7;margin:6px 0 2px;">基準位置（施設の緯度・経度）</div>'
+    +'<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">'
+    +'<input class="dw-lat" data-key="'+esc(key)+'" type="text" inputmode="decimal" placeholder="緯度 例 34.444210" value="'+esc(dr.lat)+'" style="'+DW_IN+'width:150px;">'
+    +'<input class="dw-lng" data-key="'+esc(key)+'" type="text" inputmode="decimal" placeholder="経度 例 135.370120" value="'+esc(dr.lng)+'" style="'+DW_IN+'width:150px;">'
+    +'<button class="btn-dw-here" data-key="'+esc(key)+'" style="'+DW_BTN+'">この端末の現在地を入れる</button>'
+    +'</div>'
+    +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:8px;font-size:12px;color:#475569;">'
+    +'許容半径 <input class="dw-rad" data-key="'+esc(key)+'" type="text" inputmode="numeric" value="'+esc(dr.rad)+'" style="'+DW_IN+'width:70px;"> m'
+    +'<span style="font-size:11px;color:#8496a7;">（50〜2000。初期値150）</span>'
+    +'</div>'
+    +'<div style="font-size:11px;color:#8496a7;margin-top:6px;">'
+    +'範囲外が'+Math.round((devWatch.settings.dwellSec||180)/60)+'分続いたときに管理者へLINE通知します。'
+    +'同じ持ち出し中は再通知しません（範囲内へ戻ると再び監視します）。</div>'
+    +'<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;">'
+    +'<button class="btn-dw-save" data-key="'+esc(key)+'" data-name="'+esc(name)+'"'
+    +(devWatch.saving===key?' disabled':'')
+    +' style="background:'+(devWatch.saving===key?"#94a3b8":"#1e40af")+';color:#fff;border:none;padding:7px 16px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">'
+    +(devWatch.saving===key?"保存中…":"保存")+'</button>'
+    +'<button class="btn-dw-code" data-key="'+esc(key)+'" data-name="'+esc(name)+'" style="'+DW_BTN+'">端末の登録コードを発行</button>'
+    +'</div>';
+
+  h+='<div style="margin-top:10px;font-size:11px;color:#8496a7;">登録端末</div>';
+  if(!ds.length){
+    h+='<div style="font-size:12px;color:#8496a7;">未登録。施設のスマホに監視アプリを入れ、上の「登録コードを発行」で出したコードを入力してください。</div>';
+  } else {
+    ds.forEach(function(d){
+      var staleMs=(devWatch.settings.staleSec||86400)*1000;
+      var isStale=!!(d.lastSeenAt&&(Date.now()-d.lastSeenAt)>staleMs);
+      var isUnj=devWatchUnjudged(d,staleMs);
+      var stTxt=d.state==="outside"?'<span style="color:#b91c1c;font-weight:700;">範囲外</span>'
+        :(d.state==="pending"||d.pendingSince)?'<span style="color:#b45309;font-weight:700;">範囲外を確認中</span>'
+        :(d.state==="inside"?'<span style="color:#166534;">範囲内</span>':'<span style="color:#8496a7;">未判定</span>');
+      // ★ 1端末＝2段に固定する。1行へ詰めると 320px では要素が3〜5行へ散り、
+      //   「（できていません）」が次の端末の行に属するように読める（壊れている監視を正常と読む）。
+      //   既存の有給取得履歴と同じ「1件＝1〜2行の縦型」に揃える。
+      h+='<div style="padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:12px;color:#0f172a;">'
+        +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+        // ★ label / platform は端末アプリの申告値（最大30/20文字）。折返しを許さないと
+        //   区切りの無い長い文字列で管理画面に横スクロールが出る。
+        +'<span style="font-weight:700;word-break:break-all;min-width:0;">'+esc(d.label||"施設端末")+'</span>'
+        +'<span style="color:#8496a7;word-break:break-all;min-width:0;">'+esc(d.platform||"")+'</span>'
+        +stTxt
+        +'<button class="btn-dw-revoke" data-id="'+esc(d.deviceId)+'" style="background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:4px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;margin-left:auto;">解除</button>'
+        +'</div>'
+        +'<div style="margin-top:2px;font-size:11px;line-height:1.6;">'
+        +'<span style="color:'+(isStale?"#b91c1c":"#8496a7")+';">最終受信 '+esc(devWatchStamp(d.lastSeenAt))+(isStale?"（途絶）":"")+'</span>'
+        +'<span style="color:#cbd5e1;"> / </span>'
+        +'<span style="color:'+(isUnj?"#b91c1c":"#8496a7")+';">位置判定 '+esc(devWatchStamp(d.lastJudgedAt))
+        +(d.lastDistM?'（'+esc(String(d.lastDistM))+'m）':'')+(isUnj?"（できていません）":"")+'</span>'
+        +((d.permState==="lost"||d.permDetail)?'<br><span style="color:#b91c1c;font-weight:700;">位置情報の権限に問題あり</span>':'')
+        +'</div></div>';
+    });
+  }
+  return h+'</div></div>';
+}
+
+/**
+ * 施設マスタに対応が無くなった監視設定。
+ * ★ これを出さないと、改名・削除で孤立した設定は画面のどこにも現れず、
+ *   監視をOFFにも端末の解除にもできないまま通知が出続ける（管理導線の喪失）。
+ */
+function devWatchOrphanHtml(){
+  if(typeof demoMode!=="undefined"&&demoMode)return '';
+  if(!devWatch.booted||!devWatch.orphans.length)return '';
+  var rows=devWatch.orphans.map(function(f){
+    return '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:5px 0;border-bottom:1px solid #f3f4f6;">'
+      +'<span style="font-weight:700;word-break:break-all;min-width:0;">'+esc(f.name||"（名称なし）")+'</span>'
+      +'<span style="font-size:11px;color:#8496a7;">'+(f.enabled?"監視ON":"監視OFF")+'</span>'
+      +'<button class="btn-dw-orphan" data-fkey="'+esc(f.fkey||"")+'" data-name="'+esc(f.name||"")+'"'
+      +' style="margin-left:auto;background:#fff1f2;color:#e11d48;border:1px solid #fecdd3;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;font-family:inherit;">監視を解除</button>'
+      +'</div>';
+  }).join("");
+  return '<div style="margin-top:14px;padding:10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;">'
+    +'<div style="font-size:12px;font-weight:700;color:#b45309;margin-bottom:4px;">⚠ 拠点マスタに無い端末持ち出し監視の設定</div>'
+    +'<div style="font-size:11px;color:#92400e;line-height:1.6;margin-bottom:6px;">'
+    +'拠点名の変更や削除で対応が切れた設定です。このままだと、存在しない施設名で通知が出続けます。'
+    +'解除すると監視を止め、その施設の登録端末も無効化します。</div>'
+    +rows+'</div>';
+}
+
+/** 拠点トークン管理の描画後に呼ぶ（render のたびに張り直す）。 */
+function devWatchWire(){
+  document.querySelectorAll(".btn-dw-toggle").forEach(function(b){
+    b.onclick=function(){
+      var k=b.dataset.key;
+      devWatch.open[k]=!devWatch.open[k];
+      if(devWatch.open[k])devWatchEnsure();
+      render();
+    };
+  });
+  document.querySelectorAll(".btn-dw-orphan").forEach(function(b){
+    b.onclick=function(){
+      var fk=b.dataset.fkey,nm=b.dataset.name||"この施設";
+      showConfirm(nm+" の端末持ち出し監視を解除しますか？"+"\n\n"
+        +"監視を止め、この施設に登録されている端末を無効化します。",function(){
+        devWatchApi("deleteFacility",{fkey:fk}).then(function(res){
+          if(!res.ok||!res.data||!res.data.ok){showAlert(devWatchErrText(res));return;}
+          devWatchReload();
+        }).catch(function(){showAlert("解除できませんでした。");});
+      });
+    };
+  });
+  document.querySelectorAll(".btn-dw-retry").forEach(function(b){
+    b.onclick=function(){devWatch.failed=false;devWatch.failMsg="";devWatchReload();render();};
+  });
+  // 入力は下書きへ保持する（管理画面は10秒ごとに再描画されるため、DOMの値だけでは消える）
+  var bind=function(sel,field){
+    document.querySelectorAll(sel).forEach(function(el){
+      el.oninput=function(){devWatchDraft(el.dataset.key)[field]=el.value;};
+    });
+  };
+  bind(".dw-lat","lat");bind(".dw-lng","lng");bind(".dw-rad","rad");
+  document.querySelectorAll(".dw-en").forEach(function(el){
+    el.onchange=function(){devWatchDraft(el.dataset.key).en=!!el.checked;};
+  });
+  document.querySelectorAll(".btn-dw-here").forEach(function(b){
+    b.onclick=function(){
+      if(!navigator.geolocation){showAlert("この端末では現在地を取得できません。緯度・経度を手入力してください。");return;}
+      var k=b.dataset.key,orig=b.textContent;
+      b.textContent="取得中…";b.disabled=true;
+      navigator.geolocation.getCurrentPosition(function(pos){
+        var dr=devWatchDraft(k);
+        dr.lat=String(Math.round(pos.coords.latitude*1e6)/1e6);
+        dr.lng=String(Math.round(pos.coords.longitude*1e6)/1e6);
+        b.disabled=false;b.textContent=orig;
+        // ★ 誤差が大きい位置を基準位置にしない（そのまま保存できるが、必ず知らせる）
+        var acc=Math.round(Number(pos.coords.accuracy)||0);
+        render();
+        if(acc>100)showAlert("現在地を入れました（誤差 約"+acc+"m）。\n\n誤差が大きいため、屋外で取り直すか、地図から緯度・経度を手入力してください。");
+      },function(){
+        b.disabled=false;b.textContent=orig;
+        showAlert("現在地を取得できませんでした。\n位置情報の許可を確認するか、緯度・経度を手入力してください。");
+      },{enableHighAccuracy:true,timeout:10000,maximumAge:0});
+    };
+  });
+  document.querySelectorAll(".btn-dw-save").forEach(function(b){
+    b.onclick=function(){
+      if(devWatch.busy)return;
+      var k=b.dataset.key,name=b.dataset.name,dr=devWatchDraft(k);
+      var lat=dr.lat.trim(),lng=dr.lng.trim(),rad=dr.rad.trim();
+      if(dr.en&&(!lat||!lng)){showAlert("監視を有効にするには基準位置（緯度・経度）が必要です。\n\n「この端末の現在地を入れる」を施設内で押すか、地図から手入力してください。");return;}
+      // ★ 数値でない入力をそのまま送ってはならない。Number("abc") は NaN で、
+      //   JSON では null になるため「未設定」として黙って既存値へ落ちる。
+      var nLat=lat===""?null:Number(lat),nLng=lng===""?null:Number(lng),nRad=rad===""?null:Number(rad);
+      if((lat!==""&&!isFinite(nLat))||(lng!==""&&!isFinite(nLng))){
+        showAlert("緯度・経度は数値で入力してください。"+"\n\n"
+          +"例）緯度 34.444210 / 経度 135.370120");return;
+      }
+      if(rad!==""&&!isFinite(nRad)){showAlert("許容半径は数値（50〜2000）で入力してください。");return;}
+      // ★ 保存中の表示は DOM の属性ではなく状態で持つ。10秒ポーリングの再描画で
+      //   ボタンが「保存」に戻ると、busy 判定に弾かれて無反応になる。
+      devWatch.busy=true;devWatch.saving=k;render();
+      devWatchApi("setFacility",{
+        name:name,enabled:!!dr.en,lat:nLat,lng:nLng,radiusM:nRad
+      }).then(function(res){
+        devWatch.busy=false;devWatch.saving="";
+        if(!res.ok||!res.data||!res.data.ok){showAlert(devWatchErrText(res));render();return;}
+        devWatch.facs[k]=res.data.facility;
+        delete devWatch.draft[k];   // 保存できた値を正本として読み直す
+        // ★ サーバは同じ操作で該当端末の pendingSince/state を戻す。取り直さないと
+        //   画面だけ「範囲外」「範囲外を確認中」を出し続ける。
+        devWatchReload();
+        render();
+      }).catch(function(){devWatch.busy=false;devWatch.saving="";showAlert("保存できませんでした。");render();});
+    };
+  });
+  document.querySelectorAll(".btn-dw-code").forEach(function(b){
+    b.onclick=function(){
+      if(devWatch.busy)return;
+      var name=b.dataset.name,k=b.dataset.key;
+      var f=devWatch.facs[k]||null;
+      var hasBase=!!(f&&f.lat!=null&&f.lng!=null);
+      showModal({
+        title:"端末の登録コードを発行",
+        message:name+" の施設端末を登録するコードを発行します。\n\n"
+          +(hasBase?"基準位置は登録済みのものを使います。\n":"基準位置が未登録です。登録する端末の現在地を基準位置にします（施設内で登録してください）。\n")
+          +"\nコードの有効期限は24時間です。",
+        okLabel:"発行する",
+        onOK:function(){
+          devWatch.busy=true;
+          devWatchApi("issueEnroll",{name:name,setBaseFromDevice:!hasBase}).then(function(res){
+            devWatch.busy=false;
+            if(!res.ok||!res.data||!res.data.ok){showAlert(devWatchErrText(res));return;}
+            showAlert("登録コード： "+res.data.code+"\n\n"
+              +"施設のスマホで監視アプリを開き、このコードを入力してください。\n"
+              +"有効期限：24時間（1台ぶん）\n"
+              +(res.data.setBaseFromDevice?"登録した端末の現在地が基準位置になります。\n":"")
+              +"\n※このコードは端末の登録にだけ使います。打刻URLとは別です。"
+              +"\n※この画面を閉じるとコードは再表示できません。忘れた場合は発行し直してください。");
+            devWatchReload();
+          }).catch(function(){devWatch.busy=false;showAlert("発行できませんでした。");});
+        },
+        onCancel:function(){}
+      });
+    };
+  });
+  document.querySelectorAll(".btn-dw-revoke").forEach(function(b){
+    b.onclick=function(){
+      var id=b.dataset.id;
+      showConfirm("この端末の登録を解除しますか？\n\n解除すると、この端末からの位置情報は受け付けなくなります（監視は止まります）。",function(){
+        devWatchApi("revokeDevice",{deviceId:id}).then(function(res){
+          if(!res.ok||!res.data||!res.data.ok){showAlert(devWatchErrText(res));return;}
+          devWatchReload();
+        }).catch(function(){showAlert("解除できませんでした。");});
+      });
+    };
+  });
+}
+
+/**
+ * 拠点マスタから施設を削除したときに、その施設の監視も止める。
+ * ★ 設定だけ残すと、存在しない施設の名前で通知が出続ける。
+ *   失敗しても拠点の削除自体は成立させる（黙って成功扱いにはしない）。
+ */
+function devWatchOnFacilityDeleted(name){
+  var key=devWatchNorm(name);
+  if(!mileageAutoSafeKey(key))return;
+  if(!devWatch.booted){
+    // ★ 黙って終わってはならない。設定を読めていない状態では監視が残っているか判断できず、
+    //   残っていると存在しない施設名で通知が出続ける。
+    showAlert("拠点は削除しました。\n\n端末持ち出し監視の設定を読み込めていないため、"
+      +"この施設の監視が残っているかどうかを確認できません。\n"
+      +"マスター管理の「端末持ち出し監視」を開いて、残っていれば「監視を解除」してください。");
+    return;
+  }
+  if(!devWatch.facs[key])return;            // 監視設定が無い施設は何もしない
+  devWatchApi("deleteFacility",{name:name}).then(function(res){
+    if(!res.ok||!res.data||!res.data.ok){
+      showAlert("拠点は削除しましたが、端末持ち出し監視の設定を解除できませんでした。\n\n"
+        +"マスター管理の「端末持ち出し監視」から、監視をOFFにしてください。");
+      return;
+    }
+    delete devWatch.facs[key];delete devWatch.devs[key];delete devWatch.draft[key];
+    render();
+  }).catch(function(){
+    showAlert("拠点は削除しましたが、端末持ち出し監視の設定を解除できませんでした。");
+  });
+}
+// ===== DEVWATCH-END =====
+
 
 // まず即座にレンダリング（Firebaseを待たない）
 render();

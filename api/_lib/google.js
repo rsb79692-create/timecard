@@ -199,7 +199,10 @@ async function dbRequest(path, method, payload) {
   // ★ "mileage"（移動距離申請）も同じ理由でルート直下。/honomi 配下へ置くと
   //   「auth != null」のカスケードで匿名クライアントから金額データを書き換えられる。
   //   利用ON/OFF・区間距離・km単価・承認状態はすべてサーバ経由でしか触らせない。
-  const base = /^(authz|ratelimit|mileage)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
+  // ★ "devmon"（施設端末の持ち出し監視）も同じ理由でルート直下。/honomi 配下へ置くと
+  //   打刻のために開けてある経路から、監視対象の端末が自分で
+  //   「監視OFF」「基準位置＝自宅」「範囲内」と書けてしまい、検知そのものを無効化できる。
+  const base = /^(authz|ratelimit|mileage|devmon)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
   const url = base + "/" + p + ".json";
   const bodyStr = payload === undefined ? null : JSON.stringify(payload);
   const headers = { Authorization: "Bearer " + token };
@@ -244,7 +247,7 @@ const ROOT_PATH_KEY = /^[A-Za-z0-9_-]+(\/[A-Za-z0-9_-]+)+$/;
  *   まったく別の場所（Rules 未定義領域）へ静かに書かれる。許可リストで防ぐ。
  */
 function allowedRootTops() {
-  return ["authz", "ratelimit", "mileage", dataPathPrefix()];
+  return ["authz", "ratelimit", "mileage", "devmon", dataPathPrefix()];
 }
 
 /**

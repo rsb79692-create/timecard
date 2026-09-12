@@ -580,7 +580,11 @@ async function run() {
       ["端末保存の成功を待ってから画面を更新する", /_saved=await punchOutboxCommit\(nr\);/],
       ["保存できなければ records へ積まない（打刻失敗にする）", /if\(!_saved\)\{[\s\S]{0,400}?return;\s*\n\s*\}/],
       ["保存成功後に records へ積む", /records\.push\(nr\);\s*\n\s*_lsSet\("tc5_records"/],
-      ["送信は画面更新のあとに非同期で開始する", /render\(\);\s*\n\s*\/\/ ③[\s\S]{0,120}?punchOutboxFlush\("punch"\);/],
+      // ★ 固定したいのは「画面更新のあとに送信を始める」順序であって、③という番号ではない。
+      //   2026-09-12 に顔撮影（faceCamAfterPunch）が render() と送信のあいだへ入り、
+      //   送信の番号が ④ になった。撮影が送信をブロックしないことは
+      //   scripts/test-face-photo.js が別に固定している。
+      ["送信は画面更新のあとに非同期で開始する", /render\(\);\s*\n[\s\S]{0,400}?punchOutboxFlush\("punch"\);/],
       ["端末保存中の連打を弾く", /if\(_punchSaving\)return;/],
       ["キューを使わない画面では従来の saveRecord へ委譲する", /\}\s*else\s*\{\s*\n\s*saveRecord\(nr\);\s*\n\s*\}/],
       ["起動時にキューを読み戻す", /var _outboxReady=punchOutboxLoad\(\);/],

@@ -141,8 +141,12 @@ ok("_lib/mileage.js の isValidAdmin が S.adminSessionValid を使う",
 
 console.log("\n[7] データは /honomi の外（ルール未定義＝既定拒否）へ置く");
 const googleSrc = fs.readFileSync(path.join(__dirname, "..", "api", "_lib", "google.js"), "utf8");
+// ★ 固定したいのは「mileage がルート直下へルーティングされること」であって、
+//   alternation の並びそのものではない（他の機能がルート直下を使うたびに
+//   ここが FAIL すると、テストを直すために本体の正しい変更を止めることになる）。
+//   2026-09-12 に devmon（施設端末の持ち出し監視）が加わった。
 ok("dbRequest のルート直下ルーティングに mileage が含まれる",
-  /\^\(authz\|ratelimit\|mileage\)/.test(googleSrc));
+  /\^\([a-z|]*\bmileage\b[a-z|]*\)/.test(googleSrc));
 ok("dbPatchRoot の許可トップに mileage が含まれる",
   /"authz",\s*"ratelimit",\s*"mileage"/.test(googleSrc));
 eq("データルートは mileage", M.ROOT, "mileage");

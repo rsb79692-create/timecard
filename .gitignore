@@ -33,4 +33,35 @@ service-account*.json
 # --- 依存パッケージ（Vercel に package.json を導入する場合に備える）---
 /node_modules/
 
+# --- 施設端末監視アプリ（Expo）の生成物。ソースだけを追跡する ---
+devicewatch/node_modules/
+devicewatch/.expo/
+devicewatch/.expo-shared/
+devicewatch/android/
+devicewatch/ios/
+
+# --- モバイルの署名資格情報（★ commit したら公開される）---
+# ⚠ このリポジトリは GitHub Pages がリポジトリ直下を丸ごと配信する。
+#   署名鍵を commit した瞬間に、誰でも HTTPS でダウンロードできる状態になり、
+#   偽アプリを正規署名で配布できてしまう。.gitignore が唯一の予防線である。
+# ⚠ 既に追跡されているファイルには効かない。追加後に git ls-files で 0 件を確認すること。
+*.keystore
+*.jks
+*.p8
+*.pfx
+*.der
+*.mobileprovision
+*.provisionprofile
+*.cer
+*.certSigningRequest
+keystore.properties
+credentials.json
+google-services.json
+GoogleService-Info.plist
+eas.json
+# 配布物そのもの（鍵は含まないが、commit すると Pages から誰でも取得できる）
+*.apk
+*.aab
+*.ipa
+
 .vercel

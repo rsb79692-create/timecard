@@ -70,6 +70,9 @@ function makeCtx(opts) {
     mileage: opts.mileage || { adminYm: "", myMonth: "" },
     showPaidLeaveForm: false, _paidLeaveRenderGuard: false, monthlyDaysEditing: false,
     mileageBlocksRerender: () => false,
+    // 2026-09-12: 10秒ポーリングの再描画条件へ監視UIのガードが加わったため、
+    // 抽出したブロックが参照する。抽出テストの他のスタッブと同じ扱い。
+    devWatchEditing: () => false,
     punchOutboxMergeInto: () => {},
     render: () => { sandbox.__renders = (sandbox.__renders || 0) + 1; },
     document: { querySelector: () => null },
