@@ -1518,6 +1518,89 @@ async function devReportHandlerSection() {
     }
   }
 
+  // --- ★ 本文が JSON でないときは 500 ではなく 400 を返す（2026-09-13 の障害）---
+  //   Vercel の body パーサは Content-Type: application/json で解析に失敗すると
+  //   req.body 参照時に例外を投げる。これを汎用 catch へ落とすと 500 server_error になり、
+  //   「クライアントの本文が壊れている」ことが運用者から見えない（外部スケジューラが毎分
+  //   500 になっていたのに、応答からは原因が分からなかった）。
+  {
+    reset();
+    // Vercel の挙動を再現する：本文の解析に失敗すると getter が throw する
+    function throwingBody(rawText) {
+      const res = { code: 0, body: null, headers: {} };
+      res.setHeader = function (k, v) { res.headers[String(k).toLowerCase()] = v; };
+      res.status = function (c) { res.code = c; return res; };
+      res.json = function (b) { res.body = b; return res; };
+      res.end = function () { return res; };
+      const req = {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-real-ip": "203.0.113.9",
+                   "content-length": String(Buffer.byteLength(rawText)) },
+        rawBody: Buffer.from(rawText, "utf8"),
+      };
+      Object.defineProperty(req, "body", {
+        get: function () { throw new Error("Invalid JSON"); },
+      });
+      return { req: req, res: res };
+    }
+    async function callRaw(rawText) {
+      const c = throwingBody(rawText);
+      await handler(c.req, c.res);
+      return c.res;
+    }
+
+    const KEYLIKE = "SUPERSECRETKEYVALUE0123456789abcdefghij";
+    let rr = await callRaw('action=sweep&key=' + KEYLIKE);
+    check("★ form 形式の本文は 500 ではなく 400", rr.code === 400 && rr.body.error === "bad_json");
+    check("原因が分かる指紋を返す（form と判別できる）",
+      /head=word/.test(String(rr.body.hint)) && / form=1/.test(String(rr.body.hint)));
+    check("★★ 指紋に鍵の値を含めない",
+      JSON.stringify(rr.body).indexOf(KEYLIKE) < 0
+      && JSON.stringify(rr.body).indexOf("SUPERSECRET") < 0
+      && JSON.stringify(rr.body).indexOf("sweep") < 0);
+    check("壊れた本文では RTDB を1往復も叩かない（レート制限も数えない）",
+      GCALLS.get.length === 0 && GCALLS.patch.length === 0 && GCALLS.put.length === 0);
+    check("壊れた本文では LINE を送らない", GCALLS.http.length === 0);
+
+    rr = await callRaw('%7B%22action%22%3A%22sweep%22%7D');
+    check("URLエンコードされた本文も 400", rr.code === 400 && /head=percent/.test(String(rr.body.hint)));
+    rr = await callRaw('{"action":"sweep",}');
+    check("末尾カンマも 400", rr.code === 400 && /head=brace/.test(String(rr.body.hint)));
+
+    // ★ BOM と前後の空白だけは直して受け付ける（意図が一意で、形式を増やさない）
+    reset();
+    process.env.DEVICE_SWEEP_KEY = KEY;
+    rr = await callRaw('﻿{"action":"sweep","key":"' + KEY + '"}');
+    check("★ BOM 付きの正しい JSON は受け付ける", rr.code === 200 && rr.body.ok === true);
+    rr = await callRaw('  \n{"action":"sweep","key":"' + KEY + '"}\n  ');
+    check("★ 前後の空白・改行付きの正しい JSON は受け付ける", rr.code === 200 && rr.body.ok === true);
+    // ★ form 形式を黙って受け付けてはならない（Content-Type の検査が意味を失う）
+    rr = await callRaw('action=sweep&key=' + KEY);
+    check("正しい鍵でも form 形式は受け付けない", rr.code === 400);
+
+    // 生の本文が取れない環境でも 500 にしない（Content-Length で長さだけ補う）
+    reset();
+    const c2 = throwingBody("");
+    c2.req.rawBody = null;
+    c2.req.headers["content-length"] = "37";
+    await handler(c2.req, c2.res);
+    check("生の本文が取れなくても 400（500 にしない）",
+      c2.res.code === 400 && /len=~32-47 head=unread/.test(String(c2.res.body.hint)));
+
+    // ★ BOM の回復は req.rawBody に依存する。Vercel がこれを提供しない環境では
+    //   BOM 付きの正しい JSON も受け付けられないが、**500 にはならない**こと。
+    //   ここを固定しておくと、どちらの環境でも契約（不正な本文は400）が崩れない。
+    reset();
+    process.env.DEVICE_SWEEP_KEY = KEY;
+    const c3 = throwingBody('﻿{"action":"sweep","key":"' + KEY + '"}');
+    c3.req.rawBody = null;
+    await handler(c3.req, c3.res);
+    check("生の本文が取れない環境では BOM 付きも 400（ただし 500 にはしない）",
+      c3.res.code === 400 && c3.res.body.error === "bad_json");
+    check("その場合も RTDB を1往復も叩かない",
+      GCALLS.get.length === 0 && GCALLS.patch.length === 0);
+  }
+
   // --- 他 action への影響（鍵で端末認証を迂回できない）---
   reset();
   r = await call({ action: "nope", key: KEY });

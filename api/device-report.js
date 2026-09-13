@@ -96,6 +96,109 @@ function guardApp(req, res) {
   return false;
 }
 
+/**
+ * 本文の「形」だけを表す指紋。
+ *
+ * ★★ **内容を絶対に含めてはならない。** 本文には共有鍵（DEVICE_SWEEP_KEY）と端末トークンが
+ *   入るため、先頭数文字でも出せば資格情報が漏れる。ここが返すのは
+ *   「バイト長」と「先頭1文字の分類」と「区切り文字の有無」だけである。
+ *   バイト長は Content-Length として経路上どこでも見えている値なので、新たな露出にはならない。
+ */
+function bodyFingerprint(raw, req) {
+  const s = typeof raw === "string" ? raw : "";
+  let len = Buffer.byteLength(s);
+  if (!len) {
+    // 生の本文が取れない環境では Content-Length で長さだけ補う
+    const n = parseInt(String((req && req.headers && req.headers["content-length"]) || ""), 10);
+    if (n > 0) len = n;
+  }
+  // ★ 長さは16バイト単位へ丸める。正規の呼び出し元の本文が壊れた場合、正確な長さから
+  //   引き算で共有鍵の長さが求まる（本文の固定部分は既知のため）。Vercel の環境変数の値を
+  //   見られないロールにも長さだけが伝わるのを避ける。丸めても「form 形式か JSON か」の
+  //   切り分けには十分で、hint の目的（運用者の自己診断）は損なわない。
+  const lenText = len === 0 ? "0" : "~" + (Math.floor(len / 16) * 16) + "-" + (Math.floor(len / 16) * 16 + 15);
+  let head = "empty";
+  if (s) {
+    if (s.charCodeAt(0) === 0xfeff) head = "bom";
+    else {
+      const c = s.replace(/^[\s]+/, "").charAt(0);
+      if (c === "{") head = "brace";
+      else if (c === "[") head = "bracket";
+      else if (c === "%") head = "percent";
+      else if (c === '"' || c === "'") head = "quote";
+      else if (/[A-Za-z0-9_]/.test(c)) head = "word";
+      else head = "other";
+    }
+  } else if (len) {
+    head = "unread";
+  }
+  // 形式の見分けにだけ効く情報（値は出さない）
+  const form = head === "word" && s.indexOf("=") > 0 ? " form=1" : "";
+  return "len=" + lenText + " head=" + head + form;
+}
+
+/**
+ * 本文を安全に取り出す。
+ *
+ * ★★ Vercel の body パーサは `Content-Type: application/json` で解析に失敗すると
+ *   **`req.body` を参照した時点で例外を投げる**。これを汎用 catch へ落とすと
+ *   **500 `server_error`** になり、「クライアントの本文が壊れている」ことが
+ *   運用者からまったく見えなくなる（2026-09-13 に実際に起きた。外部スケジューラの本文が
+ *   JSON でなく、毎分 500 になっていたのに応答からは原因が分からなかった）。
+ *
+ * ★ 本文の不正は**クライアントエラー**である。400 で返し、かつ**原因が分かる指紋**を添える。
+ * ★ 直すのは BOM と前後の空白だけにする。form 形式や URL エンコードを黙って受け付けると、
+ *   入力形式を2つ持つことになり Content-Type の検査（415）が意味を失う。
+ * ★ I/O を伴わないので、レート制限より前に置いてよい（壊れた本文で RTDB を叩かせない）。
+ */
+function readJsonBody(req) {
+  let parsed, threw = false;
+  try { parsed = req.body; } catch (e) { threw = true; }
+
+  if (!threw) {
+    if (parsed === undefined || parsed === null) return { body: {} };       // 本文なし
+    // ★ Buffer は「解析されていない生のバイト列」である（JSON.parse の結果には成り得ない）。
+    //   実行環境が本文を解析せず渡してきた場合なので、ここで JSON として解析する。
+    //   これは入力形式を増やしていない（同じ JSON を未デコードで受け取っただけ）。
+    if (Buffer.isBuffer(parsed)) return parseRawJson(parsed.toString("utf8"), req, false);
+    if (typeof parsed === "object" && !Array.isArray(parsed)) return { body: parsed };
+    // ★ 文字列・配列・数値・真偽値は受け付けない。
+    //   とくに**文字列を JSON として解析し直してはならない**。解析が成功して文字列に
+    //   なったということは、クライアントが JSON の文字列リテラル（二重エンコード）を
+    //   送ったという意味であり、それを通すと「入力形式を2つ持たない」という
+    //   この関数の前提が崩れる（Buffer と違い、生テキストと区別できない）。
+    return { error: "bad_json", fp: bodyFingerprint(typeof parsed === "string" ? parsed : "", req) };
+  }
+
+  // ★ 解析に失敗した。生のバイト列が取れるなら BOM と前後の空白だけ落として解析し直す。
+  let raw = "";
+  try {
+    const rb = req.rawBody;
+    if (rb != null) raw = Buffer.isBuffer(rb) ? rb.toString("utf8") : String(rb);
+  } catch (e) { raw = ""; }
+  return parseRawJson(raw, req, true);
+}
+
+/**
+ * 生の本文テキストを JSON オブジェクトとして解析する。
+ * ★ 直すのは BOM と前後の空白だけ。それ以外の形式（form・URL エンコード）は直さない。
+ * ★ オブジェクト以外（配列・文字列・数値）は受け付けない。
+ */
+function parseRawJson(raw, req, emptyIsError) {
+  const s = typeof raw === "string" ? raw : "";
+  // ★ trim() は仕様上 U+FEFF（BOM）も WhiteSpace として除去するので、BOM 専用の置換は要らない。
+  //   不可視文字を正規表現へ直接埋めると、整形ツールで黙って壊れる（レビュー指摘）。
+  const t = s.trim();
+  // ★ 空のとき: 解析が失敗した経路（emptyIsError）では「本文はあったが読めなかった」なので
+  //   bad_json とする。本文なしとして通すと bad_action になり、原因を取り違える。
+  if (!t) return emptyIsError ? { error: "bad_json", fp: bodyFingerprint(s, req) } : { body: {} };
+  try {
+    const o = JSON.parse(t);
+    if (o && typeof o === "object" && !Array.isArray(o)) return { body: o };
+  } catch (e) { /* 下で 400 */ }
+  return { error: "bad_json", fp: bodyFingerprint(s, req) };
+}
+
 /** アプリへ返す設定。★ 他施設の情報・他端末の情報・トークンは返さない。 */
 function viewConfig(fac, settings) {
   return {
@@ -383,7 +486,16 @@ module.exports = async function handler(req, res) {
   const cid = H.correlationId();
 
   try {
-    const body = req.body || {};
+    // ★ 本文の不正は 500 ではなく 400 で返す。500 にすると「サーバが壊れている」と
+    //   読めてしまい、実際の原因（クライアントの本文が JSON でない）へ辿れない。
+    //   指紋には本文の内容を含めない（鍵と端末トークンが入るため）。
+    const rb = readJsonBody(req);
+    if (rb.error) {
+      console.error("[device-report]", cid, "bad_json " + rb.fp);
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(400).json({ error: "bad_json", hint: rb.fp });
+    }
+    const body = rb.body;
     const action = H.str(body.action, 32);
     // ★ 受け付ける action はこの3つだけ。追加するときは必ずレート制限の kind と上限も足す。
     const RATE = {

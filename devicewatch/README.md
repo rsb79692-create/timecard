@@ -152,8 +152,23 @@ URL・`action` 名・フィールド名・403/503 の意味はすべて公開さ
 - `200` ＋ 上記の JSON … 正常（`devices` は登録済み端末の台数）
 - `503 sweep_not_configured` … ①が未登録／32文字未満／再デプロイしていない
 - `403 forbidden` … 鍵が違う（★ 前後の空白と改行は無視されるので、それが原因ではない）
+- `400 bad_json` … **Body が JSON として読めていない。** 応答の `hint` で原因が分かる:
+
+  `head=` は**本文の先頭1文字の種類**です（内容は含まれません）。
+
+  | hint | 本文の先頭 | 直し方 |
+  |---|---|---|
+  | `head=word form=1` | 英数字で始まり `=` を含む → **form 形式**（`action=sweep&key=…`） | Body を JSON（`{…}`）で入れ直す。cron-job.org の「POST変数」形式ではなく**リクエスト本文**の欄へ JSON を入れる |
+  | `head=percent` | `%` → **URL エンコードされている** | 同上。エンコードせず素の JSON を入れる |
+  | `head=brace` | `{` → JSON のつもりだが壊れている | 引用符を半角の `"` にする（全角 `”` は不可）、末尾のカンマを消す |
+  | `head=quote` | `"` か `'` → 引用符で包まれている／閉じていない | 外側の引用符を外す。JSON は `{` で始める |
+  | `head=word`（`form=1` なし） | 英数字。JSON ではない | Body に JSON を入れる |
+  | `head=unread` | 長さはあるが読み取れない（BOM 付き・文字コード違いを含む） | 文字コードを **BOM なしの UTF-8** にする |
+
+  ★ `hint` に本文の内容（鍵）は含まれません。**先頭1文字の種類**と、16バイト単位へ丸めた長さだけです。
+  ★ 本文を送っていない場合は `bad_json` ではなく `400 bad_action` になります。
+- `400 bad_action` … Body の `action` が `"sweep"` でない（本文は JSON として読めている）
 - `415 unsupported_media_type` … `Content-Type` が `application/json` でない
-- `400 bad_action` … Body の `action` が `"sweep"` でない
 
 ## Android 実機での確認手順
 
