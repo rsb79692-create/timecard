@@ -7,6 +7,7 @@
 "use strict";
 
 const https = require("https");
+const crypto = require("crypto");
 
 // ===== Secrets バリデーション =====
 const REQUIRED_SECRETS = [
@@ -42,6 +43,39 @@ const DRY_RUN = (process.env.DRY_RUN || "").trim() === "true";
 // targetDate: 任意の日付 yyyy-mm-dd。空欄なら JST 今日。
 const TARGET_DATE_ENV = (process.env.TARGET_DATE || "").trim();
 const IS_DATE_OVERRIDE = /^\d{4}-\d{2}-\d{2}$/.test(TARGET_DATE_ENV);
+
+// selfTest=true のとき、二重通知防止の条件付き書き込みが本番 RTDB で機能するかだけを確かめる（LINE は送らない）
+const DEDUPE_SELFTEST = (process.env.DEDUPE_SELFTEST || "").trim() === "true";
+
+// ===== 二重通知防止の記録に使うサービスアカウント =====
+// ⚠ 通知記録（/morningNotify）は database.rules.json に未定義＝クライアントからは読み書きできない。
+//   匿名アカウントや一般スタッフが「送信済み」を先に書いて通知を止められないよう、そこへ置いている。
+//   書けるのはルールを迂回するサービスアカウントだけ（fcm-notify / notify-check と同じ Secret）。
+// ⚠ 実送信の回でこれが無ければ送らずに止める。記録なしで送ると同一枠の二重通知を防げない。
+let SERVICE_ACCOUNT = null;
+if (process.env.FIREBASE_SERVICE_ACCOUNT_KEY) {
+  try {
+    const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY);
+    if (sa && sa.client_email && sa.private_key) SERVICE_ACCOUNT = sa;
+  } catch (_) {
+    // 値そのものは出さない
+  }
+  if (!SERVICE_ACCOUNT) {
+    console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY を解釈できません（JSON / client_email / private_key）");
+    process.exit(1);
+  }
+}
+if (!SERVICE_ACCOUNT && ((!DRY_RUN && !TEST_NOTIFY) || DEDUPE_SELFTEST)) {
+  console.error("[ERROR] FIREBASE_SERVICE_ACCOUNT_KEY が未設定です。");
+  console.error("[ERROR] 同一日・同一施設・同一判定時刻の通知記録を確認できないため、二重通知を避けて送信しません。");
+  process.exit(1);
+}
+
+// 通知記録へ残す実行ID（ログ・記録用。秘密情報ではない）
+const RUN_ID = (
+  (process.env.GITHUB_RUN_ID || "local") + "-" + (process.env.GITHUB_RUN_ATTEMPT || "0") + "-" +
+  crypto.randomBytes(4).toString("hex")
+).replace(/[^A-Za-z0-9-]/g, "").slice(0, 64);
 
 // MORNING-CHECK-HOURS-BEGIN
 // ===== 施設一覧の控え兼「監視が成立しているかの期待値」 =====
@@ -242,6 +276,458 @@ function findMonitoringAnomalies(entries, hour, selectedCount, fallbackReason) {
 }
 // MORNING-CHECK-HOURS-END
 
+// MORNING-CHECK-DEDUPE-BEGIN
+// ===== 同一日 × 同一施設 × 同一判定時刻の通知を最大1回にする（永続的な冪等制御） =====
+// 起動経路は二重化してある（外部スケジューラの workflow_dispatch と、遅れて走る schedule の cron）。
+// どちらも止めずに、2回目以降の実行が同じ枠へ再送しないことをここで保証する。
+//
+// 記録: RTDB /morningNotify/{判定対象日}/h{判定時刻}（1ノード）
+//   slots.{枠キー}   = {state, batch, runId, leaseUntil, attempts, lastStatus, updatedAt, sentAt}
+//   batches.{送信ID} = {retryKey, text, createdAt, runId, outcome, doneAt}
+//   枠キー = 施設名（normalizeFacility 後）の SHA-256 先頭32桁 ／ 設定異常は "anomaly"
+//
+// 状態:
+//   sending … ある実行が送信権を持つ（leaseUntil まで他の実行は触らない）
+//   sent    … LINE が受け付けた（200）か、同じ retry key が受付済み（409）。以後送らない
+//   retry   … 送れたか分からない（5xx・429・通信断・タイムアウト）。**同じ本文・同じ retry key でのみ**再送する
+//   failed  … LINE が明確に拒否した（409/429 以外の 4xx）＝受け付けていない。次の実行が新しい送信として作り直してよい
+//   gaveup / expired … もう自動では送らない（二重通知の危険を取らない）
+//
+// ⚠⚠ 競合: ノード全体を ETag の条件付き書き込み（if-match）で1回に確保する。
+//    同時に走った実行は片方だけが確保に成功し、もう片方は 412 で読み直して「送信中／送信済み」を見る。
+//    「読んでから書く」を条件なしで行ってはならない（両方が未送信と判断して2通出る）。
+// ⚠⚠ クラッシュ: 確保 → 送信 → 記録 の途中で落ちても、送信内容と retry key を先に記録してあるので、
+//    リース切れ後の実行が**同じ要求をそのまま**再送する。LINE は24時間以内の同一 retry key を 409 で弾く。
+//    本文を作り直して新しい retry key で送ると二重通知になる。
+// ⚠ 記録を読めない・書けないときは送らない（exit 1）。二重送信より、赤い実行として気づかせる方を選ぶ。
+const DEDUPE_ROOT = "morningNotify";
+const DEDUPE_ANOMALY_SLOT = "anomaly";
+const DEDUPE_LEASE_MS = 10 * 60 * 1000;       // 送信権の保持時間。1回の送信（最大 約1分）より十分長く
+// 他の実行が送信中なら、そのリースが切れるまで待つ（切れたら同じ要求を引き継いで再送する）。
+// ⚠ リースより短く待って抜けると、送信権を持った実行が落ちていた場合に誰も再送せず、その日の通知が黙って消える。
+const DEDUPE_WAIT_MS = DEDUPE_LEASE_MS + 60 * 1000;
+const DEDUPE_POLL_MS = 10 * 1000;
+const DEDUPE_MAX_ATTEMPTS = 3;                // 1枠あたりの送信試行（実行をまたいだ合計）
+const DEDUPE_RETRY_KEY_TTL_MS = 23 * 60 * 60 * 1000; // LINE の retry key は24時間有効。余裕を持って23時間
+const DEDUPE_CAS_TRIES = 8;
+// 記録の読み取り・OAuth の一時的な失敗は、送信前なので何度試しても二重通知にならない。瞬断で朝の通知を落とさない
+const DEDUPE_IO_TRIES = 3;
+const DEDUPE_IO_RETRY_MS = [2000, 5000];
+const LINE_SEND_TRIES = 3;                    // 1回の実行内の送信試行（同じ retry key）
+const LINE_RETRY_DELAYS_MS = [2000, 6000];
+const HTTP_TIMEOUT_MS = 15 * 1000;
+const RETRY_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+// 再送する本文の検査（多層防御）。記録はサービスアカウントしか書けないが、万一書き換えられても
+// 固定の見出しで始まらない本文・LINE の上限を超える本文は管理者の LINE へ流さない。
+const MORNING_MESSAGE_PREFIX = "【穂乃味タイムカード】\n朝出勤未確認（";
+const MAX_MESSAGE_LEN = 5000;
+
+// 通知記録のベース URL。
+// ⚠⚠ FIREBASE_DATABASE_URL は ".../honomi" で終わる（判定データはその配下から読む）。
+//    それをそのままベースにすると記録は /honomi/morningNotify になり、`/honomi` の .write を持つ
+//    一般スタッフ（r==='s'）が「送信済み」を書いて通知を止めたり、再送用の本文を差し込めたりする。
+//    必ずオリジン（ルート直下＝ルール未定義＝クライアントからは読み書き不可）を使う。
+//    api/_lib/google.js の dbRootBase() と同じ方式。
+function dedupeBaseUrl(dbUrl) {
+  let u;
+  try { u = new URL(String(dbUrl || "")); } catch (_) { throw new Error("dedupe: FIREBASE_DATABASE_URL を解釈できません"); }
+  if (u.protocol !== "https:") throw new Error("dedupe: FIREBASE_DATABASE_URL が https ではありません");
+  return u.origin;
+}
+
+function dedupeOwn(o, k) {
+  return !!o && Object.prototype.hasOwnProperty.call(o, k);
+}
+
+// 施設名 → 枠キー。表記ゆれ（"ハル イロ"）は同じ枠になる。RTDB のキーに使えない文字を含まない。
+function dedupeSlotKey(facilityName) {
+  const norm = normalizeFacility(facilityEntryName(facilityName));
+  return "f_" + crypto.createHash("sha256").update(norm, "utf8").digest("hex").slice(0, 32);
+}
+
+function dedupePath(date, hour) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error("dedupe: 判定対象日の形式が不正です");
+  if (!isValidCheckHour(hour)) throw new Error("dedupe: 判定時刻が不正です");
+  return `${DEDUPE_ROOT}/${date}/h${hour}`;
+}
+
+// LINE の応答 → sent / rejected / transient
+function classifyLineResult(res) {
+  if (!res || res.error) return "transient";          // 通信断・タイムアウト（受け付けたか分からない）
+  const s = Number(res.status);
+  if (s >= 200 && s < 300) return "sent";
+  if (s === 409) return "sent";                       // 同じ retry key が受付済み＝もう届いている
+  if (s === 429 || s >= 500) return "transient";
+  if (s >= 400 && s < 500) return "rejected";         // 受け付けていない
+  return "transient";
+}
+
+function dedupeCloneNode(node) {
+  const n = node && typeof node === "object" && !Array.isArray(node) ? JSON.parse(JSON.stringify(node)) : {};
+  if (!n.slots || typeof n.slots !== "object" || Array.isArray(n.slots)) n.slots = {};
+  if (!n.batches || typeof n.batches !== "object" || Array.isArray(n.batches)) n.batches = {};
+  return n;
+}
+
+// 現在の記録と今回の通知候補から「何を送るか」と「書き込む記録」を決める（純粋関数）。
+// candidates: [{slot, kind: "facility"|"anomaly", name?}]
+// opts: {now, runId, newBatchId, newRetryKey, buildText(fresh) → string}
+function planDedupe(node, candidates, opts) {
+  const now = opts.now;
+  const next = dedupeCloneNode(node);
+  const out = {
+    next, changed: false, resend: [], fresh: [], newBatch: null,
+    skipped: [], inflight: [], terminal: [],
+  };
+  // 記録ノード自体の破損。空とみなすと送信済みの枠まで送り直すので、全候補を送らずに止める
+  const badShape = (v) => v !== undefined && v !== null && (typeof v !== "object" || Array.isArray(v));
+  if (badShape(node) || (node && (badShape(node.slots) || badShape(node.batches)))) {
+    (candidates || []).forEach((c) => {
+      if (!c || typeof c.slot !== "string") return;
+      out.terminal.push({ cand: c, reason: "unknown_state" });
+      out.skipped.push({ cand: c, reason: "unknown_state" });
+    });
+    return out;
+  }
+  const handled = Object.create(null);
+  const isResendable = (st) =>
+    !!st && (st.state === "retry" || (st.state === "sending" && !(Number(st.leaseUntil) > now)));
+
+  (candidates || []).forEach((c) => {
+    if (!c || typeof c.slot !== "string" || handled[c.slot]) return;
+    handled[c.slot] = true;
+    const st = dedupeOwn(next.slots, c.slot) ? next.slots[c.slot] : null;
+    if (st === null || st === undefined) { out.fresh.push(c); return; }
+    if (typeof st !== "object" || Array.isArray(st)) {
+      // 記録の破損。未送信とみなして送ると二重通知になりうる
+      out.terminal.push({ cand: c, reason: "unknown_state" });
+      out.skipped.push({ cand: c, reason: "unknown_state" });
+      return;
+    }
+    const attempts = Number(st.attempts) || 0;
+
+    if (st.state === "sent" || st.state === "gaveup" || st.state === "expired") {
+      out.skipped.push({ cand: c, reason: st.state });
+      return;
+    }
+    if (st.state === "failed") {
+      if (attempts >= DEDUPE_MAX_ATTEMPTS) {
+        st.state = "gaveup"; st.updatedAt = now; out.changed = true;
+        out.terminal.push({ cand: c, reason: "gaveup" });
+        out.skipped.push({ cand: c, reason: "gaveup" });
+        return;
+      }
+      out.fresh.push(c);
+      return;
+    }
+    if (st.state === "sending" && Number(st.leaseUntil) > now) {
+      out.inflight.push(c);
+      return;
+    }
+    if (isResendable(st)) {
+      const bid = st.batch;
+      const b = typeof bid === "string" && dedupeOwn(next.batches, bid) ? next.batches[bid] : null;
+      // 同じ送信に属する枠は必ずまとめて扱う（本文が1通なので、枠ごとに分けて再送できない）
+      const members = typeof bid === "string" && b
+        ? Object.keys(next.slots).filter((k) => next.slots[k] && next.slots[k].batch === bid && isResendable(next.slots[k]))
+        : [c.slot];
+      let reason = null;
+      if (!b || typeof b.text !== "string" || b.text === "" || !RETRY_KEY_RE.test(String(b.retryKey)) ||
+          b.text.indexOf(MORNING_MESSAGE_PREFIX) !== 0 || b.text.length > MAX_MESSAGE_LEN) {
+        reason = "expired";    // 同じ要求を再現できない。作り直すと二重通知になりうるので送らない
+      } else if (!(now - Number(b.createdAt) <= DEDUPE_RETRY_KEY_TTL_MS)) {
+        reason = "expired";    // retry key の有効期限切れ。LINE 側で重複を弾けない
+      } else if (members.some((k) => (Number(next.slots[k].attempts) || 0) >= DEDUPE_MAX_ATTEMPTS)) {
+        reason = "gaveup";
+      }
+      members.forEach((k) => { handled[k] = true; });
+      if (reason) {
+        members.forEach((k) => { next.slots[k].state = reason; next.slots[k].updatedAt = now; });
+        out.changed = true;
+        out.terminal.push({ cand: c, reason });
+        out.skipped.push({ cand: c, reason });
+        return;
+      }
+      members.forEach((k) => {
+        const s = next.slots[k];
+        s.state = "sending"; s.runId = opts.runId; s.leaseUntil = now + DEDUPE_LEASE_MS;
+        s.attempts = (Number(s.attempts) || 0) + 1; s.updatedAt = now;
+      });
+      out.changed = true;
+      out.resend.push({ batchId: bid, retryKey: b.retryKey, text: b.text, slots: members });
+      return;
+    }
+    // 想定外の状態（記録の破損）。送ると二重通知になりうるので送らない。緑で黙って終わらせない
+    out.terminal.push({ cand: c, reason: "unknown_state" });
+    out.skipped.push({ cand: c, reason: "unknown_state" });
+  });
+
+  if (out.fresh.length > 0) {
+    // 「通知済み」と書けるのは sent の施設だけ（送信中・gaveup 等を通知済みと書かない）
+    const notifiedFacilityCount = out.skipped.filter((s) => s.reason === "sent" && s.cand.kind === "facility").length;
+    const text = opts.buildText(out.fresh, { notifiedFacilityCount });
+    if (typeof text === "string" && text !== "") {
+      const bid = opts.newBatchId;
+      const retryKey = opts.newRetryKey;
+      next.batches[bid] = { retryKey, text, createdAt: now, runId: opts.runId };
+      out.fresh.forEach((c) => {
+        const prev = dedupeOwn(next.slots, c.slot) ? next.slots[c.slot] : null;
+        next.slots[c.slot] = {
+          state: "sending", batch: bid, runId: opts.runId, leaseUntil: now + DEDUPE_LEASE_MS,
+          attempts: ((prev && Number(prev.attempts)) || 0) + 1, updatedAt: now,
+        };
+      });
+      out.newBatch = { batchId: bid, retryKey, text, slots: out.fresh.map((c) => c.slot) };
+      out.changed = true;
+    } else {
+      out.fresh = [];
+    }
+  }
+  return out;
+}
+
+// 送信結果を記録へ反映する（純粋関数）。自分が送信権を持つ枠だけを書き換える。
+function finalizeDedupe(node, batch, runId, outcome, now, status) {
+  const next = dedupeCloneNode(node);
+  let touched = 0;
+  batch.slots.forEach((k) => {
+    const st = dedupeOwn(next.slots, k) ? next.slots[k] : null;
+    if (!st || st.batch !== batch.batchId || st.runId !== runId || st.state !== "sending") return;
+    touched++;
+    if (outcome === "sent") { st.state = "sent"; st.sentAt = now; }
+    else if (outcome === "rejected") { st.state = "failed"; }
+    else { st.state = "retry"; st.leaseUntil = 0; }
+    st.lastStatus = status;
+    st.updatedAt = now;
+  });
+  const b = dedupeOwn(next.batches, batch.batchId) ? next.batches[batch.batchId] : null;
+  if (b && touched > 0 && outcome !== "transient") {
+    // もう再送しないので本文は残さない（retry key は追跡用に残す）
+    delete b.text;
+    b.outcome = outcome;
+    b.doneAt = now;
+  }
+  return { next, touched };
+}
+
+// 1回の実行内の送信。transient のときだけ**同じ本文・同じ retry key**で再試行する。
+async function sendBatchWithRetry(sendOnce, batch, sleep) {
+  let last = null;
+  for (let i = 0; i < LINE_SEND_TRIES; i++) {
+    if (i > 0) await sleep(LINE_RETRY_DELAYS_MS[Math.min(i - 1, LINE_RETRY_DELAYS_MS.length - 1)]);
+    let res;
+    try {
+      res = await sendOnce(batch.text, batch.retryKey);
+    } catch (e) {
+      const code = e && typeof e.code === "string" && /^[A-Z_]{1,24}$/.test(e.code) ? e.code : "NETWORK";
+      res = { error: code };
+    }
+    const outcome = classifyLineResult(res);
+    last = { outcome, status: res && res.error ? res.error : Number(res && res.status) };
+    if (outcome !== "transient") return last;
+  }
+  return last;
+}
+
+// 通知の本文。初回（通知済みの枠が無い）は従来と1文字も違わない。
+// freshNames: 今回はじめて通知する未打刻施設 / suppressedCount: 通知済み等で今回は載せない未打刻施設の数
+function buildMorningMessage(p) {
+  const head = `【穂乃味タイムカード】\n朝出勤未確認（${p.hour}時判定）\n\n` +
+    (p.targetDate ? `判定対象日：${p.targetDate}（手動指定）\n` : "") +
+    `確認時刻：${p.nowStr}\n\n`;
+  const names = p.freshNames || [];
+  const suppressed = Number(p.suppressedCount) || 0;
+  if (names.length === 0 && !p.anomalySection) return "";
+  if (p.facilitiesCount === 0) return head + p.anomalySection.trimEnd();
+  let section;
+  if (names.length > 0) {
+    section = `未確認施設：${names.length}件\n\n` +
+      names.map((n) => `・${safeFacilityLabel(n)}`).join("\n") + "\n\n" +
+      (suppressed > 0 ? `（ほか ${suppressed} 件は通知済みのため省略）\n\n` : "") +
+      "シフトミス・遅刻・事故の可能性があります。確認してください。";
+  } else if (suppressed > 0) {
+    section = `未確認施設：新たな未確認はありません（通知済み ${suppressed} 件は再送しません）`;
+  } else {
+    section = "未確認施設：なし（判定できた施設はすべて出勤確認済み）";
+  }
+  return head + (p.anomalySection || "") + section;
+}
+
+// 通知記録の読み書き（RTDB REST の ETag 条件付き書き込み）
+function makeRtdbDedupeStore(request, baseUrl, path, accessToken) {
+  const url = `${baseUrl}/${path}.json`;
+  const auth = { Authorization: `Bearer ${accessToken}` };
+  return {
+    async read() {
+      const res = await request(url, {
+        method: "GET",
+        headers: Object.assign({ "X-Firebase-ETag": "true" }, auth),
+        timeoutMs: HTTP_TIMEOUT_MS,
+      });
+      if (res.status !== 200) throw new Error(`dedupe: 通知記録を読めません（HTTP ${res.status}）`);
+      const etag = res.headers && res.headers.etag;
+      if (typeof etag !== "string" || etag === "") {
+        throw new Error("dedupe: ETag を取得できません（条件付き書き込みができないため送信しません）");
+      }
+      return { value: res.body, etag };
+    },
+    async cas(value, etag) {
+      const res = await request(url, {
+        method: "PUT",
+        headers: Object.assign({ "Content-Type": "application/json", "if-match": etag }, auth),
+        timeoutMs: HTTP_TIMEOUT_MS,
+      }, JSON.stringify(value));
+      if (res.status === 200) return { ok: true };
+      if (res.status === 412) return { ok: false };
+      throw new Error(`dedupe: 通知記録を書けません（HTTP ${res.status}）`);
+    },
+  };
+}
+
+// LINE push を1回だけ送る。retry key を必ず付ける。
+function makeLineSendOnce(request, token, to) {
+  return async function (text, retryKey) {
+    const res = await request(
+      "https://api.line.me/v2/bot/message/push",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer " + token,
+          "X-Line-Retry-Key": retryKey,
+        },
+        timeoutMs: HTTP_TIMEOUT_MS,
+      },
+      JSON.stringify({ to, messages: [{ type: "text", text }] })
+    );
+    return { status: res.status };
+  };
+}
+
+// 確保 → 送信 → 記録。
+// o: {store, candidates, buildText, sendOnce, sleep, now, runId, newBatchId, newRetryKey, dryRun, log}
+async function notifyOnce(o) {
+  const log = o.log || { info() {}, warn() {}, error() {} };
+  const result = { plan: null, delivered: [], failures: [], inflight: [], skipped: [], terminal: [] };
+  if (!o.candidates || o.candidates.length === 0) return result;
+
+  const readWithRetry = async () => {
+    for (let i = 0; ; i++) {
+      try {
+        return await o.store.read();
+      } catch (e) {
+        if (i + 1 >= DEDUPE_IO_TRIES) throw e;
+        log.warn(`[DEDUPE] 通知記録の読み取りに失敗しました（${e.message}）。再試行します`);
+        await o.sleep(DEDUPE_IO_RETRY_MS[Math.min(i, DEDUPE_IO_RETRY_MS.length - 1)]);
+      }
+    }
+  };
+  // 確保の書き込みで応答が失われたとき、実は書けていたかを確かめる（原子的に1回で書くので全枠そろって入っているかどうか）
+  const claimLanded = (value, p) => {
+    const bs = p.resend.concat(p.newBatch ? [p.newBatch] : []);
+    if (bs.length === 0 || !value || !value.slots) return false;
+    return bs.every((b) => b.slots.every((k) => {
+      const st = dedupeOwn(value.slots, k) ? value.slots[k] : null;
+      // leaseUntil まで一致を求める。同じ実行の古い確保が遅れて届いた場合を「今回書けた」と取り違えない
+      return !!st && st.runId === o.runId && st.batch === b.batchId && st.state === "sending" &&
+        st.leaseUntil === p.next.slots[k].leaseUntil;
+    }));
+  };
+
+  const started = o.now();
+  let plan = null;
+  let conflicts = 0;
+  let ioFailures = 0;
+  for (;;) {
+    const cur = await readWithRetry();
+    const p = planDedupe(cur.value, o.candidates, {
+      now: o.now(), runId: o.runId, newBatchId: o.newBatchId(), newRetryKey: o.newRetryKey(), buildText: o.buildText,
+    });
+    if (!o.dryRun && p.inflight.length > 0 && o.now() - started < DEDUPE_WAIT_MS) {
+      log.info(`[DEDUPE] 他の実行が送信中の枠が ${p.inflight.length} 件あります。結果を待ちます`);
+      await o.sleep(DEDUPE_POLL_MS);
+      continue;
+    }
+    if (o.dryRun || !p.changed) { plan = p; break; }
+    let w;
+    try {
+      w = await o.store.cas(p.next, cur.etag);
+    } catch (e) {
+      // 書けたか分からない。読み直して、自分の確保が入っていれば先へ進む（入っていなければ作り直す）
+      log.warn(`[DEDUPE] 確保の書き込み結果が分かりません（${e.message}）。読み直します`);
+      const chk = await readWithRetry();
+      if (claimLanded(chk.value, p)) { plan = p; break; }
+      ioFailures++;
+      if (ioFailures >= DEDUPE_IO_TRIES) throw e;
+      await o.sleep(DEDUPE_IO_RETRY_MS[Math.min(ioFailures - 1, DEDUPE_IO_RETRY_MS.length - 1)]);
+      continue;
+    }
+    if (w.ok) { plan = p; break; }
+    conflicts++;
+    if (conflicts >= DEDUPE_CAS_TRIES) {
+      throw new Error("dedupe: 通知記録の更新が競合し続けたため送信しません（二重通知を避けるため）");
+    }
+    log.info("[DEDUPE] 通知記録が他の実行に更新されました。読み直します");
+    await o.sleep(200 * conflicts);
+  }
+
+  result.plan = plan;
+  result.inflight = plan.inflight;
+  result.skipped = plan.skipped;
+  result.terminal = plan.terminal;
+  if (o.dryRun) return result;
+
+  const batches = plan.resend.concat(plan.newBatch ? [plan.newBatch] : []);
+  for (const b of batches) {
+    const r = await sendBatchWithRetry(o.sendOnce, b, o.sleep);
+    let recorded = false;
+    let lostOwnership = false;
+    let doneByOthers = false;
+    for (let i = 0; i < DEDUPE_CAS_TRIES && !recorded && !lostOwnership; i++) {
+      try {
+        const cur = await o.store.read();
+        const f = finalizeDedupe(cur.value, b, o.runId, r.outcome, o.now(), r.status);
+        if (f.touched === 0) {
+          // 送信権が他の実行へ移っていた。その実行が送り終えている（全枠 sent）なら失敗ではない
+          const vs = cur.value && cur.value.slots;
+          // 同じ送信（同じ本文・retry key）が確定済みのときだけ。別の送信で sent なら二重に届いた可能性があるので失敗として残す
+          if (vs && b.slots.every((k) => dedupeOwn(vs, k) && vs[k] && vs[k].state === "sent" && vs[k].batch === b.batchId)) {
+            recorded = true; doneByOthers = true;
+          }
+          else lostOwnership = true;
+          break;
+        }
+        const w = await o.store.cas(f.next, cur.etag);
+        if (w.ok) recorded = true;
+      } catch (e) {
+        log.warn(`[DEDUPE] 送信結果の記録に失敗しました（${e.message}）`);
+        await o.sleep(1000);
+      }
+    }
+    if (r.outcome === "sent") result.delivered.push(b);
+    // 他の実行が同じ送信を確定済みなら、こちらの送信結果が未確定でも失敗にしない（届いている）
+    if (r.outcome !== "sent" && !doneByOthers) result.failures.push({ batch: b, reason: r.outcome, status: r.status });
+    if (!recorded) {
+      // 記録できなくても、リース切れ後の実行が同じ retry key で再送するので二重通知にはならない
+      result.failures.push({ batch: b, reason: lostOwnership ? "lost_ownership" : "record_failed", status: r.status });
+    }
+  }
+  return result;
+}
+
+// 本番 RTDB で条件付き書き込みが機能するかの確認（selfTest 専用。LINE は送らない）
+async function dedupeSelfTest(store, runId, now) {
+  const a = await store.read();
+  const w1 = await store.cas({ runId, at: now }, a.etag);
+  if (!w1.ok) return { ok: false, why: "最新の ETag での書き込みが拒否されました" };
+  const w2 = await store.cas({ runId, at: now, stale: true }, a.etag);
+  if (w2.ok) return { ok: false, why: "古い ETag での書き込みが通りました（競合を検出できません）" };
+  const b = await store.read();
+  if (!b.value || b.value.runId !== runId || b.value.stale) return { ok: false, why: "読み戻した値が一致しません" };
+  return { ok: true };
+}
+// MORNING-CHECK-DEDUPE-END
+
 // ===== この回の判定時刻 =====
 // ワークフローが起動経路（cron 式 / 手動入力）から決めて CHECK_HOUR で渡す。
 // ⚠ 実行時の JST 現在時からは決めない。GitHub Actions のスケジュールは数十分〜数時間遅れるため、
@@ -280,17 +766,28 @@ function httpRequest(url, options, body) {
       headers: (options && options.headers) || {},
     };
     const req = https.request(opts, (res) => {
+      // ⚠ setEncoding が無いと chunk の境界で日本語が割れる（tc5_records は 1MB 超で必ず複数 chunk になる）
+      res.setEncoding("utf8");
       let data = "";
       res.on("data", (chunk) => { data += chunk; });
       res.on("end", () => {
         try {
-          resolve({ status: res.statusCode, body: JSON.parse(data) });
+          resolve({ status: res.statusCode, headers: res.headers, body: JSON.parse(data) });
         } catch (_) {
-          resolve({ status: res.statusCode, body: data });
+          resolve({ status: res.statusCode, headers: res.headers, body: data });
         }
       });
     });
     req.on("error", reject);
+    // タイムアウトは指定した呼び出しだけ（従来の取得処理の挙動は変えない）。
+    // 「送れたか分からない」を判定するために、通知記録と LINE 送信で使う。
+    if (options && options.timeoutMs) {
+      req.setTimeout(options.timeoutMs, () => {
+        const e = new Error("timeout");
+        e.code = "ETIMEDOUT";
+        req.destroy(e);
+      });
+    }
     if (body) req.write(body);
     req.end();
   });
@@ -411,6 +908,119 @@ async function sendLineMessage(text) {
   console.log("[LINE]  Push送信成功");
 }
 
+// ===== サービスアカウント → OAuth2 アクセストークン（通知記録の読み書き専用） =====
+// ⚠ アクセストークンは絶対にログへ出さない。
+function createGoogleJWT(sa) {
+  const now = Math.floor(Date.now() / 1000);
+  const header = Buffer.from(JSON.stringify({ alg: "RS256", typ: "JWT" })).toString("base64url");
+  const claim = Buffer.from(JSON.stringify({
+    iss: sa.client_email,
+    sub: sa.client_email,
+    scope: [
+      "https://www.googleapis.com/auth/firebase.database",
+      "https://www.googleapis.com/auth/userinfo.email",
+    ].join(" "),
+    aud: "https://oauth2.googleapis.com/token",
+    iat: now,
+    exp: now + 3600,
+  })).toString("base64url");
+  const sigInput = `${header}.${claim}`;
+  const signer = crypto.createSign("RSA-SHA256");
+  signer.update(sigInput, "ascii");
+  const sig = signer.sign({ key: sa.private_key, padding: crypto.constants.RSA_PKCS1_PADDING }, "base64url");
+  return `${sigInput}.${sig}`;
+}
+
+async function getServiceAccessToken(sa) {
+  const jwt = createGoogleJWT(sa);
+  const body = `grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=${jwt}`;
+  const res = await httpRequest("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    timeoutMs: HTTP_TIMEOUT_MS,
+  }, body);
+  if (res.status !== 200 || !res.body || !res.body.access_token) {
+    // 応答本文は出さない（エラー詳細に鍵の情報が含まれうるため）
+    throw new Error(`OAuth2 アクセストークン取得失敗 (HTTP ${res.status})`);
+  }
+  return res.body.access_token;
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function candidateLabel(c) {
+  return c.kind === "anomaly" ? "設定異常" : safeFacilityLabel(c.name);
+}
+
+// 判定結果を「同一日 × 同一施設 × 同一判定時刻で最大1回」に絞って送る。
+async function sendMorningOnce(date, candidates, buildText) {
+  const path = dedupePath(date, CHECK_HOUR);
+  if (DRY_RUN && !SERVICE_ACCOUNT) {
+    console.warn("[DEDUPE] FIREBASE_SERVICE_ACCOUNT_KEY が無いため通知記録を確認できません（dryRun なので続行）");
+    await sendLineMessage(buildText(candidates, { notifiedFacilityCount: 0 }));
+    return;
+  }
+
+  // ⚠⚠ 通知記録は FB_DB_URL（= .../honomi）ではなくルート直下へ置く（dedupeBaseUrl の説明を参照）
+  const rootBase = dedupeBaseUrl(process.env.FIREBASE_DATABASE_URL);
+  console.log(`[DEDUPE] 通知記録: /${path}（実行ID ${RUN_ID}）`);
+  let accessToken = null;
+  for (let i = 0; accessToken === null; i++) {
+    try {
+      accessToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+    } catch (e) {
+      if (i + 1 >= DEDUPE_IO_TRIES) throw e;
+      console.warn(`[DEDUPE] ${e.message}。再試行します`);
+      await sleep(DEDUPE_IO_RETRY_MS[Math.min(i, DEDUPE_IO_RETRY_MS.length - 1)]);
+    }
+  }
+  const result = await notifyOnce({
+    store: makeRtdbDedupeStore(httpRequest, rootBase, path, accessToken),
+    candidates,
+    buildText,
+    sendOnce: makeLineSendOnce(httpRequest, LINE_TOKEN, LINE_TO),
+    sleep,
+    now: Date.now,
+    runId: RUN_ID,
+    newBatchId: () => "b_" + crypto.randomBytes(8).toString("hex"),
+    newRetryKey: () => crypto.randomUUID(),
+    dryRun: DRY_RUN,
+    log: { info: (m) => console.log(m), warn: (m) => console.warn(m), error: (m) => console.error(m) },
+  });
+
+  const plan = result.plan;
+  plan.skipped.forEach((s) => console.log(`[DEDUPE] 送信しない: ${candidateLabel(s.cand)}（${s.reason}）`));
+  plan.inflight.forEach((c) =>
+    console.error(`::error::他の実行のリースが切れず、送信を確定できませんでした: ${candidateLabel(c)}`));
+  plan.resend.forEach((b) => console.log(`[DEDUPE] 前回の未確定の送信を同じ retry key で再送します（${b.slots.length}枠）`));
+  if (plan.newBatch) {
+    console.log(`[DEDUPE] 今回はじめて通知する枠: ${plan.fresh.map(candidateLabel).join(", ")}`);
+  }
+
+  if (DRY_RUN) {
+    console.log("[DRY]   dryRun=true → 通知記録へ書かず、LINE も送りません");
+    if (plan.newBatch) await sendLineMessage(plan.newBatch.text);
+    if (!plan.newBatch && plan.resend.length === 0) console.log("[DRY]   この回で送る通知はありません");
+    return;
+  }
+
+  if (!plan.newBatch && plan.resend.length === 0) {
+    console.log("[OK]    同じ枠はすべて通知済み（または送信中）— LINE通知スキップ");
+  }
+  result.delivered.forEach(() => console.log("[LINE]  Push送信成功（または同じ retry key が受付済み）"));
+  plan.terminal.forEach((t) =>
+    console.error(`::error::${candidateLabel(t.cand)} の通知は自動では送りません（${t.reason}）。二重通知を避けるため停止しました。`));
+  result.failures.forEach((f) =>
+    console.error(`::error::LINE 通知を確定できませんでした（${f.reason} / ${f.status}）。` +
+      (f.reason === "transient" || f.reason === "record_failed"
+        ? "次の実行が同じ retry key で再送します。" : "")));
+  if (result.failures.length > 0 || plan.terminal.length > 0 || plan.inflight.length > 0) {
+    throw new Error("朝出勤未確認の通知を確定できませんでした");
+  }
+}
+
 // ===== メイン =====
 async function main() {
   const nowUtc = new Date();
@@ -424,6 +1034,19 @@ async function main() {
   console.log(`[CONFIG] CHECK_HOUR=${CHECK_HOUR}時${CHECK_HOUR_ENV ? "" : "（CHECK_HOUR 未指定 → 既定）"}`);
   console.log(`[FIREBASE] base URL: ${FB_DB_URL}`);
   console.log("========================================");
+
+  // ── 二重通知防止の自己診断（LINE は送らない） ──
+  if (DEDUPE_SELFTEST) {
+    console.log(`[SELFTEST] ${DEDUPE_ROOT}/_selftest で条件付き書き込みを確認します`);
+    const accessToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+    const r = await dedupeSelfTest(
+      makeRtdbDedupeStore(httpRequest, dedupeBaseUrl(process.env.FIREBASE_DATABASE_URL), `${DEDUPE_ROOT}/_selftest`, accessToken),
+      RUN_ID, Date.now()
+    );
+    if (!r.ok) throw new Error(`二重通知防止の自己診断に失敗: ${r.why}`);
+    console.log("[SELFTEST] PASS（最新 ETag の書き込みは成功し、古い ETag の書き込みは 412 で拒否された）");
+    return;
+  }
 
   // ── テスト通知モード（Firebase 操作をスキップして即時送信） ──
   if (TEST_NOTIFY) {
@@ -440,6 +1063,11 @@ async function main() {
   // ── 判定対象日 ──
   const today = IS_DATE_OVERRIDE ? TARGET_DATE_ENV : getTodayJST();
   console.log(`[DATE]  判定対象日: ${today}${IS_DATE_OVERRIDE ? " (手動指定)" : " (JST今日)"}`);
+  // ⚠ 未来日を指定した実送信は受け付けない。打刻が無いので全施設が未打刻と判定され、
+  //   その日の枠が前もって「送信済み」になり、当日の本番の通知が全部止まる。
+  if (IS_DATE_OVERRIDE && !DRY_RUN && today > getTodayJST()) {
+    throw new Error("targetDate に未来の日付は指定できません（当日の通知が送信済み扱いで止まるため）。dryRun でのみ指定できます");
+  }
 
   // ── Firebase 認証 ──
   console.log("[AUTH]  Firebase Anonymous Auth 開始");
@@ -565,13 +1193,32 @@ async function main() {
       "施設マスタ（拠点トークン管理）を確認してください。この回の未打刻チェックは一部の施設について行えていません。\n\n"
     : "";
 
+  // ── 送信は必ずここを通す（同一日 × 同一施設 × 同一判定時刻で最大1回） ──
+  // ⚠ sendLineMessage を判定経路から直接呼んではならない。cron と外部スケジューラの両方が走るため2通になる。
+  const deliver = async (unconfirmedNames) => {
+    const candidates = unconfirmedNames.map((n) => ({ slot: dedupeSlotKey(n), kind: "facility", name: n }));
+    if (anomalySection) candidates.push({ slot: DEDUPE_ANOMALY_SLOT, kind: "anomaly" });
+    if (candidates.length === 0) return;
+    const nowStr = getNowJST();
+    const buildText = (fresh, ctx) => {
+      const freshNames = fresh.filter((c) => c.kind === "facility").map((c) => c.name);
+      return buildMorningMessage({
+        hour: CHECK_HOUR,
+        nowStr,
+        targetDate: IS_DATE_OVERRIDE ? today : "",
+        anomalySection: fresh.some((c) => c.kind === "anomaly") ? anomalySection : "",
+        freshNames,
+        suppressedCount: (ctx && ctx.notifiedFacilityCount) || 0,
+        facilitiesCount: facilities.length,
+      });
+    };
+    await sendMorningOnce(today, candidates, buildText);
+  };
+
   if (facilities.length === 0) {
     console.log(`[OK]    ${CHECK_HOUR}時に判定する施設がありません — 未打刻通知はスキップ`);
     if (anomalySection) {
-      await sendLineMessage(
-        `【穂乃味タイムカード】\n朝出勤未確認（${CHECK_HOUR}時判定）\n\n` +
-        `確認時刻：${getNowJST()}\n\n` + anomalySection.trimEnd()
-      );
+      await deliver([]);
     }
     return;
   }
@@ -698,20 +1345,8 @@ async function main() {
     return;
   }
 
-  // ── LINE 通知本文（設定異常があれば同じ1通へまとめる） ──
-  const nowStr = getNowJST();
-  const unconfirmedSection = unconfirmed.length > 0
-    ? `未確認施設：${unconfirmed.length}件\n\n` +
-      unconfirmed.map((n) => `・${safeFacilityLabel(n)}`).join("\n") + "\n\n" +
-      "シフトミス・遅刻・事故の可能性があります。確認してください。"
-    : "未確認施設：なし（判定できた施設はすべて出勤確認済み）";
-  const message =
-    `【穂乃味タイムカード】\n朝出勤未確認（${CHECK_HOUR}時判定）\n\n` +
-    `確認時刻：${nowStr}\n\n` +
-    anomalySection + unconfirmedSection;
-
-  // ── 送信 ──
-  await sendLineMessage(message);
+  // ── 送信（設定異常があれば同じ1通へまとめる。通知済みの枠は載せない） ──
+  await deliver(unconfirmed);
   console.log("[DONE]  処理完了");
 }
 

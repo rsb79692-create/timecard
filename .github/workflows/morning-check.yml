@@ -35,10 +35,22 @@ on:
         required: false
         default: false
         type: boolean
+      selfTest:
+        description: "二重通知防止の条件付き書き込みが本番で機能するかだけを確認する（LINE は送らない）"
+        required: false
+        default: false
+        type: boolean
+
+# サービスアカウント鍵を受け取るジョブなので、GITHUB_TOKEN の権限は読み取りだけに絞る
+permissions:
+  contents: read
 
 jobs:
   morning-check:
     runs-on: ubuntu-latest
+    # スクリプト側の上限（待機・再試行）は、全通信がタイムアウトし続けた計算上の最悪でも約36分。止まった場合の保険。
+    # 途中で打ち切られても、次の実行が同じ retry key で再送するので二重通知にはならない。
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -96,11 +108,16 @@ jobs:
           LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
           LINE_TO_ID: ${{ secrets.LINE_TO_ID }}
           # ⚠⚠ この Secret は消さないこと。fcm-notify / notify-check はサービスアカウントへ
-          #    移したが、morning-check だけは今も匿名サインイン（accounts:signUp）で入る。
-          #    読むのは tc5_records と master/locations だけで、どちらも匿名 read が残っている。
+          #    移したが、morning-check の判定データ（tc5_records と master/locations）は
+          #    今も匿名サインイン（accounts:signUp）で読んでいる。どちらも匿名 read が残っている。
           FIREBASE_API_KEY: ${{ secrets.FIREBASE_API_KEY }}
           FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          # 同一日・同一施設・同一判定時刻の通知を最大1回にするための通知記録（/morningNotify）に使う。
+          # ⚠ この記録はクライアントから書けない場所に置くため、ルールを迂回するサービスアカウントで書く。
+          #    無いと実送信の回は送らずに止まる（記録なしで送ると cron と外部スケジューラで2通になる）。
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
           TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
           TARGET_DATE: ${{ github.event.inputs.targetDate || '' }}
           DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
+          DEDUPE_SELFTEST: ${{ github.event.inputs.selfTest || 'false' }}
         run: node scripts/morning-check.js
