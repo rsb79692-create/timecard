@@ -2,7 +2,11 @@
 /**
  * test-device-watch.js — 施設端末の持ち出し検知の回帰テスト
  *
- * ★ 依存パッケージなし・送信なし・本番データ非アクセス（I/O 関数は呼ばない）。
+ * ★ 依存パッケージなし・**実送信なし・本番データ非アクセス**。
+ *   ただし「I/O 関数を呼ばない」のではなく、**呼んでもスタブで止まる**ようにしてある。
+ *   冒頭で `api/_lib/google.js`（RTDB・OAuth・外部HTTP）を require キャッシュで差し替えており、
+ *   8g / 8h は `runSweep` と `/api/device-report` の handler を**実際に動かす**。
+ *   実ネットワークへ出る経路はこのプロセスに存在しない。
  *
  * 固定する仕様:
  *   1. 距離計算と入力値の正規化（緯度・経度・半径・継続時間・測位誤差）
@@ -17,6 +21,11 @@
  *   9. LINE 本文の書式。施設名に改行を混ぜても行を増やせない
  *  10. 権限マトリクス（管理APIは管理者だけ。職員・労務士・デモを絶対に通さない）
  *  11. 設定の置き場所（/devmon はクライアントから到達不能・端末APIは業務データを読まない）
+ *  12. 定期実行（action:"sweep"）の入口。共有鍵の照合が RTDB より前にあること・
+ *      鍵長32文字の強制・catch-all の不在・判定を runSweep へ委譲していること
+ *  13. 管理画面を開かずに確定・通知されること（handler を実際に動かす）。
+ *      確定の書き込みだけが失敗しても毎分送り直さないこと／送信失敗は必ず送り直すこと
+ *  14. 送信済み記録（_exitSent）のメモリ上限（200件・TTL1時間）と追い出し順序
  *
  * 実行: node scripts/test-device-watch.js
  * 終了コード: 0=全PASS / 1=FAILあり
@@ -25,9 +34,44 @@
 
 const fs = require("fs");
 const path = require("path");
+const vm = require("vm");
 
 const ROOT = path.resolve(__dirname, "..");
+
+// ===== api/_lib/google.js（RTDB・OAuth・外部HTTP）を最初に差し替える =====
+// ★★ 本ファイルの契約は「送信なし・本番データ非アクセス」である。実装が誤って I/O を
+//   呼んだ場合に、**本番やLINEへ出る前にここで止める**（＝契約を仕組みで保証する）。
+//   差し替えは api/_lib/*.js を require する**前**に行うこと（後では効かない）。
+// ★ これにより `/api/device-report` の handler を実際に動かして結線を確認できる（8g 節）。
+const GDB = Object.create(null);          // RTDB の中身（テストが直接組み立てる）
+const GCALLS = { get: [], put: [], patch: [], patchRoot: [], http: [] };
+// 書き込みだけを選んで失敗させるフック（「LINE は送れたが確定が書けない」状況の再現に使う）
+const GFAIL = { patchIf: null, httpStatus: 0 };
+require.cache[require.resolve(path.join(ROOT, "api", "_lib", "google.js"))] = {
+  id: "google-stub", filename: "google-stub", loaded: true,
+  exports: {
+    async dbGet(p) { GCALLS.get.push(p); return Object.prototype.hasOwnProperty.call(GDB, p) ? GDB[p] : null; },
+    async dbPut(p, v) { GCALLS.put.push(p); GDB[p] = v; return v; },
+    async dbPatch(p, v) {
+      GCALLS.patch.push([p, v]);
+      if (GFAIL.patchIf && GFAIL.patchIf(String(p))) throw new Error("stub: patch failed");
+      return v;
+    },
+    async dbPatchRoot(m) { GCALLS.patchRoot.push(Object.keys(m)); return m; },
+    // ★ 外部HTTP（LINE送信）はここで必ず止まる。実送信の経路が無い。
+    async httpRequest(url, o, body) {
+      GCALLS.http.push([String(url), String(body)]);
+      return { status: GFAIL.httpStatus || 200, body: "{}" };
+    },
+    async verifyIdToken() { throw new Error("stub: not used"); },
+    async createCustomToken() { throw new Error("stub: not used"); },
+    async getDbAccessToken() { throw new Error("stub: not used"); },
+  },
+};
+
 const D = require(path.join(ROOT, "api", "_lib", "device.js"));
+// ★ require だけ（I/O 関数は呼ばない）。secrets.js の資格情報の読み込みは遅延評価である。
+const S = require(path.join(ROOT, "api", "_lib", "secrets.js"));
 
 let pass = 0, fail = 0;
 function check(name, ok) {
@@ -316,18 +360,30 @@ section("8. スイープ：端末が沈黙しても確定する");
 
   // ★ Exit を1回報告した直後に端末が沈黙した場合（電源を切る・機内モード）
   const devices = {
-    d1: { fkey: fk, state: "pending", pendingSince: now - 200000,
+    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 200000,
           lastSeenAt: now - 200000, lastJudgedAt: now - 200000 },
   };
   let plan = D.sweepPlan(devices, now, cfg, facs);
   check("継続が3分を超えていれば端末の追加報告なしで確定する", plan.confirms.length === 1);
-  check("確定対象の端末IDを返す", plan.confirms[0].deviceId === "d1");
+  check("確定対象の端末IDを返す", !!plan.confirms[0] && plan.confirms[0].deviceId === "dev0000000000001");
 
-  plan = D.sweepPlan({ d1: { fkey: fk, state: "pending", pendingSince: now - 100000,
+  plan = D.sweepPlan({ dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 100000,
     lastSeenAt: now - 100000, lastJudgedAt: now - 100000 } }, now, cfg, facs);
   check("3分未満では確定しない", plan.confirms.length === 0);
 
-  plan = D.sweepPlan({ d1: { fkey: fk, state: "outside", pendingSince: 0,
+  // ★ 形式が不正な端末IDを confirms へ入れてはならない。patchDevice が必ず throw するため
+  //   「LINE は送れるが確定は永久に書けない」＝毎回のスイープで再送になる。
+  //   markDevices（受信途絶・判定不能）は元から isDeviceId を検査しており、対称にする。
+  const badId = D.sweepPlan({ "x": { fkey: fk, state: "pending", pendingSince: now - 200000,
+    lastSeenAt: now - 200000, lastJudgedAt: now - 200000 } }, now, cfg, facs);
+  check("形式が不正な端末IDは確定の対象にしない", badId.confirms.length === 0);
+  check("形式が不正な端末IDは受信途絶・判定不能の対象にもしない",
+    badId.stales.length === 0 && badId.unjudged.length === 0);
+  check("実物と同じ形（8〜40文字）の端末IDは対象にする",
+    D.sweepPlan({ "dev0000000000009": { fkey: fk, state: "pending", pendingSince: now - 200000,
+      lastSeenAt: now - 200000, lastJudgedAt: now - 200000 } }, now, cfg, facs).confirms.length === 1);
+
+  plan = D.sweepPlan({ dev0000000000001: { fkey: fk, state: "outside", pendingSince: 0,
     lastSeenAt: now - 200000, lastJudgedAt: now - 200000, notifiedAt: now - 100000 } }, now, cfg, facs);
   check("確定済みの端末を再確定しない", plan.confirms.length === 0);
 
@@ -335,18 +391,18 @@ section("8. スイープ：端末が沈黙しても確定する");
   plan = D.sweepPlan(devices, now, cfg, offFacs);
   check("監視OFFの施設は確定の対象外", plan.confirms.length === 0);
 
-  plan = D.sweepPlan({ d1: Object.assign({}, devices.d1, { revoked: true }) }, now, cfg, facs);
+  plan = D.sweepPlan({ dev0000000000001: Object.assign({}, devices.dev0000000000001, { revoked: true }) }, now, cfg, facs);
   check("解除した端末は確定の対象外", plan.confirms.length === 0);
 
   // ★ 同じ継続について通知済みなら再送しない（確定の書き込みが失敗した場合の暴走を防ぐ）
-  plan = D.sweepPlan({ d1: Object.assign({}, devices.d1, { notifiedAt: now - 100000 }) }, now, cfg, facs);
+  plan = D.sweepPlan({ dev0000000000001: Object.assign({}, devices.dev0000000000001, { notifiedAt: now - 100000 }) }, now, cfg, facs);
   check("同じ持ち出しについて通知済みなら再送しない", plan.confirms.length === 0);
-  plan = D.sweepPlan({ d1: Object.assign({}, devices.d1, { notifiedAt: now - 300000 }) }, now, cfg, facs);
+  plan = D.sweepPlan({ dev0000000000001: Object.assign({}, devices.dev0000000000001, { notifiedAt: now - 300000 }) }, now, cfg, facs);
   check("前の持ち出しの通知済みは再アームを妨げない", plan.confirms.length === 1);
 
   // ★ 監視OFF・基準位置変更をまたいだ古い観測で確定しない
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
           lastSeenAt: now - 300000, lastJudgedAt: now - 400000 },
   }, now, cfg, facs);
   check("継続開始より古い判定しか無ければ確定しない（現在位置を見ずに通知しない）",
@@ -361,36 +417,43 @@ section("8b. スイープ：受信途絶");
   const cfg = { dwellSec: 180, staleSec: 6 * 3600 };
   const mk = function (o) { return Object.assign({ fkey: fk, state: "inside" }, o); };
   const devices = {
-    d1: mk({ lastSeenAt: now - 7 * 3600 * 1000, lastJudgedAt: now - 7 * 3600 * 1000 }),
-    d2: mk({ lastSeenAt: now - 1 * 3600 * 1000, lastJudgedAt: now - 1 * 3600 * 1000 }),
-    d3: mk({ lastSeenAt: now - 9 * 3600 * 1000, revoked: true }),
-    d4: mk({ lastSeenAt: 0 }),
-    d5: mk({ fkey: "ffffffffffffffff", lastSeenAt: now - 9 * 3600 * 1000 }),
+    dev0000000000001: mk({ lastSeenAt: now - 7 * 3600 * 1000, lastJudgedAt: now - 7 * 3600 * 1000 }),
+    dev0000000000002: mk({ lastSeenAt: now - 1 * 3600 * 1000, lastJudgedAt: now - 1 * 3600 * 1000 }),
+    dev0000000000003: mk({ lastSeenAt: now - 9 * 3600 * 1000, revoked: true }),
+    dev0000000000004: mk({ lastSeenAt: 0 }),
+    dev0000000000005: mk({ fkey: "ffffffffffffffff", lastSeenAt: now - 9 * 3600 * 1000 }),
+    // ★ 形式が不正なIDは、上の3条件へ到達する前に除外されること（下で個別に確認する）
+    bad: mk({ lastSeenAt: now - 9 * 3600 * 1000 }),
   };
   let plan = D.sweepPlan(devices, now, cfg, facs);
   const ids = plan.stales.map(function (x) { return x.deviceId; });
-  check("しきい値を超えた端末を選ぶ", ids.indexOf("d1") >= 0);
-  check("受信している端末は選ばない", ids.indexOf("d2") < 0);
-  check("解除した端末は選ばない", ids.indexOf("d3") < 0);
-  check("一度も報告が無い端末は選ばない", ids.indexOf("d4") < 0);
-  check("監視設定が無い施設の端末は選ばない", ids.indexOf("d5") < 0);
+  check("しきい値を超えた端末を選ぶ", ids.indexOf("dev0000000000001") >= 0);
+  check("受信している端末は選ばない", ids.indexOf("dev0000000000002") < 0);
+  check("解除した端末は選ばない", ids.indexOf("dev0000000000003") < 0);
+  check("一度も報告が無い端末は選ばない", ids.indexOf("dev0000000000004") < 0);
+  check("監視設定が無い施設の端末は選ばない", ids.indexOf("dev0000000000005") < 0);
+  check("形式が不正な端末IDは選ばない", ids.indexOf("bad") < 0);
+  // ★ 上の4本が「IDの形式で弾かれただけ」になっていないことを確かめる
+  //   （形式を満たすIDなら選ばれる条件であることを対にして示す）。
+  check("同条件で形式を満たすIDなら選ばれる（空振りでないことの担保）",
+    ids.indexOf("dev0000000000001") >= 0 && plan.stales.length === 1);
 
-  const after = Object.assign({}, devices.d1, { staleNotifiedAt: now });
-  plan = D.sweepPlan({ d1: after }, now + 60000, cfg, facs);
+  const after = Object.assign({}, devices.dev0000000000001, { staleNotifiedAt: now });
+  plan = D.sweepPlan({ dev0000000000001: after }, now + 60000, cfg, facs);
   check("同じ途絶では1回だけ通知する", plan.stales.length === 0);
 
   const back = mk({ lastSeenAt: now + 120000, lastJudgedAt: now + 120000, staleNotifiedAt: now });
-  plan = D.sweepPlan({ d1: back }, now + 120000 + 7 * 3600 * 1000, cfg, facs);
+  plan = D.sweepPlan({ dev0000000000001: back }, now + 120000 + 7 * 3600 * 1000, cfg, facs);
   check("報告が戻った後の途絶は再び通知できる", plan.stales.length === 1);
 
   const offFacs = {}; offFacs[fk] = Object.assign({}, BASE, { enabled: false });
-  plan = D.sweepPlan({ d1: devices.d1 }, now, cfg, offFacs);
+  plan = D.sweepPlan({ dev0000000000001: devices.dev0000000000001 }, now, cfg, offFacs);
   check("監視OFFの施設は途絶通知の対象外", plan.stales.length === 0);
 
   // ★ 再アームは「時刻差」で見る。印だけで抑止すると、印を戻せなかった時点で
   //   その事象について二度と通知されない（通知が恒久的に失われる）。
   const staleMs = cfg.staleSec * 1000;
-  const sd = function (o) { return { d1: Object.assign({ fkey: fk, state: "inside" }, o) }; };
+  const sd = function (o) { return { dev0000000000001: Object.assign({ fkey: fk, state: "inside" }, o) }; };
   plan = D.sweepPlan(sd({ lastSeenAt: now - 9 * 3600 * 1000, staleNotifiedAt: now - 60000 }), now, cfg, facs);
   check("印を付けた直後は再通知しない", plan.stales.length === 0);
   plan = D.sweepPlan(sd({ lastSeenAt: now - 9 * 3600 * 1000, staleNotifiedAt: now - staleMs + 1000 }), now, cfg, facs);
@@ -412,37 +475,37 @@ section("8c. スイープ：報告は届くが位置を判定できていない�
   // ★ 本命。位置を送らない／粗い測位だけを送り続ける端末は lastSeenAt が新しいので
   //   「受信途絶」にはならない。判定時刻で検知する。
   let plan = D.sweepPlan({
-    d1: { fkey: fk, state: "inside", lastSeenAt: now - 60000, lastJudgedAt: now - 7 * 3600 * 1000 },
+    dev0000000000001: { fkey: fk, state: "inside", lastSeenAt: now - 60000, lastJudgedAt: now - 7 * 3600 * 1000 },
   }, now, cfg, facs);
   check("受信は新しくても判定が古ければ検知する", plan.unjudged.length === 1);
   check("受信途絶としては数えない", plan.stales.length === 0);
 
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "unknown", lastSeenAt: now - 60000, lastJudgedAt: 0,
+    dev0000000000001: { fkey: fk, state: "unknown", lastSeenAt: now - 60000, lastJudgedAt: 0,
           createdAtMs: now - 7 * 3600 * 1000 },
   }, now, cfg, facs);
   check("1度も判定できていない端末を登録時刻から検知する", plan.unjudged.length === 1);
 
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "inside", lastSeenAt: now - 60000, lastJudgedAt: now - 60000 },
+    dev0000000000001: { fkey: fk, state: "inside", lastSeenAt: now - 60000, lastJudgedAt: now - 60000 },
   }, now, cfg, facs);
   check("直近に判定できている端末は対象外", plan.unjudged.length === 0);
 
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "inside", lastSeenAt: now, lastJudgedAt: now - 7 * 3600 * 1000,
+    dev0000000000001: { fkey: fk, state: "inside", lastSeenAt: now, lastJudgedAt: now - 7 * 3600 * 1000,
           unjudgedNotifiedAt: now },
   }, now, cfg, facs);
   check("同じ状態では1回だけ通知する", plan.unjudged.length === 0);
 
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "inside", lastSeenAt: now - 9 * 3600 * 1000,
+    dev0000000000001: { fkey: fk, state: "inside", lastSeenAt: now - 9 * 3600 * 1000,
           lastJudgedAt: now - 9 * 3600 * 1000 },
   }, now, cfg, facs);
   check("受信途絶の端末を判定不能としても出さない",
     plan.stales.length === 1 && plan.unjudged.length === 0);
 
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "unknown", lastSeenAt: now, lastJudgedAt: 0, createdAtMs: now },
+    dev0000000000001: { fkey: fk, state: "unknown", lastSeenAt: now, lastJudgedAt: 0, createdAtMs: now },
   }, now, cfg, facs);
   check("登録直後は通知しない",
     plan.unjudged.length === 0 && plan.stales.length === 0 && plan.confirms.length === 0);
@@ -450,12 +513,12 @@ section("8c. スイープ：報告は届くが位置を判定できていない�
   // ★ 確定が抑止されたときに、受信途絶・判定できていない の検査を飛ばしてはならない
   //   （フェイルクローズ機構の中にフェイルオープンの穴を作らない）。
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
           lastSeenAt: now - 9 * 3600 * 1000, lastJudgedAt: now - 400000 },
   }, now, cfg, facs);
   check("確定を抑止しても受信途絶は検査する", plan.confirms.length === 0 && plan.stales.length === 1);
   plan = D.sweepPlan({
-    d1: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
           lastSeenAt: now - 60000, lastJudgedAt: now - 9 * 3600 * 1000 },
   }, now, cfg, facs);
   check("確定を抑止しても判定できていないかを検査する",
@@ -484,7 +547,287 @@ section("8d. 権限の通知は監視ONの施設だけ");
 }
 
 
+// ===== 8e. 定期実行（管理画面を開かなくても確定・通知される）=====
+section("8e. 定期実行：管理画面を開かなくても確定し、1回だけ通知する");
+{
+  // ★ 「サーバ」を純粋関数だけで模擬し、1分間隔の定期実行を回す。I/O は一切しない。
+  //   RTDB の PATCH は null でキー削除になるので、それに合わせて適用する。
+  function applyPatch(dev, patch) {
+    for (const k of Object.keys(patch)) {
+      if (patch[k] === null) delete dev[k]; else dev[k] = patch[k];
+    }
+  }
+  const fk = D.fkeyOf(BASE.name);
+  const facs = {}; facs[fk] = BASE;
+  const cfg = { dwellSec: 180, staleSec: D.DEFAULT_STALE_SEC };
+  const T0 = 1758000000000;
+
+  // 1分ごとのスイープ（通知は数えるだけ）。runSweep の I/O を使わず sweepPlan で回す。
+  let sent = 0;
+  function cronMinutes(dev, fromMs, minutes) {
+    for (let i = 1; i <= minutes; i++) {
+      const now = fromMs + i * 60000;
+      const plan = D.sweepPlan({ dev0000000000001: dev }, now, cfg, facs);
+      for (let k = 0; k < plan.confirms.length; k++) {
+        sent++;
+        applyPatch(dev, D.confirmPatch(now));       // 送信成功 → 確定を書く
+      }
+      // 途絶・判定不能は本節の対象外（8b/8c で固定済み）。ここでは数だけ見る。
+    }
+  }
+
+  const dev = { fkey: fk, state: "unknown", lastSeenAt: 0, lastJudgedAt: 0, createdAtMs: T0 };
+
+  // ① 範囲内の報告
+  let ev = D.evaluateReport(dev, { nowMs: T0, lat: BASE.lat, lng: BASE.lng, acc: 10 }, BASE, cfg);
+  applyPatch(dev, D.splitPatchForSend(ev.patch, null, T0));
+  check("範囲内なら通知しない", ev.notify.length === 0 && dev.state === "inside");
+
+  // ② 範囲外を1回だけ報告して、そのまま沈黙する（電源を切る・機内モードにする）
+  const far = northOf(BASE, 400);
+  ev = D.evaluateReport(dev, { nowMs: T0 + 1000, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+  const exit0 = ev.notify.filter(function (x) { return x.kind === "exit"; });
+  applyPatch(dev, D.splitPatchForSend(ev.patch, exit0[0] || null, T0 + 1000));
+  check("1回目の範囲外では確定しない（GPSの単発の飛びで通知しない）",
+    exit0.length === 0 && dev.state === "pending" && dev.pendingSince === T0 + 1000);
+
+  // ③ 端末が沈黙したまま定期実行が回る。3分未満では出さない。
+  cronMinutes(dev, T0 + 1000, 2);
+  check("3分未満は定期実行でも確定しない", sent === 0 && dev.state === "pending");
+
+  // ④ 3分経過 → 定期実行が確定させる（★ これが「管理画面を開かなくても通知される」経路）
+  cronMinutes(dev, T0 + 1000 + 120000, 1);
+  check("端末が沈黙していても3分で定期実行が確定させる",
+    sent === 1 && dev.state === "outside" && dev.notifiedAt > 0 && dev.pendingSince === undefined);
+
+  // ⑤ 同一持ち出し中は、定期実行が1日回り続けても1回だけ
+  cronMinutes(dev, T0 + 1000 + 180000, 1440);
+  check("同一持ち出し中は定期実行を1440回回しても通知は1回だけ", sent === 1);
+
+  // ⑥ 範囲内へ戻る（復帰そのものは通知しない）
+  const tBack = T0 + 1000 + 180000 + 1440 * 60000;
+  ev = D.evaluateReport(dev, { nowMs: tBack, lat: BASE.lat, lng: BASE.lng, acc: 10 }, BASE, cfg);
+  applyPatch(dev, D.splitPatchForSend(ev.patch, null, tBack));
+  check("範囲内へ戻っても復帰通知は出さない", ev.notify.length === 0 && dev.state === "inside");
+  cronMinutes(dev, tBack, 10);
+  check("復帰後の定期実行で余計な通知を出さない", sent === 1);
+
+  // ⑦ 再度の持ち出しでは再通知する
+  const tOut2 = tBack + 600000;
+  ev = D.evaluateReport(dev, { nowMs: tOut2, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+  applyPatch(dev, D.splitPatchForSend(ev.patch, null, tOut2));
+  check("再度の持ち出しで継続計測が始まる", dev.state === "pending" && dev.pendingSince === tOut2);
+  cronMinutes(dev, tOut2, 3);
+  check("復帰後の再持ち出しでは定期実行が再通知する",
+    sent === 2 && dev.state === "outside");
+
+  // ⑧ 3分未満で範囲内へ戻った外出は、定期実行が回っても通知しない（誤検知対策）
+  {
+    const d = { fkey: fk, state: "inside", lastSeenAt: T0, lastJudgedAt: T0, createdAtMs: T0 };
+    const t1 = T0 + 3600000;
+    let e2 = D.evaluateReport(d, { nowMs: t1, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+    applyPatch(d, D.splitPatchForSend(e2.patch, null, t1));
+    const before = sent;
+    cronMinutes(d, t1, 2);                       // まだ3分未満
+    const t2 = t1 + 150000;                      // 2分30秒後に範囲内へ戻る
+    e2 = D.evaluateReport(d, { nowMs: t2, lat: BASE.lat, lng: BASE.lng, acc: 10 }, BASE, cfg);
+    applyPatch(d, D.splitPatchForSend(e2.patch, null, t2));
+    check("3分未満で戻った外出では継続計測が消える",
+      d.state === "inside" && d.pendingSince === undefined);
+    cronMinutes(d, t2, 60);                      // 1時間ぶん回しても出さない
+    check("3分未満で戻った外出は定期実行が回っても通知しない", sent === before);
+
+    // ★ 再び出たときは、古い継続ではなく**今回の外出**から3分を測る。
+    //   継続計測を消さない実装にすると、出た瞬間に確定して誤通知になる。
+    const t3 = t2 + 3600000;
+    e2 = D.evaluateReport(d, { nowMs: t3, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+    applyPatch(d, D.splitPatchForSend(e2.patch, null, t3));
+    check("再外出は今回の時刻から計測を始める", d.pendingSince === t3);
+    cronMinutes(d, t3, 2);
+    check("再外出でも3分未満なら通知しない", sent === before);
+    cronMinutes(d, t3 + 120000, 1);
+    check("再外出も3分で通知する", sent === before + 1);
+  }
+
+  // ⑨ 監視OFFの施設は定期実行でも通知しない（フェイルクローズを定期実行で破らない）
+  const offFacs = {}; offFacs[fk] = Object.assign({}, BASE, { enabled: false });
+  const dev2 = { fkey: fk, state: "pending", pendingSince: T0, lastJudgedAt: T0, lastSeenAt: T0 };
+  const planOff = D.sweepPlan({ dev0000000000002: dev2 }, T0 + 600000, cfg, offFacs);
+  check("監視OFFの施設は定期実行でも確定しない", planOff.confirms.length === 0);
+  // 基準位置が未設定の施設も同じ
+  const noBase = {}; noBase[fk] = { name: BASE.name, enabled: true, radiusM: 150 };
+  check("基準位置が未設定の施設は定期実行でも確定しない",
+    D.sweepPlan({ dev0000000000002: dev2 }, T0 + 600000, cfg, noBase).confirms.length === 0);
+}
+
+section("8f. 定期実行の入口（共有鍵・二重実装なし・認証前に往復しない）");
+{
+  const repRaw = fs.readFileSync(path.join(ROOT, "api", "device-report.js"), "utf8");
+  const rep = repRaw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+
+  // ★ 判定の二重実装を作らない。sweep は既存の runSweep をそのまま呼ぶだけ。
+  check("sweep は既存の runSweep へ委譲する", /D\.runSweep\(facilities, devices, nowMs, settings\)/.test(rep));
+  check("sweep 独自の判定ロジックを持たない",
+    rep.indexOf("function handleSweep") > 0
+    && !/handleSweep[\s\S]{0,1200}?(sweepPlan|distanceM|evaluateReport|buildMessage|sendLine)/.test(rep));
+  check("sweep は新しい通知基盤を作らない（LINE の直接呼び出しが無い）",
+    rep.indexOf("api.line.me") < 0);
+
+  // ★ 鍵の照合はレート制限（RTDB 2〜3往復）より前。鍵を知らない相手に RTDB を触らせない。
+  const hIdx = rep.indexOf("module.exports = async function handler");
+  const handler = hIdx > 0 ? rep.slice(hIdx) : "";
+  const iKey = handler.indexOf("sweepKeyError(body)");
+  const iBump = handler.indexOf("bumpAndCount(");
+  check("鍵の照合はレート制限より前（無認証では RTDB へ1往復も起こさない）",
+    iKey > 0 && iBump > 0 && iKey < iBump);
+  check("鍵の照合より前に RTDB を読まない",
+    handler.slice(0, iKey).indexOf("await D.") < 0 && handler.slice(0, iKey).indexOf("await G.") < 0
+    && handler.slice(0, iKey).indexOf("loadSettings()") < 0);
+  check("レート制限は sweep にも掛かる（鍵が漏れたときの上限）",
+    /sweep: \{ kind: "dvm_s", limit: SWEEP_LIMIT_IP \}/.test(rep));
+  // ★ 上限の**値**も固定する。1分間隔なら10分窓で10回なので、60 は再試行込みで妥当。
+  //   ここを極端に緩めると、鍵が漏れたときの歯止めが無くなる。
+  check("sweep のレート制限は 10分窓60回", /SWEEP_LIMIT_IP = 60;/.test(rep));
+  // ★ 鍵の誤りにはレート制限が掛からない（照合を前へ置いているため）。総当たりに耐えるのは
+  //   鍵の長さだけなので、文書が求める32文字以上をコード側でも強制する。下げてはならない。
+  check("鍵は32文字以上を強制する", /SWEEP_KEY_MIN_LEN = 32;/.test(rep));
+  // ★ 振り分けに catch-all の else を置いてはならない。else が handleSweep だと、
+  //   将来 action を足したときにその action が鍵照合を通らずスイープを起動できる。
+  check("action ごとに明示的に振り分ける（catch-all の else が無い）",
+    /: action === "sweep" \? await handleSweep\(\)/.test(rep)
+    && /: \{ status: 400, error: "bad_action" \}/.test(rep));
+  check("鍵照合を通らずに handleSweep へ到達する枝が無い",
+    handler.split("handleSweep()").length - 1 === 1);
+  // ★ 定期実行はスイープの間引き（SWEEP_MIN_INTERVAL_MS）に掛からない。掛かると
+  //   1分間隔という前提が黙って壊れ、AGENTS.md の表だけが残る。
+  check("定期実行は間引きの対象にしない",
+    !/async function handleSweep[\s\S]{0,400}?SWEEP_MIN_INTERVAL_MS/.test(rep));
+  check("register / report の上限を変えていない",
+    /REGISTER_LIMIT_IP = 20;/.test(rep) && /REPORT_LIMIT_IP = 120;/.test(rep));
+  // ★ 定期実行の直後に、同じインスタンスへ来た報告が同じスイープをもう1回走らせない
+  //   （/devmon/facilities と /devmon/devices の全件取得が二重になる）。
+  check("定期実行はスイープの間引きタイマーを進める",
+    /async function handleSweep[\s\S]{0,400}?_lastSweepAt = nowMs;/.test(rep));
+
+  // ★ 鍵の値をログ・応答へ出さない
+  check("鍵の値をログへ出さない", !/console\.[a-z]+\([^)]*DEVICE_SWEEP_KEY/.test(rep));
+  check("鍵の値を応答へ返さない", !/key:\s*(got|want|body\.key)/.test(rep));
+  check("鍵は環境変数から読む（コードへ埋め込まない）",
+    /process\.env\.DEVICE_SWEEP_KEY/.test(rep)
+    && !/DEVICE_SWEEP_KEY\s*=\s*["'][^"']+["']/.test(rep));
+
+  // ★ 値で固定する（ソース一致だけだと、あとから条件を緩めても PASS してしまう）
+  const i0 = repRaw.indexOf("const SWEEP_KEY_MIN_LEN");
+  const i1 = repRaw.indexOf("\n}\n", repRaw.indexOf("function sweepKeyError"));
+  const src = i0 > 0 && i1 > i0 ? repRaw.slice(i0, i1 + 3) : "";
+  check("sweepKeyError を抽出できる", src.length > 100);
+  const sandbox = { S: S, process: { env: {} }, module: {}, console: console };
+  vm.createContext(sandbox);
+  vm.runInContext(src, sandbox);
+  const f0 = sandbox.sweepKeyError;
+  const GOOD = "0123456789abcdefghij0123456789abcdefghij";
+  // ★ 通過時は null を返すため、そのまま .status を読むと FAIL ではなく TypeError で
+  //   テスト全体が止まる（以降のアサーションが走らず、他の回帰まで隠れる）。
+  function f(b) { const r = f0(b); return r && typeof r === "object" ? r : { status: 0, error: "" }; }
+
+  sandbox.process.env.DEVICE_SWEEP_KEY = "";
+  check("鍵が未設定なら 503（黙って何もしない状態を作らない）",
+    f({ key: GOOD }).status === 503 && f({ key: GOOD }).error === "sweep_not_configured");
+  sandbox.process.env.DEVICE_SWEEP_KEY = "short";
+  check("鍵が短すぎるなら受け付けない", f({ key: "short" }).status === 503);
+
+  sandbox.process.env.DEVICE_SWEEP_KEY = GOOD;
+  check("正しい鍵は通る", f0({ key: GOOD }) === null);
+  check("鍵なしは 403", f({}).status === 403 && f({}).error === "forbidden");
+  check("空文字の鍵は 403", f({ key: "" }).status === 403);
+  check("違う鍵は 403", f({ key: GOOD + "x" }).status === 403);
+  check("前方一致では通らない", f({ key: GOOD.slice(0, 10) }).status === 403);
+  check("文字列以外の鍵は 403",
+    f({ key: 12345 }).status === 403 && f({ key: true }).status === 403
+    && f({ key: { toString: function () { return GOOD; } } }).status === 403);
+  check("極端に長い鍵は照合前に弾く", f({ key: GOOD.repeat(100) }).status === 403);
+  // ★ 環境変数・Body に混ざった前後の空白で恒久的に 403 になる事故を防ぐ。
+  //   403 は 503 と違って「未設定」と区別できないため、切り分け不能な状態になる。
+  check("Body の鍵の前後の空白を無視する",
+    f0({ key: " " + GOOD + " " }) === null && f0({ key: GOOD + "\n" }) === null);
+  sandbox.process.env.DEVICE_SWEEP_KEY = GOOD + "\n";
+  check("環境変数の鍵の末尾の改行を無視する", f0({ key: GOOD }) === null);
+  sandbox.process.env.DEVICE_SWEEP_KEY = "  " + GOOD + "  ";
+  check("環境変数の鍵の前後の空白を無視する", f0({ key: GOOD }) === null);
+  sandbox.process.env.DEVICE_SWEEP_KEY = "   ";       // 空白だけ＝実質未設定
+  check("空白だけの鍵は未設定として 503", f({ key: GOOD }).status === 503);
+  sandbox.process.env.DEVICE_SWEEP_KEY = GOOD;        // 後続のために戻す
+  check("空白を除いても違う鍵は通さない", f({ key: " " + GOOD + "x " }).status === 403);
+  check("鍵の照合は定数時間比較を使う", src.indexOf("S.timingSafeEqualStr") > 0);
+  check("鍵をそのまま比較しない（ハッシュへ通してから比較する）",
+    src.indexOf("S.tokenHash(got)") > 0 && src.indexOf("S.tokenHash(want)") > 0);
+  check("鍵をエラー本文へ含めない",
+    JSON.stringify(f({ key: GOOD + "x" })).indexOf(GOOD) < 0);
+
+  // ★ 保険の経路（報告時・管理画面）を外していないこと
+  check("報告の機会のスイープを残している（スケジューラ停止時の保険）",
+    /doSweep && facilities && sweepDevices/.test(rep));
+  const adm = fs.readFileSync(path.join(ROOT, "api", "device.js"), "utf8");
+  check("管理画面の取得時のスイープを残している", adm.indexOf("D.runSweep(") > 0);
+}
+
 // ===== 9. LINE 本文 =====
+
+/**
+ * 8h. 送信済み記録（_exitSent）のメモリ上限。
+ * ★ 上限・TTL は内部実装なので、外からは runSweep の挙動で確かめる。
+ *   「際限なく増やさない（上限を超えたら最古から落ちる）」と
+ *   「直近に通知した継続の抑止は残る」を両方見ることで、
+ *   上限を極端に小さくする変異（抑止が実質無効になる）も検出できる。
+ */
+async function exitMemSection() {
+  section("8h. 送信済み記録のメモリ上限（際限なく増やさない／抑止中の継続を落とさない）");
+  // LINE の資格情報はスタブ側で止まるのでダミーで足りる（実値は使わない・送信されない）。
+  process.env.LINE_CHANNEL_ACCESS_TOKEN = "stub-token";
+  process.env.LINE_TO_ID = "stub-to";
+
+  const fk = D.fkeyOf("ミュゲの泉");
+  const facs = {}; facs[fk] = Object.assign({}, BASE);
+  const cfg = { dwellSec: 180, staleSec: D.DEFAULT_STALE_SEC };
+  const now = 1760000000000;
+  // ★ 他の節と ID を重複させてはならない。`_exitSent` はモジュール変数で節をまたいで残るため、
+  //   継続キー（deviceId + "@" + pendingSince）が他節と一致すると、
+  //   その節が黙って sent===0 になり原因の分かりにくい FAIL になる。
+  //   ここは "devMEM…"、8g は "devTESTid…"、8a〜8e は "dev00000…" で衝突しない。
+  const idOf = function (i) { return "devMEM" + String(1000000000 + i); };
+  const mk = function (offset) {
+    return { fkey: fk, state: "pending", pendingSince: now - 200000 - offset,
+             lastSeenAt: now - 200000 - offset, lastJudgedAt: now - 200000 - offset,
+             createdAtMs: now - 900000 };
+  };
+
+  const first = {}; first[idOf(0)] = mk(0);
+  let r = await D.runSweep(facs, first, now, cfg);
+  check("1件目の持ち出しで通知する", r.sent === 1);
+  r = await D.runSweep(facs, first, now + 1000, cfg);
+  check("同じ継続は送り直さない", r.sent === 0);
+
+  // ★ 上限を超える数の**別の継続**を流し込んで記録を押し出す（SWEEP_CONFIRM_MAX=5 なので5件ずつ）。
+  for (let b = 0; b < 50; b++) {
+    const batch = {};
+    for (let k = 0; k < 5; k++) {
+      const i = 1 + b * 5 + k;
+      batch[idOf(i)] = mk(i);
+    }
+    await D.runSweep(facs, batch, now + 2000 + b, cfg);
+  }
+  // ★ 251継続を通したので、先頭（idOf(0)）は EXIT_SENT_MAX=200 の追い出しで落ちている。
+  //   「落ちたら再送される」＝上限が効いている証拠。**Map を全消去する実装でもここは通るため、
+  //   直後の「直近の抑止は残っている」と対にして初めて『最古から落ちる』を固定できる。**
+  r = await D.runSweep(facs, first, now + 3000, cfg);
+  check("上限を超えると最古の記録は落ちる（メモリを際限なく増やさない）", r.sent === 1);
+
+  const lastId = idOf(250);
+  const recent = {}; recent[lastId] = mk(250);
+  r = await D.runSweep(facs, recent, now + 4000, cfg);
+  check("直近に通知した継続の抑止は残っている", r.sent === 0);
+}
+
 section("9. LINE 本文");
 {
   const at = Date.UTC(2026, 8, 12, 11, 15);  // 2026-09-12 20:15 JST
@@ -571,28 +914,43 @@ section("11. 設定の置き場所（クライアントから触れない）");
   check("端末APIは業務データ（tc5_*）を読まない", rep.indexOf("tc5_") < 0);
   check("端末APIは施設マスタ（master/locations）を読まない", rep.indexOf("master/locations") < 0);
   check("端末APIは管理者ロールを扱わない", rep.indexOf("isValidAdmin") < 0);
-  check("端末APIは register / report 以外を受け付けない",
-    /action !== "register" && action !== "report"/.test(rep));
+  check("端末APIは register / report / sweep 以外を受け付けない",
+    /Object\.prototype\.hasOwnProperty\.call\(RATE, action\)/.test(rep)
+    && /register: \{ kind: "dvm_g"/.test(rep)
+    && /report: \{ kind: "dvm_i"/.test(rep)
+    && /sweep: \{ kind: "dvm_s"/.test(rep)
+    && rep.indexOf('"bootstrap"') < 0 && rep.indexOf("setFacility") < 0);
   check("端末APIは CORS 応答ヘッダを付けない（ブラウザから呼ばせない）",
     rep.indexOf("Access-Control-Allow-Origin") < 0);
-  check("端末APIは登録・報告の両方にIP単位のレート制限を掛けている",
-    /bumpAndCount\(action === "register" \? "dvm_g" : "dvm_i", ipKey\)/.test(rep));
+  check("全 action にIP単位のレート制限を掛けている（kind と上限を取り違えない）",
+    /bumpAndCount\(RATE\[action\]\.kind, ipKey\)/.test(rep)
+    && /n > RATE\[action\]\.limit/.test(rep));
   check("端末トークンは定数時間比較する", /timingSafeEqualStr/.test(rep));
-  // ★ 重い取得を認証の前に置いてはならない（誰でも無認証で叩けるため）
-  const iLimit = rep.indexOf("bumpAndCount(action ===");
-  const iAuth = rep.indexOf("timingSafeEqualStr");
-  const iLoadAll = rep.indexOf("D.loadFacilities(), D.loadDevices()");
-  const iLoadOne = rep.indexOf("D.loadDevice(deviceId)");
-  // ★ 源ファイル上の位置ではなく、handler の中での順序で見る
-  //   （handleReport は handler より前に定義されているため、単純な indexOf 比較では逆転する）。
+  // ★ 重い取得を認証の前に置いてはならない（誰でも無認証で叩けるため）。
+  //   ★★ 位置の比較は**必ず対象の関数本体へスコープする**。ファイル全体の indexOf で
+  //   比べると、同じ字句を使う別の関数（sweepKeyError / handleSweep）の位置を拾い、
+  //   handleReport の順序が崩れても PASS してしまう（2026-09-13 のレビューで実際に発覚）。
   const hIdx = rep.indexOf("module.exports = async function handler");
   const handler = hIdx > 0 ? rep.slice(hIdx) : "";
   check("レート制限は action の振り分けより前（handler 内の順序）",
     handler.indexOf("bumpAndCount(") > 0
     && handler.indexOf("bumpAndCount(") < handler.indexOf("handleReport(body)"));
-  check("端末1件の取得でトークンを照合する", iLoadOne > 0 && iAuth > iLoadOne);
-  check("全件取得はトークン照合より後",
-    iLoadAll > 0 && iLoadAll > iAuth);
+  {
+    const rIdx = rep.indexOf("async function handleReport");
+    const rBody = rIdx > 0 ? rep.slice(rIdx, rep.indexOf("module.exports")) : "";
+    const rAuth = rBody.indexOf("timingSafeEqualStr");
+    const rOne = rBody.indexOf("D.loadDevice(deviceId)");
+    const rAll = rBody.indexOf("D.loadFacilities(), D.loadDevices()");
+    check("handleReport の本体を切り出せる", rBody.length > 500);
+    check("handleReport は端末1件の取得でトークンを照合する",
+      rOne > 0 && rAuth > rOne);
+    check("handleReport の全件取得はトークン照合より後",
+      rAll > 0 && rAll > rAuth);
+    // ★ handleReport の中に「照合より前の全件取得」が1つも無いこと
+    check("handleReport はトークン照合より前に全件取得しない",
+      rBody.slice(0, rAuth).indexOf("D.loadFacilities()") < 0
+      && rBody.slice(0, rAuth).indexOf("D.loadDevices()") < 0);
+  }
   check("報告の連打は保存済みの最終受信時刻で弾く（往復を増やさない）",
     /REPORT_MIN_INTERVAL_MS/.test(rep) && /nowMs - seen < REPORT_MIN_INTERVAL_MS/.test(rep));
   check("登録直後の state を範囲内にしない", /state: "unknown"/.test(rep));
@@ -648,7 +1006,7 @@ section("11. 設定の置き場所（クライアントから触れない）");
 //
 // ★ ここを実際に動かして固定する。ソース走査だけにすると、
 //   「失敗時に再取得を撃ち続ける」ような回帰を検出できない（実際に作り込んだ）。
-const vm = require("vm");
+
 const htmlSrc = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");
 const DW_BEGIN = "// ===== DEVWATCH-BEGIN =====";
 const DW_END = "// ===== DEVWATCH-END =====";
@@ -895,6 +1253,13 @@ async function devwatchUiSection() {
       repSrc.indexOf("D.loadFacility(dev.fkey)") > 0);
     check("スイープの間隔は継続時間の最小値より短い",
       repSrc.indexOf("D.MIN_DWELL_SEC * 1000 - 1000") > 0);
+    // ★ 定期実行（60秒）の直下に置く。短すぎると cron の直後に端末報告が冗長な
+    //   全件スイープを重ねる。60秒以上にすると継続時間の最小値（60秒）を超える。
+    check("報告時スイープの間引きは定期実行の間隔の直下（59秒）",
+      /Math\.min\(59 \* 1000, D\.MIN_DWELL_SEC \* 1000 - 1000\)/.test(repSrc));
+    // ★ 設定キャッシュの TTL は呼び出し間隔より長くする（短いと一度も効かない）。
+    check("設定キャッシュの TTL は呼び出し間隔より長い",
+      /SETTINGS_TTL_MS = 5 \* 60 \* 1000;/.test(repSrc));
 
     const admSrc = fs.readFileSync(path.join(ROOT, "api", "device.js"), "utf8");
     // ★ 判定の前提が変わったら、その施設の**全端末**を判定やり直しにする。
@@ -915,8 +1280,259 @@ async function devwatchUiSection() {
   }
 }
 
+
+/**
+ * 8g. `/api/device-report` の handler を**実際に動かす**。
+ *
+ * ★ ソース走査と純粋関数だけでは、結線の壊れ（action の振り分け・guardApp・応答の形・
+ *   鍵照合の位置）を検出できない。RTDB と外部HTTP は冒頭のスタブで止まっているので、
+ *   本番データへもLINEへも到達しない。
+ */
+async function devReportHandlerSection() {
+  section("8g. 端末API の handler を実際に動かす（管理画面を開かずに通知されること）");
+
+  const handler = require(path.join(ROOT, "api", "device-report.js"));
+  const KEY = "k".repeat(40);
+  const DEV = "devTESTid0000001";           // isDeviceId を満たす形
+  const fk = D.fkeyOf("ミュゲの泉");
+
+  function reset() {
+    for (const k of Object.keys(GDB)) delete GDB[k];
+    GCALLS.get.length = 0; GCALLS.put.length = 0;
+    GCALLS.patch.length = 0; GCALLS.patchRoot.length = 0; GCALLS.http.length = 0;
+    GDB["devmon/settings"] = { dwellSec: 180, staleSec: D.DEFAULT_STALE_SEC };
+  }
+  async function call(body, opts) {
+    const o = opts || {};
+    const res = { code: 0, body: null, headers: {} };
+    res.setHeader = function (k, v) { res.headers[String(k).toLowerCase()] = v; };
+    res.status = function (c) { res.code = c; return res; };
+    res.json = function (b) { res.body = b; return res; };
+    res.end = function () { return res; };
+    await handler({
+      method: o.method || "POST",
+      headers: { "content-type": o.ct || "application/json", "x-real-ip": "203.0.113.9" },
+      body: body,
+    }, res);
+    return res;
+  }
+  // LINE の資格情報はスタブ側で止まるので、ダミーで足りる（実値は使わない）。
+  process.env.LINE_CHANNEL_ACCESS_TOKEN = "stub-token";
+  process.env.LINE_TO_ID = "stub-to";
+
+  // --- guardApp（ブラウザから呼ばせない）---
+  reset();
+  process.env.DEVICE_SWEEP_KEY = KEY;
+  let r = await call({ action: "sweep", key: KEY }, { method: "GET" });
+  check("GET は 405", r.code === 405 && r.body.error === "method_not_allowed");
+  r = await call({ action: "sweep", key: KEY }, { ct: "text/plain" });
+  check("JSON 以外は 415", r.code === 415);
+  r = await call({ action: "sweep", key: KEY }, { method: "OPTIONS" });
+  check("OPTIONS は 403（プリフライトを通さない）", r.code === 403);
+  check("CORS 応答ヘッダを付けない", !r.headers["access-control-allow-origin"]);
+  check("no-store を付ける", String(r.headers["cache-control"]) === "no-store");
+
+  // --- 鍵（★ 無認証で RTDB へ1往復も起こさないこと）---
+  reset();
+  delete process.env.DEVICE_SWEEP_KEY;
+  r = await call({ action: "sweep", key: KEY });
+  check("鍵が未設定なら 503 sweep_not_configured",
+    r.code === 503 && r.body.error === "sweep_not_configured");
+  check("★ 鍵が未設定なら RTDB へ1往復も起こさない（レート制限すら走らせない）",
+    GCALLS.get.length === 0 && GCALLS.patch.length === 0 && GCALLS.put.length === 0);
+
+  reset();
+  process.env.DEVICE_SWEEP_KEY = KEY;
+  r = await call({ action: "sweep", key: "x".repeat(40) });
+  check("鍵が違えば 403", r.code === 403 && r.body.error === "forbidden");
+  check("★ 鍵が違えば RTDB へ1往復も起こさない",
+    GCALLS.get.length === 0 && GCALLS.patch.length === 0);
+  check("鍵が違えば LINE も送らない", GCALLS.http.length === 0);
+  r = await call({ action: "sweep" });
+  check("鍵なしも 403", r.code === 403);
+  check("応答に鍵の値を含めない", JSON.stringify(r.body).indexOf(KEY) < 0);
+
+  // --- 端末0台（設定直後の確認に使う応答）---
+  reset();
+  r = await call({ action: "sweep", key: KEY });
+  check("正しい鍵なら 200", r.code === 200 && r.body.ok === true);
+  check("応答は件数だけ（端末トークン・座標・施設名を返さない）",
+    r.body.devices === 0 && r.body.sent === 0 && r.body.confirmed === 0
+    && JSON.stringify(r.body).indexOf("token") < 0
+    && JSON.stringify(r.body).indexOf("lat") < 0);
+  check("端末0台なら LINE を送らない", GCALLS.http.length === 0);
+  check("鍵が通ったあとにレート制限を数える", GCALLS.patch.length >= 1);
+
+  // --- ★ 本題: 沈黙した端末を、管理画面を開かずに確定させて LINE を送る ---
+  reset();
+  const now = Date.now();
+  GDB["devmon/facilities"] = {};
+  GDB["devmon/facilities"][fk] =
+    { name: "ミュゲの泉", lat: 34.46, lng: 135.37, radiusM: 150, enabled: true };
+  GDB["devmon/devices"] = {};
+  GDB["devmon/devices"][DEV] = {
+    fkey: fk, state: "pending", pendingSince: now - 200000,
+    lastSeenAt: now - 200000, lastJudgedAt: now - 200000, createdAtMs: now - 900000,
+  };
+  r = await call({ action: "sweep", key: KEY });
+  check("★ 管理画面を開かずに持ち出しを確定した",
+    r.code === 200 && r.body.confirms === 1 && r.body.confirmed === 1);
+  check("LINE を1通だけ送った", GCALLS.http.length === 1);
+  const sentTo = GCALLS.http[0] ? GCALLS.http[0][0] : "";
+  const sentBody = GCALLS.http[0] ? GCALLS.http[0][1] : "";
+  check("送信先は既存の LINE Messaging API push",
+    sentTo === "https://api.line.me/v2/bot/message/push");
+  check("本文が持ち出し検知で、施設名が入る",
+    sentBody.indexOf("持ち出し検知") > 0 && sentBody.indexOf("ミュゲの泉") > 0);
+  const wrote = GCALLS.patch.filter(function (x) { return String(x[0]).indexOf("devices/" + DEV) >= 0; });
+  // ★ 書き込みが無かったとき（＝期待が崩れたとき）に TypeError で落ちないようにする。
+  //   落ちると以降のアサーションが走らず、他の回帰まで隠れる。
+  const w0 = (wrote[0] && wrote[0][1]) || {};
+  check("確定を書き込んだ（state / pendingSince / notifiedAt）",
+    wrote.length === 1 && w0.state === "outside"
+    && w0.pendingSince === null && Number(w0.notifiedAt) > 0);
+  // ★ 送信成功のあとに書く（先に書くと、巻き戻し失敗でアラートが完全に失われる）
+  check("送信より後に確定を書く（取り逃しを作らない）", Object.keys(w0).length === 3);
+
+  // --- 同一持ち出し中は、毎分叩いても2通目を出さない ---
+  // ★ 実装が**実際に書いた差分だけ**を適用する（期待値を上から流し込まない）。
+  //   確定を書けていなければ、次のスイープが再送して下の check が FAIL する＝それが正しい信号。
+  Object.assign(GDB["devmon/devices"][DEV], w0);
+  GCALLS.http.length = 0;
+  for (let i = 0; i < 5; i++) await call({ action: "sweep", key: KEY });
+  check("★ 同一持ち出し中は何回叩いても LINE を送らない", GCALLS.http.length === 0);
+
+  // --- 範囲内へ戻ったあとの再持ち出しでは再通知する ---
+  GDB["devmon/devices"][DEV] = {
+    fkey: fk, state: "pending", pendingSince: now + 600000,
+    lastSeenAt: now + 600000, lastJudgedAt: now + 600000, createdAtMs: now - 900000,
+    notifiedAt: now,                        // 前回の持ち出しの通知（これより継続が新しい）
+  };
+  GCALLS.http.length = 0;
+  r = await call({ action: "sweep", key: KEY }, {});
+  // ★ pendingSince が未来なので、この時点ではまだ確定しない
+  check("再持ち出しの直後は確定しない", GCALLS.http.length === 0 && r.body.confirms === 0);
+  GDB["devmon/devices"][DEV].pendingSince = now - 300000;
+  GDB["devmon/devices"][DEV].lastSeenAt = now - 300000;
+  GDB["devmon/devices"][DEV].lastJudgedAt = now - 300000;
+  GDB["devmon/devices"][DEV].notifiedAt = now - 900000;   // 前回通知は今の継続より古い
+  r = await call({ action: "sweep", key: KEY });
+  check("★ 復帰後の再持ち出しでは再通知する",
+    GCALLS.http.length === 1 && r.body.confirmed === 1);
+
+  // --- 監視OFF・基準位置未設定では通知しない（フェイルクローズ）---
+  GDB["devmon/facilities"][fk].enabled = false;
+  GDB["devmon/devices"][DEV] = {
+    fkey: fk, state: "pending", pendingSince: now - 400000,
+    lastSeenAt: now - 400000, lastJudgedAt: now - 400000, createdAtMs: now - 900000,
+  };
+  GCALLS.http.length = 0;
+  r = await call({ action: "sweep", key: KEY });
+  check("監視OFFの施設は確定しない", GCALLS.http.length === 0 && r.body.confirms === 0);
+  GDB["devmon/facilities"][fk] = { name: "ミュゲの泉", enabled: true, radiusM: 150 };
+  r = await call({ action: "sweep", key: KEY });
+  check("基準位置が未設定の施設は確定しない", GCALLS.http.length === 0 && r.body.confirms === 0);
+
+  // --- ★ LINE は送れたが確定の書き込みだけが失敗したときに、毎分再送しないこと ---
+  //   持ち出し検知は「送信できてから確定を書く」＝取り逃しより重複を選ぶ設計なので、
+  //   書き込みだけが失敗すると sweepPlan の抑止条件が変わらず、次のスイープが送り直す。
+  //   定期実行が1分間隔なので、放置すると1端末あたり1,440通/日になりうる。
+  //   LINE の push 枠は朝の未打刻通知と同じなので、枠を食い潰すと業務通知まで沈黙する。
+  {
+    reset();
+    const t = Date.now();
+    GDB["devmon/facilities"] = {};
+    GDB["devmon/facilities"][fk] =
+      { name: "ミュゲの泉", lat: 34.46, lng: 135.37, radiusM: 150, enabled: true };
+    GDB["devmon/devices"] = {};
+    GDB["devmon/devices"][DEV] = {
+      fkey: fk, state: "pending", pendingSince: t - 200000,
+      lastSeenAt: t - 200000, lastJudgedAt: t - 200000, createdAtMs: t - 900000,
+    };
+    // 端末レコードへの書き込みだけを失敗させる（レート制限のカウンタは成功させる）
+    GFAIL.patchIf = function (p) { return p.indexOf("devmon/devices/") >= 0; };
+    // ★ 意図的に失敗させるので、実装の console.error でテスト出力が埋まらないよう一時的に黙らせる。
+    //   （実装のログ出力そのものは変えていない。この区間を抜けたら必ず戻す。）
+    const _err = console.error;
+    console.error = function () {};
+    try {
+    let rr = await call({ action: "sweep", key: KEY });
+    check("確定が書けなくても LINE は送る（取り逃しを作らない）",
+      rr.code === 200 && GCALLS.http.length === 1);
+    check("確定が書けていないので state は pending のまま",
+      String(GDB["devmon/devices"][DEV].state) === "pending");
+
+    // ★ 次のスイープ（1分後に相当）。同じ継続なので LINE を送り直してはならない。
+    GCALLS.http.length = 0;
+    rr = await call({ action: "sweep", key: KEY });
+    check("★ 同じ継続の持ち出しを毎分送り直さない", GCALLS.http.length === 0);
+    check("送らないだけで、確定の書き込みはやり直す",
+      GCALLS.patch.filter(function (x) { return String(x[0]).indexOf("devmon/devices/") >= 0; }).length >= 2);
+    for (let i = 0; i < 20; i++) await call({ action: "sweep", key: KEY });
+    check("★ 20回叩いても送り直さない（LINE の枠を食い潰さない）", GCALLS.http.length === 0);
+
+    // ★ ただし**別の持ち出し**（pendingSince が違う）は必ず通す。
+    //   抑止のキーを deviceId だけにすると、復帰後の再持ち出しを取りこぼす。
+    GDB["devmon/devices"][DEV].pendingSince = t - 600000;
+    GDB["devmon/devices"][DEV].lastJudgedAt = t - 600000;
+    GDB["devmon/devices"][DEV].lastSeenAt = t - 600000;
+    GCALLS.http.length = 0;
+    rr = await call({ action: "sweep", key: KEY });
+    check("★ 別の持ち出し（継続が違う）は抑止しない", GCALLS.http.length === 1);
+
+    // 書き込みが復活したら確定できる
+    GFAIL.patchIf = null;
+    GDB["devmon/devices"][DEV].pendingSince = t - 900000;
+    GDB["devmon/devices"][DEV].lastJudgedAt = t - 900000;
+    GDB["devmon/devices"][DEV].lastSeenAt = t - 900000;
+    GCALLS.http.length = 0;
+    rr = await call({ action: "sweep", key: KEY });
+    check("書き込みが復活すれば確定できる",
+      GCALLS.http.length === 1 && rr.body.confirmed === 1);
+
+    // ★★ LINE の**送信が失敗した**ときは抑止してはならない。抑止すると、
+    //   そのインスタンスが生きているあいだ通知が出ず＝取り逃しになる。
+    //   （抑止して良いのは「既に届いた同一内容」だけ。）
+    GFAIL.httpStatus = 500;
+    GDB["devmon/devices"][DEV] = {
+      fkey: fk, state: "pending", pendingSince: t - 1200000,
+      lastSeenAt: t - 1200000, lastJudgedAt: t - 1200000, createdAtMs: t - 1800000,
+    };
+    GCALLS.http.length = 0;
+    rr = await call({ action: "sweep", key: KEY });
+    check("送信が失敗したら確定しない", GCALLS.http.length === 1 && rr.body.confirmed === 0);
+    check("送信が失敗したら state は pending のまま",
+      String(GDB["devmon/devices"][DEV].state) === "pending");
+    GFAIL.httpStatus = 200;
+    GCALLS.http.length = 0;
+    rr = await call({ action: "sweep", key: KEY });
+    check("★ 送信が失敗した持ち出しは、次のスイープで必ず送り直す（取り逃さない）",
+      GCALLS.http.length === 1 && rr.body.confirmed === 1);
+
+    } finally {
+      // ★ ここを straight-line にしてはならない。区間内で例外が出たときに console.error が
+      //   差し替わったまま残り、末尾の .catch のエラー表示まで飲まれて原因が見えなくなる。
+      GFAIL.patchIf = null;
+      GFAIL.httpStatus = 0;
+      console.error = _err;
+    }
+  }
+
+  // --- 他 action への影響（鍵で端末認証を迂回できない）---
+  reset();
+  r = await call({ action: "nope", key: KEY });
+  check("未知の action は 400 bad_action", r.code === 400 && r.body.error === "bad_action");
+  r = await call({ action: "report", deviceId: DEV, deviceToken: KEY });
+  check("★ sweep の鍵で report は通らない（端末トークンが必要）", r.code === 403);
+  r = await call({ action: "register", code: "AAAAAAAA", key: KEY });
+  check("★ sweep の鍵で register も通らない", r.code === 403);
+  check("register / report で LINE は送られない", GCALLS.http.length === 0);
+}
+
 // ===== 結果 =====
-devwatchUiSection().then(function () {
+exitMemSection()
+  .then(function () { return devwatchUiSection(); })
+  .then(function () { return devReportHandlerSection(); }).then(function () {
   console.log("\n====================================");
   console.log("  PASS " + pass + " / FAIL " + fail);
   console.log("====================================");

@@ -392,6 +392,11 @@ function sweepPlan(devices, nowMs, cfg, facilities) {
   const confirms = [], stales = [], unjudged = [];
 
   for (const id of Object.keys(map)) {
+    // ★ 形式が不正なキーは対象にしない（markDevices と対称にする）。
+    //   patchDevice は不正な ID で必ず throw するため、confirms へ入れると
+    //   「LINE は送れるが確定は永久に書けない」＝**毎回のスイープで再送**になる。
+    //   定期実行が1分間隔なので、1件混ざるだけで1日1,440通の通知になりうる。
+    if (!isDeviceId(id)) continue;
     const d = map[id];
     if (!d || typeof d !== "object") continue;
     if (d.revoked === true) continue;
@@ -630,10 +635,52 @@ async function markDevices(items, field, value) {
 }
 
 /**
- * スイープ。端末の報告時と管理画面の取得時に呼ぶ。
+ * 「この継続についての持ち出し通知は、このインスタンスから既に送れている」記録。
  *
- * ★ 定期実行（cron）は持たない。したがって「Exit を1回送った直後に沈黙した端末」は、
- *   他の端末の報告か管理画面の表示があるまで確定されないことがある（AGENTS.md に明記）。
+ * ★★ なぜ要るか。持ち出し検知は「送信できてから確定（`state`/`notifiedAt`）を書く」
+ *   ＝取り逃しより重複を選ぶ設計である。そのため **LINE は送れたのに確定の書き込みだけが
+ *   失敗した**場合、`sweepPlan` の抑止条件（`notified <= since`）が変わらないので
+ *   次のスイープが同じ通知を送り直す。定期実行が1分間隔になったことで、これが
+ *   最悪 1端末あたり 1,440通/日になりうる。LINE の push 枠は朝の未打刻通知
+ *   （`scripts/morning-check.js`）と**同じ資格情報・同じ枠**なので、枠を食い潰すと
+ *   業務上より重い通知まで沈黙する。
+ *
+ * ★ キーは `deviceId + "@" + pendingSince`（＝継続の同一性）にする。
+ *   **別の持ち出しは必ず `pendingSince` が違う**ので、復帰後の再持ち出しを取りこぼさない。
+ *   「すでに管理者へ届いた同一内容」だけを抑止するので、通知の喪失にはならない。
+ * ★ これは保険であって正本ではない（インスタンスが入れ替われば失われる）。
+ *   正本は RTDB の `notifiedAt` のままにする。
+ */
+const EXIT_SENT_TTL_MS = 60 * 60 * 1000;
+const EXIT_SENT_MAX = 200;
+const _exitSent = new Map();
+function exitSentRecently(key, nowMs) {
+  const at = _exitSent.get(key);
+  return typeof at === "number" && nowMs - at < EXIT_SENT_TTL_MS;
+}
+function markExitSent(key, nowMs) {
+  // 古い記録を捨ててから足す（無制限に増やさない）。
+  for (const [k, at] of _exitSent) {
+    if (nowMs - at >= EXIT_SENT_TTL_MS) _exitSent.delete(k);
+  }
+  while (_exitSent.size >= EXIT_SENT_MAX) {
+    const oldest = _exitSent.keys().next();
+    if (oldest.done) break;
+    _exitSent.delete(oldest.value);
+  }
+  _exitSent.set(key, nowMs);
+}
+
+/**
+ * スイープ。次の3つの機会に呼ぶ。**判定の実装はここだけ**（二重実装を作らない）。
+ *
+ *   ① 外部スケジューラからの定期実行（1分間隔・`POST /api/device-report` の action:"sweep"）
+ *      ← これが主経路。管理画面を誰も開かなくても確定・通知されるのはこれによる。
+ *   ② 端末の報告時（`SWEEP_MIN_INTERVAL_MS` で間引く）  ← 保険
+ *   ③ 管理画面の取得時（`/api/device` の bootstrap）      ← 保険
+ *
+ * ★ ②③ を外してはならない。①のスケジューラはリポジトリ外にあり、止まっても
+ *   Actions のように失敗が見えない。二重化しておく（朝の未打刻通知と同じ考え方）。
  * ★ 通知の送信に失敗したときは印を付けない（次の機会にやり直す）。
  */
 async function runSweep(facilities, devices, nowMs, settings) {
@@ -649,10 +696,21 @@ async function runSweep(facilities, devices, nowMs, settings) {
   // 持ち出しの確定は1件ずつ通知する（どの施設かを即座に伝えるため）。件数は上限で縛る。
   for (const it of plan.confirms.slice(0, SWEEP_CONFIRM_MAX)) {
     jobs.push((async function () {
+      const key = it.deviceId + "@" + it.since;
+      if (exitSentRecently(key, nowMs)) {
+        // ★ この継続の LINE は既に届いている（確定の書き込みだけが失敗した）。
+        //   送信は繰り返さず、書き込みのやり直しだけを行う。
+        try {
+          await patchDevice(it.deviceId, confirmPatch(nowMs));
+          confirmed++;
+        } catch (e) { console.error("[device] confirm patch retry failed"); }
+        return 0;
+      }
       const ok = await sendLine(buildMessage("exit", {
         facilityName: facOf(it.dev).name, atMs: nowMs,
       }));
       if (!ok) return 0;                    // 印を付けない＝次の機会に再送
+      markExitSent(key, nowMs);
       confirmed++;
       try {
         await patchDevice(it.deviceId, confirmPatch(nowMs));

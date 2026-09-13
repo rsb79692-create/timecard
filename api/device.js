@@ -83,7 +83,7 @@ async function handleBootstrap() {
   const [settings, facilities, devices] = await Promise.all([
     loadSettings(), D.loadFacilities(), D.loadDevices(),
   ]);
-  // ★ 定期実行（cron）を持たないため、管理画面を開いた時点でも評価する。
+  // ★ 定期実行（action:"sweep"）が止まったときの保険として、管理画面を開いた時点でも評価する。
   //   確定待ちの持ち出し・受信途絶・判定できていない端末をここで拾う。
   //   ＝この読み取りは LINE 送信と書き込みを伴う（bootstrap を純粋な読取として扱わない）。
   //   失敗しても画面表示は妨げない（通知できなかっただけで設定は正しく返す）。
