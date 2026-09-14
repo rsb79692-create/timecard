@@ -5884,7 +5884,7 @@ function _renderInner(){
       devWatchRefreshMasterIndex();
       var locItems=masterFacilities.map(function(f,i){
         var facUrl="https://rsb79692-create.github.io/timecard/?token="+encodeURIComponent(f.token||"");
-        return '<div style="border-bottom:1px solid #f3f4f6;padding:10px 0;">'
+        return '<div style="border-bottom:2px solid #94a3b8;padding:14px 0;">'
           +'<div style="display:flex;justify-content:space-between;align-items:flex-start;">'
           +'<div><div style="font-size:.95rem;font-weight:700;color:#0f172a;">'+esc(f.name)+'</div>'
           // 施設トークンは打刻URLの資格情報。デモ画面では値もURLもコピー導線も出さない
@@ -14298,7 +14298,7 @@ function devWatchFacilityHtml(name){
   var key=devWatchNorm(name);
   var st=devWatchStatusLabel(key);
   var open=!!devWatch.open[key];
-  var h='<div style="margin-top:8px;border-top:1px dashed #e5e7eb;padding-top:8px;">'
+  var h='<div style="margin-top:8px;border-top:1px dashed #b6c0cb;padding-top:8px;">'
     +'<button class="btn-dw-toggle" data-key="'+esc(key)+'" style="background:none;border:none;padding:0;'
     +'font-size:12px;font-weight:700;color:#475569;cursor:pointer;font-family:inherit;'
     +'text-align:left;white-space:normal;">'
@@ -14369,7 +14369,7 @@ function devWatchFacilityHtml(name){
       // ★ 1端末＝2段に固定する。1行へ詰めると 320px では要素が3〜5行へ散り、
       //   「（できていません）」が次の端末の行に属するように読める（壊れている監視を正常と読む）。
       //   既存の有給取得履歴と同じ「1件＝1〜2行の縦型」に揃える。
-      h+='<div style="padding:6px 0;border-bottom:1px solid #e5e7eb;font-size:12px;color:#0f172a;">'
+      h+='<div style="padding:6px 0;border-bottom:1px solid #d5dce4;font-size:12px;color:#0f172a;">'
         +'<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
         // ★ label / platform は端末アプリの申告値（最大30/20文字）。折返しを許さないと
         //   区切りの無い長い文字列で管理画面に横スクロールが出る。
