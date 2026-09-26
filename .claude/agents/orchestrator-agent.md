@@ -35,7 +35,7 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 - **staged ファイルが 0 件なら ship を開始しない**
 - **依頼範囲外の index.html を変更しない**（依頼の実装に必要な変更は共通 `RULES.md`「実装ループ」で進める）
 - **database.rules.json は変更しない**
-- **sw.js の変更は CACHE_NAME バージョンアップとセットで確認**
+- **sw.js を変えるときは CACHE_NAME を必ず上げる**（`AGENTS.md` 禁止事項 8）
 - **GitHub Actions ワークフローは変更しない**
 - **安全に判断できず結果が大きく変わる場合は、編集せず停止してユーザーに報告**（迷うだけで止まらない）
 - **review-agent / qa-agent の「要修正」では停止しない。** 修正して影響する検証を再実行する（共通 `RULES.md`「実装ループ」。同一原因3回で停止）
@@ -106,7 +106,7 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 | debug-agent が安全上の停止条件で停止（通常の失敗は修正して再試行） | Step 1 完了前 |
 | firebase-agent が安全上の停止条件で停止（Rules・ワークフロー・Secrets の人の確認待ちを含む） | Step 1 完了前（ケース2） |
 | 同一原因の「要修正」が3回目（共通 `RULES.md`「ループ停止」） | qa-agent / review-agent 完了後 |
-| ship-agent が自動で解消できない失敗（権限・認証不足等）で停止 | ship 実行中 |
+| ship-agent が自動で解消できない失敗（権限・認証不足・non-fast-forward 等）で停止 | ship 実行中 |
 | staged に `.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` があり、ユーザーの確認済みの記録が無い | ship-agent 開始前 |
 
 ---

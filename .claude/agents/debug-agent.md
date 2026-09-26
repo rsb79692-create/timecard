@@ -56,7 +56,7 @@ debug-agent（症状確認・コード調査）→ firebase-agent（インフラ
 
 - **依頼範囲外の index.html を変更しない**（依頼の修正に必要な変更は共通 `RULES.md`「実装ループ」で進める）
 - **database.rules.json は変更しない** — Firebase Rules の変更は firebase-agent に委ねる
-- **sw.js の変更は CACHE_NAME バージョンアップとセットで確認**
+- **sw.js を変えるときは CACHE_NAME を必ず上げる**（`AGENTS.md` 禁止事項 8）
 - **GitHub Actions ワークフロー（.github/workflows/）は変更しない**
 - **secrets・API キーはコードに書かない**
 - **安全に判断できず結果が大きく変わる場合は、編集せず停止して報告**（迷うだけで止まらない）
@@ -107,7 +107,7 @@ git diff HEAD~1 HEAD
 
 修正方針（修正対象ファイルと変更内容）を報告する。通常の修正は共通 `RULES.md`「実装ループ」に従って進め、ユーザーの確認を待たない。
 
-- Firebase Rules・GitHub Actions・Secrets の変更が要る場合だけは**必ず停止してユーザーに確認**（`AGENTS.md` 禁止事項 4・6・7）
+- Firebase Rules・GitHub Actions・Secrets の変更、または `AGENTS.md` 禁止事項に当たる操作（本番データ・cron-job.org・削除・副作用のある保守スクリプト）が要る場合だけは**必ず停止してユーザーに確認**
 - sw.js を変更する場合は **CACHE_NAME のバージョンアップが必要** である旨を明示
 
 ## 報告形式
