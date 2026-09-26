@@ -175,11 +175,11 @@ function mkRes() {
   res.end = function () { res.ended = true; return res; };
   return res;
 }
-async function call(h, body) {
+async function call(h, body, ip) {
   const res = mkRes();
   await h({
     method: "POST",
-    headers: { origin: "https://rsb79692-create.github.io", "content-type": "application/json", "x-real-ip": "10.0.0." + ((ipSeq++ % 200) + 1) },
+    headers: { origin: "https://rsb79692-create.github.io", "content-type": "application/json", "x-real-ip": ip || ("10.0.0." + ((ipSeq++ % 200) + 1)) },
     body: body,
   }, res);
   return res;
@@ -315,7 +315,9 @@ async function main() {
     check("いまの管理者PINが無ければ初回設定できない（管理者URLだけの人を除外）", iNoCur.statusCode === 401 && getAt(["authz", "systemAdminPin"]) === null);
     const iBad = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "88888888", currentPin: "11112222", scope: "system" });
     check("いまの管理者PINが違えば 401（何も書かない）", iBad.statusCode === 401 && getAt(["authz", "systemAdminPin"]) === null);
-    const i1 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "11111111", currentPin: "11111111", scope: "system" });
+    const i1 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "11111111", currentPin: "11111111", scope: "system" }, "10.9.9.1");
+    const rc1 = await T.run("honomi", function () { return S.currentCount("admin_ip", S.sanitizeKey("10.9.9.1")); });
+    check("初回設定: 同値で拒否されたときは試行回数を消さない", rc1 >= 1, String(rc1));
     check("管理者PINと同じ値は拒否（何も書かない）", i1.statusCode === 400 && i1.body.error === "same_as_admin_pin" && getAt(["authz", "systemAdminPin"]) === null);
     const i2 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "88888888", currentPin: "11111111", scope: "system" });
     const rec = getAt(["authz", "systemAdminPin"]);
@@ -347,7 +349,7 @@ async function main() {
     // 他社の管理者PIN（mantel を停止した状態でも設定できる）
     const savedMantelPin = getAt(["srv", "mantel", "authz", "adminPin"]);
     const savedMantelMin = getAt(["srv", "mantel", "authz", "adminMinAt"]);
-    setAt(["tenantReg", "mantel", "active"], false);
+    await G.tenantRegSetActive("mantel", false, "test");
     const t0 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "34343434", scope: "tenantAdmin", target: "mantel" });
     check("穂乃味の一般管理者は他社の管理者PINを設定できない", t0.statusCode === 403);
     const t1 = await call(H.adminPinSet, { tenant: "mantel", idToken: mantelSysTok, pin: "34343434", scope: "tenantAdmin", target: "mantel" });
@@ -368,7 +370,7 @@ async function main() {
     check("system_admin は停止中の mantel の管理者PINを設定できる", t4.statusCode === 200 && mrec && S.verifyPinCompat("34343434", mrec).ok && !S.verifyPinCompat("22222222", mrec).ok);
     check("書き先は /srv/mantel/authz だけ（穂乃味の /authz/adminPin は不変）", S.verifyPinCompat("11111111", getAt(["authz", "adminPin"])).ok
       && typeof getAt(["srv", "mantel", "authz", "adminMinAt"]) === "number");
-    setAt(["tenantReg", "mantel", "active"], true);
+    await G.tenantRegSetActive("mantel", true, "test");
     const ml = await call(H.admin, { tenant: "mantel", pin: "34343434" });
     check("設定したPINで mantel の管理者として入れる（再開後）", ml.statusCode === 200);
     const ml2 = await call(H.admin, { tenant: "mantel", pin: "22222222" });
@@ -378,6 +380,88 @@ async function main() {
     // 後続のセクションのために元へ戻す
     setAt(["srv", "mantel", "authz", "adminPin"], savedMantelPin);
     setAt(["srv", "mantel", "authz", "adminMinAt"], savedMantelMin);
+  }
+
+  section("3c. システム管理者PINの変更（sa のセッションだけ・いまのPINの再入力が必須）");
+  {
+    const savedSys = getAt(["authz", "systemAdminPin"]);
+    const savedSysMin = getAt(["authz", "systemAdminMinAt"]);
+    const aged = function (tok) {
+      const pl = JSON.parse(Buffer.from(String(tok).split(".")[1], "base64url").toString("utf8"));
+      return idToken(pl.sub, Object.assign({}, pl, { at: Math.floor(Date.now() / 1000) - 3600 }));
+    };
+    const oldHonomiSys = aged(honomiSysTok);
+    const oldMantelSys = aged(mantelSysTok);
+    const unchanged = function () { return getAt(["authz", "systemAdminPin"]) === savedSys; };
+    const c0 = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "66666666", scope: "system" });
+    check("いまのシステム管理者PINが無ければ変更できない", c0.statusCode === 401 && unchanged());
+    const c1 = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "66666666", currentPin: "11111111", scope: "system" });
+    check("いまのシステム管理者PINが違えば 401（穂乃味の管理者PINでは通らない）", c1.statusCode === 401 && unchanged());
+    const c2 = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "11111111", currentPin: "99999999", scope: "system" }, "10.9.9.2");
+    const rc2 = await T.run("honomi", function () { return S.currentCount("admin_ip", S.sanitizeKey("10.9.9.2")); });
+    check("変更: 同値で拒否されたときは試行回数を消さない", rc2 >= 1, String(rc2));
+    check("穂乃味の管理者PINと同じ値は拒否", c2.statusCode === 400 && c2.body.error === "same_as_admin_pin" && unchanged());
+    const c3 = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "22222222", currentPin: "99999999", scope: "system" });
+    check("各社（mantel）の管理者PINと同じ値は拒否", c3.statusCode === 400 && c3.body.error === "same_as_company_pin" && unchanged());
+    const savedMPin = getAt(["srv", "mantel", "authz", "adminPin"]);
+    setAt(["srv", "mantel", "authz", "adminPin"], { legacy: S.legacyHash("23232323") });
+    const c3b = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "23232323", currentPin: "99999999", scope: "system" });
+    check("旧形式の各社の管理者PINとも同値を拒否", c3b.statusCode === 400 && c3b.body.error === "same_as_company_pin" && unchanged());
+    setAt(["srv", "mantel", "authz", "adminPin"], savedMPin);
+    const c4 = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "99999999", currentPin: "99999999", scope: "system" });
+    check("いまと同じ値は拒否", c4.statusCode === 400 && c4.body.error === "same_as_current" && unchanged());
+    const c5 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "66666666", currentPin: "11111111", scope: "system" });
+    check("sa の無い穂乃味の管理者は変更できない（設定済みなので 409）", c5.statusCode === 409 && unchanged());
+    const c6 = await call(H.adminPinSet, { tenant: "mantel", idToken: mantelAdminTok, pin: "66666666", currentPin: "99999999", scope: "system" });
+    check("mantel の管理者は変更できない", c6.statusCode === 403 && unchanged());
+    // 変更前の状態で、古いセッションがまだ有効であること（失効の検査が意味を持つための前提）
+    const pre = await call(H.admin, { op: "tenants", idToken: oldHonomiSys });
+    check("変更前は古いシステム管理者セッションも有効", pre.statusCode === 200);
+    const ok = await call(H.adminPinSet, { idToken: oldHonomiSys, pin: "66666666", currentPin: "99999999", scope: "system" });
+    const rec = getAt(["authz", "systemAdminPin"]);
+    check("sa のセッションはいまのPINを再入力して変更できる", ok.statusCode === 200 && rec && S.verifyPinCompat("66666666", rec).ok);
+    check("保存値に平文の PIN を含めず、変更元を残す", JSON.stringify(rec).indexOf("66666666") < 0 && rec.setBy && rec.setBy.via === "change");
+    check("systemAdminMinAt を進める", typeof getAt(["authz", "systemAdminMinAt"]) === "number");
+    const r1 = await call(H.admin, { op: "tenants", idToken: oldHonomiSys });
+    check("変更前の穂乃味側のシステム管理者セッションは失効する", r1.statusCode === 403 && r1.body.error === "session_revoked");
+    const r2 = await call(H.admin, { tenant: "mantel", op: "tenants", idToken: oldMantelSys });
+    check("変更前の他社側のシステム管理者セッションも失効する", r2.statusCode === 403 && r2.body.error === "session_revoked");
+    const n1 = await call(H.admin, { scope: "system", pin: "66666666" });
+    const n2 = await call(H.admin, { scope: "system", pin: "99999999" });
+    check("新しいPINで入れて、古いPINでは入れない", n1.statusCode === 200 && n2.statusCode === 401);
+    const n3 = await call(H.admin, { op: "tenants", idToken: n1.body && exchange(n1.body.customToken) });
+    check("変更後に入り直したセッションは有効", n3.statusCode === 200);
+    check("穂乃味・mantel の管理者PINは変わらない", S.verifyPinCompat("11111111", getAt(["authz", "adminPin"])).ok
+      && S.verifyPinCompat("22222222", getAt(["srv", "mantel", "authz", "adminPin"])).ok);
+    setAt(["authz", "systemAdminPin"], savedSys);
+    setAt(["authz", "systemAdminMinAt"], savedSysMin);
+
+    // 他社（mantel）の ?c=mantel&sys で入ったセッションからも変更できる（書き先は穂乃味の /authz）
+    const ms = await call(H.admin, { tenant: "mantel", scope: "system", pin: "99999999" });
+    const msTok = ms.body && exchange(ms.body.customToken);
+    const mc = await call(H.adminPinSet, { tenant: "mantel", idToken: msTok, pin: "67676767", currentPin: "99999999", scope: "system" });
+    check("他社側のシステム管理者セッションからも変更でき、書き先は穂乃味の /authz", mc.statusCode === 200
+      && S.verifyPinCompat("67676767", getAt(["authz", "systemAdminPin"])).ok
+      && getAt(["srv", "mantel", "authz", "systemAdminPin"]) === null);
+    setAt(["authz", "systemAdminPin"], savedSys);
+    setAt(["authz", "systemAdminMinAt"], savedSysMin);
+
+    // システム管理者でログイン中は、既存の「管理者PIN変更」でもシステム管理者PINと同じ値にできない
+    const hs = await call(H.admin, { scope: "system", pin: "99999999" });
+    const hsTok = hs.body && exchange(hs.body.customToken);
+    const savedAdmin = getAt(["authz", "adminPin"]);
+    const d1 = await call(H.adminPinSet, { idToken: hsTok, pin: "99999999" });
+    check("sa の管理者PIN変更で、システム管理者PINと同じ値は拒否（穂乃味の管理者PINは不変）",
+      d1.statusCode === 400 && d1.body.error === "same_as_system_pin" && getAt(["authz", "adminPin"]) === savedAdmin);
+    const savedM = getAt(["srv", "mantel", "authz", "adminPin"]);
+    const d2 = await call(H.adminPinSet, { tenant: "mantel", idToken: msTok, pin: "99999999" });
+    check("他社側でも同じ（mantel の管理者PINは不変）", d2.statusCode === 400 && d2.body.error === "same_as_system_pin"
+      && getAt(["srv", "mantel", "authz", "adminPin"]) === savedM);
+    const savedMin = getAt(["authz", "adminMinAt"]);
+    const d3 = await call(H.adminPinSet, { idToken: honomiAdminTok, pin: "99999999" });
+    check("sa の無い管理者には照合しない（同値でも 200。応答からシステム管理者PINを推測させない）", d3.statusCode === 200);
+    setAt(["authz", "adminPin"], savedAdmin);
+    setAt(["authz", "adminMinAt"], savedMin === null ? null : savedMin);
   }
 
   section("4. 別会社のトークンで API を操作できない");
@@ -531,7 +615,7 @@ async function main() {
     await new Promise(function (r) { setTimeout(r, 5200); });
     const a7 = await call(H.admin, { tenant: "mantel", pin: "22222222" });
     check("登録簿が未作成の会社は停止扱い（既定で拒否）", a7.statusCode === 403);
-    setAt(["tenantReg", "mantel"], { active: true });
+    await G.tenantRegSetActive("mantel", true, "test");
   }
 
   section("10. 施設端末の定期スイープは会社ごと（無効な会社は回さない）");

@@ -6286,7 +6286,7 @@ function _renderInner(){
       }).join("");
       // 監視設定はサーバ（/devmon）にしかない。マスター管理タブを開いた時点で1度だけ取得する。
       devWatchEnsure();
-      tc=sysTenantsHtml()+sysPinInitHtml()+'<div class="admin-card">'
+      tc=sysTenantsHtml()+sysPinChangeHtml()+sysPinInitHtml()+'<div class="admin-card">'
         +'<div class="admin-title">部門マスター</div>'
         +(deptItems||'<div class="empty">未登録</div>')
         +'<div style="display:flex;gap:8px;margin-top:12px;">'
@@ -6307,7 +6307,8 @@ function _renderInner(){
         // 管理者PIN／管理者トークンはデモ画面には描画しない（値の露出と変更導線を断つ）
         +(demoMode?'':''
         +'<div class="admin-card">'
-        +'<div class="admin-title">管理者PIN設定</div>'
+        // ★ システム管理者でログイン中は、この欄が「その会社の管理者PIN」であることをはっきり書く（システム管理者PINと取り違えない）
+        +'<div class="admin-title">'+(isSystemAdmin?esc((TENANT.legacy?"穂乃味":TENANT.displayName)+"の管理者PIN変更"):'管理者PIN設定')+'</div>'
         +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">状態: <strong style="color:var(--brand);">サーバ側で保管（照合はサーバのみ）</strong></div>'
         +'<div style="display:flex;gap:8px;">'
         +'<input id="new-admin-pin" type="password" placeholder="新しいPIN（数字8桁）" maxlength="8" style="flex:1;">'
@@ -8657,6 +8658,8 @@ function _renderInner(){
           showAlert(r.data&&r.data.error==="session_revoked"
             ?"この管理画面のセッションは無効化されています。\n新しい管理者URLまたは管理者PINで入り直してください"
             :"管理者として認証されていないため変更できません。\n管理者PINで入り直してから操作してください");
+        } else if(r.status===400&&r.data&&r.data.error==="same_as_system_pin"){
+          showAlert("システム管理者PINと同じ値は使えません。別の値にしてください");
         } else if(r.status===503){
           showAlert("認証の準備が完了していないため変更できません");
         } else {
@@ -9747,29 +9750,30 @@ function sysPinModal(title,note,opts,onSubmit){
   var inp='width:100%;padding:10px;border:1px solid #adb5bd;border-radius:2px;font-size:1rem;font-family:inherit;margin-bottom:10px;box-sizing:border-box;';
   var attrs='type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="8"';
   var lbl='display:block;font-size:.85rem;font-weight:700;color:#334155;margin-bottom:4px;';
+  var okLabel=(opts&&opts.okLabel)||"設定する",busyLabel=(opts&&opts.busyLabel)||"設定中…";
   card.innerHTML='<div style="font-size:1rem;font-weight:700;color:#0f172a;margin-bottom:6px;">'+esc(title)+'</div>'
     +(note?'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">'+esc(note)+'</div>':'')
-    +(opts&&opts.needCurrent?'<label style="'+lbl+'">いまの管理者PIN</label><input id="sys-pin-cur" '+attrs+' style="'+inp+'">':'')
-    +'<label style="'+lbl+'">新しいPIN（数字8桁）</label>'
+    +(opts&&opts.needCurrent?'<label style="'+lbl+'">'+esc(opts.currentLabel||"いまの管理者PIN")+'</label><input id="sys-pin-cur" '+attrs+' style="'+inp+'">':'')
+    +'<label style="'+lbl+'">'+esc((opts&&opts.newLabel)||"新しいPIN（数字8桁）")+'</label>'
     +'<input id="sys-pin-a" '+attrs+' style="'+inp+'">'
     +'<input id="sys-pin-b" '+attrs+' placeholder="確認のためもう一度" aria-label="新しいPIN（確認）" style="'+inp+'">'
     +'<div id="sys-pin-err" style="color:#dc2626;font-size:.85rem;min-height:1.2em;margin-bottom:8px;"></div>'
     +'<div style="display:flex;gap:10px;">'
     +'<button id="sys-pin-cancel" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
-    +'<button id="sys-pin-ok" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">設定する</button>'
+    +'<button id="sys-pin-ok" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">'+esc(okLabel)+'</button>'
     +'</div>';
   ov.appendChild(card);document.body.appendChild(ov);
   var busy=false;
   var okBtn=card.querySelector("#sys-pin-ok");
   function close(){if(ov.parentNode)ov.parentNode.removeChild(ov);}
   function err(m){card.querySelector("#sys-pin-err").textContent=m||"";}
-  function setBusy(b){busy=b;okBtn.disabled=b;okBtn.textContent=b?"設定中…":"設定する";okBtn.style.opacity=b?".6":"1";}
+  function setBusy(b){busy=b;okBtn.disabled=b;okBtn.textContent=b?busyLabel:okLabel;okBtn.style.opacity=b?".6":"1";}
   function submit(){
     if(busy)return;
     var ce=card.querySelector("#sys-pin-cur");
     var cur=ce?ce.value.trim():"";
     var a=card.querySelector("#sys-pin-a").value.trim(),b=card.querySelector("#sys-pin-b").value.trim();
-    if(ce&&!/^\d{8}$/.test(cur)){err("いまの管理者PINを数字8桁で入力してください");return;}
+    if(ce&&!/^\d{8}$/.test(cur)){err(((opts&&opts.currentLabel)||"いまの管理者PIN")+"を数字8桁で入力してください");return;}
     if(!/^\d{8}$/.test(a)){err("新しいPINを数字8桁で入力してください");return;}
     if(a!==b){err("新しいPINの2回の入力が一致しません");return;}
     err("");setBusy(true);
@@ -9793,10 +9797,12 @@ function _sysPinErrMsg(r,initial){
   var c=r&&r.data&&r.data.error;
   if(c==="same_as_admin_pin")return "穂乃味の管理者PINと同じ値は使えません。別の値にしてください";
   if(c==="same_as_system_pin")return "システム管理者PINと同じ値は使えません。別の値にしてください";
+  if(c==="same_as_company_pin")return "各社の管理者PINと同じ値は使えません。別の値にしてください";
+  if(c==="same_as_current")return "いまのPINと同じ値です。別の値にしてください";
   if(c==="already_set")return "すでに設定されています";
   if(c==="rate_limited")return "試行回数が多すぎます。しばらく待ってから再度お試しください";
   if(c==="session_revoked")return "この管理画面のセッションは無効です。入り直してから操作してください";
-  if(initial&&r&&r.status===401)return "いまの管理者PINが違います";
+  if(initial&&r&&r.status===401)return (initial===true?"いまの管理者PIN":initial)+"が違います";
   if(r&&r.status===403)return "この操作の権限がありません";
   if(r&&r.status===503)return "認証の準備ができていないため設定できません";
   if(r&&r.status===400)return "入力内容を確認してください";
@@ -9861,6 +9867,30 @@ function sysPinDoneDialog(url){
     +'<button id="sys-pin-done" style="width:100%;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">OK</button>';
   ov.appendChild(card);document.body.appendChild(ov);
   card.querySelector("#sys-pin-done").onclick=function(){if(ov.parentNode)ov.parentNode.removeChild(ov);};
+}
+// システム管理者PINの変更（?sys でログイン中＝sa のときだけ表示。権限の判定はサーバ）
+// ★ いまのシステム管理者PINの再入力が必須。変更すると全社のシステム管理者セッションが失効するので、新しいPINで入り直す。
+function sysPinChangeHtml(){
+  if(!isSystemAdmin||demoMode)return "";
+  return '<div class="admin-card">'
+    +'<div class="admin-title">システム管理者PINを変更</div>'
+    +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">利用会社の管理に使うPINです。各社の管理者PINとは別の値にしてください。</div>'
+    +'<button onclick="sysPinChangeOpen()" style="background:var(--brand);color:#fff;border:none;padding:10px 16px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">変更する</button>'
+    +'</div>';
+}
+function sysPinChangeOpen(){
+  if(!isSystemAdmin)return;
+  sysPinModal("システム管理者PINを変更","変更すると、ほかの端末のシステム管理者ログインは無効になります。",{needCurrent:true,currentLabel:"いまのシステム管理者PIN",newLabel:"新しいシステム管理者PIN（数字8桁）",okLabel:"変更する",busyLabel:"変更中…"},function(v,done){
+    (async function(){
+      var r=await _sysPinPost({pin:v.pin,currentPin:v.currentPin,scope:"system"});
+      if(!r.ok){done(_sysPinErrMsg(r,"いまのシステム管理者PIN"));return;}
+      done("");
+      // 自分のセッションも失効対象なので、新しいPINで張り直す
+      var _re=await establishSession("admin",{pin:v.pin,scope:"system"},12000);
+      showAlert(_re?"システム管理者PINを変更しました。\nほかの端末のシステム管理者ログインは無効になりました。"
+                   :"システム管理者PINを変更しました。\n新しいPINで入り直してください。");
+    })().catch(function(){done("変更できませんでした");});
+  });
 }
 // 他社の管理者PINの設定（穂乃味の ?sys で入ったシステム管理者だけ。停止中の会社にも設定できる）
 function sysTenantPinOpen(id){

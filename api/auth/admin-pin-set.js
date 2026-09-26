@@ -4,7 +4,8 @@
  * 管理者PINを新認証基盤（/authz/adminPin）へ設定・変更する。
  *
  * 入力 : { idToken, pin }   … pin は現行仕様どおり数字8桁
- *        { idToken, pin, scope:"system" }                 … システム管理者PIN（未設定なら穂乃味の管理者が初回設定できる）
+ *        { idToken, pin, scope:"system", currentPin }     … システム管理者PIN（未設定なら穂乃味の管理者がいまの管理者PINで初回設定。
+ *                                                          設定済みなら sa のセッションがいまのシステム管理者PINで変更）
  *        { idToken, pin, scope:"tenantAdmin", target }    … 他社の管理者PIN（システム管理者のみ）
  * 出力 : { ok: true }
  * 失敗 : 401 invalid_credentials / 403 forbidden / 503 not_ready
@@ -126,8 +127,8 @@ module.exports = T.handler(async function handler(req, res) {
         await H.withMinDuration(startedAt, MIN_MS);
         return H.fail(res, 401, H.INVALID);
       }
-      await S.resetCount("admin_ip", ipKey).catch(function () {});
       // 会社管理者PINと同じ値にしない（知る人を分けるため）
+      // ★ 回数制限のリセットは書き込みの成功後に行う（拒否された試行で自分の回数を消させない）
       if (currentPin === pin) {
         await H.withMinDuration(startedAt, MIN_MS);
         return H.fail(res, 400, "same_as_admin_pin");
@@ -140,6 +141,7 @@ module.exports = T.handler(async function handler(req, res) {
         await H.withMinDuration(startedAt, MIN_MS);
         return H.fail(res, 409, "already_set");
       }
+      await S.resetCount("admin_ip", ipKey).catch(function () {});
       console.log("[auth/admin-pin-set] system admin pin initialized by=" + String(claims.sub || "").slice(0, 64)
         + " at=" + (typeof claims.at === "number" ? claims.at : 0) + " cid=" + cid);
       await H.withMinDuration(startedAt, MIN_MS);
@@ -193,16 +195,85 @@ module.exports = T.handler(async function handler(req, res) {
     }
 
     if (body.scope === "system") {
+      // ===== システム管理者PINの変更（sa を持つセッション）=====
+      // ★ いまのシステム管理者PIN（currentPin）の再入力を必須にする（開いたままの画面を他人に使われても変えられない）。
+      //   照合は管理者ログインと同じレート制限の枠（admin_ip / admin_all。穂乃味のコンテキストで数える）。
+      // ★ 穂乃味の管理者PIN・各社の管理者PINと同じ値は拒否（知る人を分ける）。
+      // ★ systemAdminMinAt を進め、変更前に発行された全社のシステム管理者セッションを失効させる。
+      const currentPin = H.str(body.currentPin, 32);
+      if (!/^\d{8}$/.test(currentPin)) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      const ipKey = S.sanitizeKey(H.clientIp(req));
+      const verdict = await T.run("honomi", async function () {
+        const [nIp, nAll] = await Promise.all([
+          S.bumpAndCount("admin_ip", ipKey),
+          S.bumpAndCount("admin_all", "global"),
+        ]);
+        if (nIp > HARD_IP || (nAll > HARD_ALL && nIp > HARD_IP_UNDER_GLOBAL)) return { limited: true };
+        const [sysRec, hoRec] = await Promise.all([
+          G.dbGet(S.AUTHZ + "/systemAdminPin"),
+          G.dbGet(S.AUTHZ + "/adminPin"),
+        ]);
+        const cur = S.verifyPinCompat(currentPin, sysRec && typeof sysRec === "object" && sysRec.dk ? sysRec : null);
+        const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
+        if (throttleMs) await new Promise(function (r) { setTimeout(r, throttleMs); });
+        if (!cur.ok) return { ok: false };
+        // ★ 回数制限のリセットは書き込みの成功後（下）。同値で拒否された試行では回数を消さない
+        if (hoRec && typeof hoRec === "object" && S.verifyPinCompat(pin, hoRec).ok) return { ok: true, same: "same_as_admin_pin" };
+        return { ok: true };
+      });
+      if (verdict.limited) {
+        res.setHeader("Retry-After", "300");
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 429, "rate_limited");
+      }
+      if (!verdict.ok) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      if (verdict.same) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, verdict.same);
+      }
+      // 各社（システム会社以外）の管理者PINと同じ値にしない
+      const others = T.list().filter(function (t) { return !t.system; });
+      const recs = await Promise.all(others.map(function (t) {
+        return T.run(t.id, function () { return G.dbGet(S.AUTHZ + "/adminPin"); });
+      }));
+      if (recs.some(function (r) { return r && typeof r === "object" && S.verifyPinCompat(pin, r).ok; })) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_company_pin");
+      }
+      if (currentPin === pin) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_current");
+      }
+      const rec = S.makePinRecord(pin);
+      rec.setBy = { sub: String(claims.sub || "").slice(0, 64), at: typeof claims.at === "number" ? claims.at : 0, via: "change" };
       await T.run("honomi", function () {
         return G.dbPatchRoot({
-          "authz/systemAdminPin": S.makePinRecord(pin),
+          "authz/systemAdminPin": rec,
           "authz/systemAdminMinAt": Math.floor(Date.now() / 1000),
         });
       });
+      await T.run("honomi", function () { return S.resetCount("admin_ip", ipKey); }).catch(function () {});
+      console.log("[auth/admin-pin-set] system admin pin changed by=" + String(claims.sub || "").slice(0, 64) + " cid=" + cid);
       await H.withMinDuration(startedAt, MIN_MS);
       return res.status(200).json({ ok: true });
     }
 
+    // ★ システム管理者でログイン中（sa）は、この会社の管理者PINをシステム管理者PINと同じ値にしない
+    //   （同じ画面に両方の欄が並ぶため、取り違えで「知る人を分ける」が崩れないように）。
+    //   sa の無い通常の管理者には照合しない（レート制限の無いこの経路をシステム管理者PINの当て先にしない）。
+    if (claims.sa === true) {
+      const sysRec = await T.run("honomi", function () { return G.dbGet(S.AUTHZ + "/systemAdminPin"); });
+      if (sysRec && typeof sysRec === "object" && S.verifyPinCompat(pin, sysRec).ok) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_system_pin");
+      }
+    }
     await G.dbPatchRoot({
       "authz/adminPin": S.makePinRecord(pin),
       "authz/adminMinAt": Math.floor(Date.now() / 1000),
