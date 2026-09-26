@@ -56,7 +56,7 @@ debug-agent（障害対応）→ analyst-agent（影響範囲確認）→ review
 - **sw.js は変更しない** — Service Worker の読み取り調査のみ
 - **GitHub Actions ワークフロー（.github/workflows/）は変更しない**
 - **このAgentはコードを変更しない** — 調査・分析・提示のみ
-- **判断に迷ったら停止して報告**
+- **安全に判断できず結果が大きく変わる場合は停止して報告**（迷うだけで止まらない。共通 `RULES.md`「安全」）
 
 ## 調査手順
 

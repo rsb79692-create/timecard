@@ -54,12 +54,12 @@ debug-agent（症状確認・コード調査）→ firebase-agent（インフラ
 
 ## プロジェクト固有ルール（厳守）
 
-- **index.html の変更は方針確認後のみ実施**
+- **依頼範囲外の index.html を変更しない**（依頼の修正に必要な変更は共通 `RULES.md`「実装ループ」で進める）
 - **database.rules.json は変更しない** — Firebase Rules の変更は firebase-agent に委ねる
 - **sw.js の変更は CACHE_NAME バージョンアップとセットで確認**
 - **GitHub Actions ワークフロー（.github/workflows/）は変更しない**
 - **secrets・API キーはコードに書かない**
-- **判断に迷ったら編集せず停止して報告**
+- **安全に判断できず結果が大きく変わる場合は、編集せず停止して報告**（迷うだけで止まらない）
 
 ## 調査手順
 
@@ -105,10 +105,9 @@ git diff HEAD~1 HEAD
 
 ### Step 5: 修正方針の提示
 
-修正は実施する前に必ずユーザーに確認する:
+修正方針（修正対象ファイルと変更内容）を報告する。通常の修正は共通 `RULES.md`「実装ループ」に従って進め、ユーザーの確認を待たない。
 
-- 修正対象ファイルと変更内容を明示
-- Firebase Rules・sw.js・GitHub Actions が絡む場合は**必ず停止してユーザーに確認**
+- Firebase Rules・sw.js・GitHub Actions が絡む場合だけは**必ず停止してユーザーに確認**
 - sw.js を変更する場合は **CACHE_NAME のバージョンアップが必要** である旨を明示
 
 ## 報告形式

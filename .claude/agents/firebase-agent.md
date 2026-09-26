@@ -51,7 +51,7 @@ index.html の機能ロジックは debug-agent に委ね、firebase-agent は *
 - **index.html は変更しない** — 機能ロジックは debug-agent の担当
 - **GitHub Actions ワークフロー（.github/workflows/）は変更前にユーザーに確認**
 - **LINE_CHANNEL_ACCESS_TOKEN・FIREBASE_API_KEY などの secrets は出力しない**
-- **判断に迷ったら編集せず停止してユーザーに報告**
+- **安全に判断できず結果が大きく変わる場合は、編集せず停止してユーザーに報告**（迷うだけで止まらない。Rules・ワークフロー・Secrets の変更前確認は上記のとおり必須）
 
 ## 調査手順
 

@@ -52,16 +52,16 @@ ship-agent は **qa-agent の総合判定「出荷可」を確認してから実
 - **database.rules.json は変更しない**
 - **sw.js は変更しない**（sw.js を変更する場合は debug-agent で実施済みであること）
 - **GitHub Actions ワークフローは変更しない**
-- **判断に迷ったら停止してユーザーに確認**
+- **安全に判断できず結果が大きく変わる場合は停止してユーザーに確認**（迷うだけで止まらない。共通 `RULES.md`「安全」）
 
 ## 前提確認（実行前チェック）
 
 Ship を開始する前に必ず確認する:
 
 1. **staged ファイルの有無** — `git diff --cached --name-only` で確認
-   - 0件なら `git add <ファイル>` をユーザーに依頼して停止
-2. **commit message** — ユーザーから受け取る（例: `fix: 打刻処理の修正`）
-   - 未指定なら必ず聞く
+   - 0件なら ship せず、依頼元（Claude Code 本体）へ返す。stage は依頼元が触ったパスを指定して行う（`git add -A` / `.` は使わない）
+2. **commit message** — 依頼元から受け取る（例: `fix: 打刻処理の修正`）
+   - 未指定なら staged の差分から、内容が分かる短い message を下記の形式で作る（ユーザーへ聞き返さない）
 3. **qa-agent の判定** — 直前に qa-agent を実行している場合は結果を確認
    - 「要修正」なら ship せず停止
 
@@ -74,8 +74,9 @@ git diff --cached --name-only
 git diff --cached --stat
 ```
 
-- 0件 → ユーザーに `git add` を依頼して停止
-- 件数確認 → ユーザーに内容を報告して確認を求める
+- 0件 → ship せず依頼元へ返す
+- 件数確認 → 依頼範囲外のファイル（作業開始前から在った他の差分など）が含まれていないことを確かめて進む。含まれていたら停止して報告する
+- **`.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` が staged にあり、ユーザーが確認済みである記録（この作業の中での明示の了承）が無い場合は停止して報告する**（自律出荷に含めない。`AGENTS.md` 禁止事項 6・7）
 
 ### Step 2: commit の実行
 

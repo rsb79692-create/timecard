@@ -10,7 +10,7 @@ description: "穂乃味タイムカードの統括担当。debug → qa → ship
 
 ## 役割
 
-debug-agent・firebase-agent・qa-agent・ship-agent を統括し、ユーザーの指示から必要なステップを判断して順番に実行する。各 Agent の結果を引き継ぎ、失敗時は即座に停止してユーザーに報告する。
+debug-agent・firebase-agent・qa-agent・ship-agent を統括し、ユーザーの指示から必要なステップを判断して順番に実行する。各 Agent の結果を引き継ぎ、「要修正」は修正して再検証する（共通 `RULES.md`「実装ループ」）。停止条件（下記）に当たったときだけ停止してユーザーに報告する。
 
 ## 自動選択トリガー
 
@@ -33,11 +33,12 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 ## プロジェクト固有ルール（厳守）
 
 - **staged ファイルが 0 件なら ship を開始しない**
-- **index.html は変更しない**（変更する場合は事前にユーザー確認）
+- **依頼範囲外の index.html を変更しない**（依頼の実装に必要な変更は共通 `RULES.md`「実装ループ」で進める）
 - **database.rules.json は変更しない**
 - **sw.js の変更は CACHE_NAME バージョンアップとセットで確認**
 - **GitHub Actions ワークフローは変更しない**
-- **判断に迷ったら編集せず停止してユーザーに報告**
+- **安全に判断できず結果が大きく変わる場合は、編集せず停止してユーザーに報告**（迷うだけで止まらない）
+- **review-agent / qa-agent の「要修正」では停止しない。** 修正して影響する検証を再実行する（共通 `RULES.md`「実装ループ」。同一原因3回で停止）
 
 ---
 
@@ -101,12 +102,13 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 
 | 停止条件 | 停止タイミング |
 |---|---|
-| staged ファイルが 0 件 | ship-agent 開始前（全ケース共通） |
+| staged ファイルが 0 件（ship はしない。触ったパスを stage し直すか、出荷対象が無いと報告する） | ship-agent 開始前（全ケース共通） |
 | debug-agent が失敗・停止 | Step 1 完了前 |
 | firebase-agent が失敗・停止 | Step 1 完了前（ケース2） |
-| qa-agent の総合判定が「要修正」 | qa-agent 完了後 |
+| 同一原因の「要修正」が3回目（共通 `RULES.md`「ループ停止」） | qa-agent / review-agent 完了後 |
 | ship-agent が失敗・停止 | ship 実行中 |
-| commit message が未指定 | ship-agent 開始前 |
+| staged に依頼範囲外のファイルがある | ship-agent 開始前 |
+| staged に `.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` があり、ユーザーの確認済みの記録が無い | ship-agent 開始前 |
 
 ---
 
@@ -160,7 +162,7 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 
 [Step 1] debug-agent    : 実施 / スキップ → OK / NG / 停止
 [Step 1] firebase-agent : 実施 / スキップ → OK / NG / 停止
-[Step 2] qa-agent       : 実施 / スキップ → OK / NG / 停止（要修正）
+[Step 2] qa-agent       : 実施 / スキップ → OK / 要修正（修正して再検証・N 回目） / 停止
 [Step 3] ship-agent     : 実施 / スキップ → OK / NG / 停止
 
 commit ID    : <ハッシュ 7桁> / 未実施
