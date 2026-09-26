@@ -116,7 +116,7 @@ $env:DRY_RUN="true"; node scripts/morning-check.js
 ```
 
 - 成功: OK と記録（Firebase 接続・判定ロジックの出力を確認）
-- 失敗: エラー内容を全文取得して停止・報告
+- 失敗: エラー内容を全文記録して「要修正」とする（依頼元が修正して再検証する）
 
 **注意:** `FIREBASE_API_KEY` と `FIREBASE_DATABASE_URL` が環境変数に設定されていない場合はスキップして報告する。
 

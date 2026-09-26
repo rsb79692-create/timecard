@@ -103,11 +103,10 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 | 停止条件 | 停止タイミング |
 |---|---|
 | staged ファイルが 0 件（ship はしない。触ったパスを stage し直すか、出荷対象が無いと報告する） | ship-agent 開始前（全ケース共通） |
-| debug-agent が失敗・停止 | Step 1 完了前 |
-| firebase-agent が失敗・停止 | Step 1 完了前（ケース2） |
+| debug-agent が安全上の停止条件で停止（通常の失敗は修正して再試行） | Step 1 完了前 |
+| firebase-agent が安全上の停止条件で停止（Rules・ワークフロー・Secrets の人の確認待ちを含む） | Step 1 完了前（ケース2） |
 | 同一原因の「要修正」が3回目（共通 `RULES.md`「ループ停止」） | qa-agent / review-agent 完了後 |
-| ship-agent が失敗・停止 | ship 実行中 |
-| staged に依頼範囲外のファイルがある | ship-agent 開始前 |
+| ship-agent が自動で解消できない失敗（権限・認証不足等）で停止 | ship 実行中 |
 | staged に `.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` があり、ユーザーの確認済みの記録が無い | ship-agent 開始前 |
 
 ---
