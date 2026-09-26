@@ -178,6 +178,8 @@ function str(v, max) {
 
 module.exports = {
   ALLOWED_ORIGINS,
+  pickOrigin,
+  setCors,
   guard,
   fail,
   INVALID,

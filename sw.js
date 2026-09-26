@@ -40,7 +40,9 @@ function clientIsTenant(clientUrl, tenant) {
   let u;
   try { u = new URL(clientUrl); } catch (e) { return false; }
   if (u.pathname.indexOf('/timecard/') !== 0) return false;
-  const c = u.searchParams.get('c');
+  // #c=mantel&token=… のハッシュ形式でも開ける（index.html と同じ判定）
+  let c = u.searchParams.get('c');
+  if (c === null && /[&=]/.test(u.hash.replace(/^#/, ''))) c = new URLSearchParams(u.hash.replace(/^#/, '')).get('c');
   return tenant === 'honomi' ? !c : c === tenant;
 }
 

@@ -205,6 +205,11 @@ module.exports = T.handler(async function handler(req, res) {
     if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
 
     if (!allowed) {
+      // 新会社: サーバには PIN が在るのに「登録済み」フラグだけが無い（過去の書き込み失敗）場合に直す。
+      //   直さないと画面は「未登録」のまま、新規登録は 403 を繰り返す。フラグは真偽だけで冪等。
+      if (hasRecord && !legacyTenant) {
+        await setPinFlag(staffName, true).catch(function (e) { console.error("[pin flag repair]", cid, e && e.message); });
+      }
       // 失敗はグローバル次元にも計上する（このカウンタは成功でリセットしない）
       await S.bumpAndCount("pin_all", "global")
         .catch(function (e) { console.error("[rate] bump failed", cid, e && e.message); });

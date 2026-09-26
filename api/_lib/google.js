@@ -392,8 +392,10 @@ async function verifyIdToken(idToken) {
   //   リクエストの会社（body.tenant）とトークンの会社（クレーム c。無ければ穂乃味）が
   //   食い違うトークンは、署名が正しくても無効として扱う。
   //   各 API は verifyIdToken の失敗を 401 にするので、個別の検査漏れが起きない。
+  // ★ 会社コンテキストが無いまま検証を求められたら拒否する（照合できないものは通さない）。
   const ctx = T.peek();
-  if (ctx && T.claimTenantId(payload) !== ctx.id) throw new Error("tenant mismatch");
+  if (!ctx) throw new Error("tenant context missing");
+  if (T.claimTenantId(payload) !== ctx.id) throw new Error("tenant mismatch");
 
   return payload;
 }

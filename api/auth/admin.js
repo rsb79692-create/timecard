@@ -167,9 +167,11 @@ async function handleSystemLogin(req, res, body, startedAt, cid) {
   }
   const ipKey = S.sanitizeKey(H.clientIp(req));
   const verdict = await T.run("honomi", async function () {
+    // ★ 穂乃味の管理者ログインと同じ枠（admin_ip / admin_all）を使う。
+    //   別枠にすると、穂乃味の管理者権限への総当たりの実効速度が2倍になる。
     const [nIp, nAll] = await Promise.all([
-      S.bumpAndCount("sysadmin_ip", ipKey),
-      S.bumpAndCount("sysadmin_all", "global"),
+      S.bumpAndCount("admin_ip", ipKey),
+      S.bumpAndCount("admin_all", "global"),
     ]);
     if (nIp > HARD_IP || (nAll > HARD_ALL && nIp > HARD_IP_UNDER_GLOBAL)) return { limited: true };
     const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
@@ -177,7 +179,7 @@ async function handleSystemLogin(req, res, body, startedAt, cid) {
     // ★ レコードが無い（未設定）ときも同じ計算量を通して 401。システム管理者は存在しないものとして扱う。
     const v = S.verifyPinCompat(pin, rec && typeof rec === "object" && rec.dk ? rec : null);
     if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
-    if (v.ok) await S.resetCount("sysadmin_ip", ipKey).catch(function () {});
+    if (v.ok) await S.resetCount("admin_ip", ipKey).catch(function () {});
     return { ok: v.ok };
   });
   if (verdict.limited) {
@@ -189,6 +191,8 @@ async function handleSystemLogin(req, res, body, startedAt, cid) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.fail(res, 401, H.INVALID);
   }
+  // 監査用（値は出さない）。どの会社へシステム管理者として入ったかを残す。
+  console.log("[auth/admin] system admin login tenant=" + target.id + " cid=" + cid);
   const now = Math.floor(Date.now() / 1000);
   const customToken = G.createCustomToken(T.uid("a", "sys"),
     T.decorateClaims({ r: "a", at: now, cv: 1, sa: true }, "a"));

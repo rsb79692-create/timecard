@@ -88,7 +88,8 @@ module.exports = T.handler(async function handler(req, res) {
     const token = H.str(body.token, 128);
     const spec = Object.prototype.hasOwnProperty.call(KINDS, kind) ? KINDS[kind] : null;
 
-    if (!spec || !token || !safeToken(token)) {
+    // ★ 施設端末（kiosk）は新会社だけ。穂乃味では従来どおりレート制限へ触れる前に 401。
+    if (!spec || !token || !safeToken(token) || (spec.role === "k" && T.current().legacy)) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 401, H.INVALID);
     }

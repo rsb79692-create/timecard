@@ -474,6 +474,63 @@ async function main() {
       !/process\.env\.LINE_(TO_ID|CHANNEL_ACCESS_TOKEN)/.test(dev) && /T\.notifyEnv\("LINE_TO_ID", tenant\)/.test(dev));
   }
 
+  section("13. レビュー指摘の固定（CORS・入口のふるい・フェイルクローズ・枠の共有・フラグの修復）");
+  {
+    // M1: 早期応答にも CORS を付ける／許可外 Origin では会社の DB 読み取りをしない
+    setAt(["tenantReg", "mantel", "active"], false);
+    await new Promise(function (r) { setTimeout(r, 5200); });
+    const r1 = await call(H.admin, { tenant: "mantel", pin: "22222222" });
+    check("利用停止の応答（403）にも CORS ヘッダが付く（ブラウザが理由を読める）",
+      r1.statusCode === 403 && r1.headers["access-control-allow-origin"] === "https://rsb79692-create.github.io");
+    setAt(["tenantReg", "mantel", "active"], true);
+    await new Promise(function (r) { setTimeout(r, 5200); });
+    DBLOG.length = 0;
+    const res = mkRes();
+    await H.admin({ method: "POST", headers: { origin: "https://evil.example", "content-type": "application/json" },
+      body: { tenant: "mantel", pin: "22222222" } }, res);
+    check("許可外の Origin は会社の判定（DB 読み取り）をせずに 403", res.statusCode === 403 && DBLOG.length === 0, DBLOG.join(","));
+    DBLOG.length = 0;
+    const res2 = mkRes();
+    await H.admin({ method: "POST", headers: { origin: "https://rsb79692-create.github.io", "content-type": "text/plain" },
+      body: { tenant: "mantel", pin: "22222222" } }, res2);
+    check("JSON 以外は会社の判定をせずに 415", res2.statusCode === 415 && DBLOG.length === 0);
+    const res3 = mkRes();
+    await H.deviceReport({ method: "POST", headers: { "content-type": "application/json" }, body: { tenant: "nosuch", action: "report" } }, res3);
+    check("端末APIの早期応答は CORS ヘッダを付けない", res3.statusCode === 400 && !res3.headers["access-control-allow-origin"]);
+
+    // L1: 会社コンテキストが無いまま ID トークンを検証しない
+    let threw = "";
+    try { await G.verifyIdToken(honomiAdminTok); } catch (e) { threw = e.message; }
+    check("会社コンテキストが無いと ID トークンの検証は失敗する（フェイルクローズ）", /tenant context missing/.test(threw), threw);
+
+    // L2: 穂乃味の kiosk 要求は従来どおりレート制限へ触れずに 401
+    DBLOG.length = 0;
+    const k = await call(H.share, { kind: "kiosk", token: "tokHonomiFacility" });
+    check("穂乃味の kiosk 要求はレート制限へ触れずに 401（従来と同じ）", k.statusCode === 401 && !DBLOG.some(function (l) { return /ratelimit/.test(l); }), DBLOG.join(","));
+
+    // M3: システム管理者ログインは穂乃味の管理者ログインと同じ枠を使う
+    DBLOG.length = 0;
+    await call(H.admin, { tenant: "mantel", scope: "system", pin: "00000000" });
+    const kinds = DBLOG.filter(function (l) { return /ratelimit/.test(l); }).join(",");
+    check("システム管理者ログインは admin_ip / admin_all の枠を使う（別枠で総当たりを倍にしない）",
+      /\/admin_ip\//.test(kinds) && /\/admin_all\//.test(kinds) && !/sysadmin/.test(kinds), kinds);
+    check("その枠は穂乃味（システム会社）の /ratelimit にある", DBLOG.some(function (l) { return /^PATCH \/ratelimit\/\d+\/admin_ip$/.test(l); }), kinds);
+
+    // L3: サーバに PIN が在るのにフラグだけ欠けたら、新規登録の試みで直す
+    setAt(["tenants", "mantel", "tc5_pins", "山田 太郎"], null);
+    const kiosk = await call(H.share, { tenant: "mantel", kind: "kiosk", token: "tokMantelFacility" });
+    const kt = exchange(kiosk.body.customToken);
+    const reg = await call(H.pinSet, { tenant: "mantel", idToken: kt, staffName: "山田 太郎", pin: "5555" });
+    check("既に登録済みのスタッフの新規登録は 403", reg.statusCode === 403);
+    check("欠けていた「登録済み」フラグを直す", !!getAt(["tenants", "mantel", "tc5_pins", "山田 太郎", "set"]));
+    check("PIN 自体は変わらない（2222 のまま）",
+      S.verifyPinCompat("2222", getAt(["srv", "mantel", "authz", "pins", T.run("mantel", function () { return S.subjectKey("山田 太郎"); })])).ok);
+
+    // L6: 施設端末トークンでは他社の通知を鳴らせない
+    const n1 = await call(H.discord, { tenant: "mantel", idToken: kt, staffName: "山田 太郎" });
+    check("施設端末トークンでは通知を鳴らせない（スタッフ・管理者だけ）", n1.statusCode === 403);
+  }
+
   section("12. 会社の一覧と機能フラグがサーバ・画面・SW・スクリプトで一致");
   {
     const vm = require("vm");

@@ -478,26 +478,79 @@ function _tenantErrMsg(res){
   if(res&&(res.status===401||res.status===403))return "施設URLが正しくありません。管理者に確認してください。";
   return "認証に失敗しました。時間をおいて再度お試しください。";
 }
+// 施設端末トークンの交換の状態。
+// ★ 一時的な失敗（通信断・5xx・429・利用停止）は間隔を空けて再試行し、叩き続けない（施設の共有IPの
+//   レート制限枠を使い切ると、同じ施設の他の端末や閲覧URLまで止まる）。
+// ★ 施設トークンが無効（401 = 変更・削除された）なら端末の保存を消し、このページでは二度と試さない。
+var _tenantKioskRetryAt=0,_tenantKioskFailN=0,_tenantKioskDead=false;
+function _tenantKioskBackoff(longWait){
+  _tenantKioskFailN++;
+  var ms=longWait?300000:Math.min(300000,5000*Math.pow(2,_tenantKioskFailN-1));
+  _tenantKioskRetryAt=Date.now()+ms;
+}
 /** 施設URLのトークンを施設端末トークンへ交換する。成功で true。 */
 async function tenantKioskExchange(){
-  if(TENANT.legacy||TENANT_INVALID)return false;
+  if(TENANT.legacy||TENANT_INVALID||_tenantKioskDead)return false;
+  if(Date.now()<_tenantKioskRetryAt)return false;
   var tok=tenantKioskCredential();
   if(!tok)return false;
+  var ep=_authEpoch;
   var res=await callAuthApi("share",{kind:"kiosk",token:tok},8000);
-  if(!res.ok||!res.data||!res.data.customToken){_tenantAuthError=_tenantErrMsg(res);return false;}
-  try{await exchangeCustomToken(res.data.customToken,8000,true);}
-  catch(e){_tenantAuthError=_tenantErrMsg({status:0});return false;}
+  if(!res.ok||!res.data||!res.data.customToken){
+    _tenantAuthError=_tenantErrMsg(res);
+    var code=res&&res.data&&res.data.error;
+    if(res.status===401||code==="unknown_tenant"){
+      _tenantKioskDead=true;
+      try{TLS.removeItem("facilityToken");TLS.removeItem("tc_url_token");}catch(e){}
+    } else {
+      _tenantKioskBackoff(code==="tenant_suspended");
+    }
+    return false;
+  }
+  // ★ 交換結果は「交換を始めてから役割トークンが確立していない」ときだけ反映する。
+  //   待っている間にスタッフ・管理者のトークンが確立していたら、施設端末トークンで上書きしない（降格させない）。
+  var d=null;
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=ctl?setTimeout(function(){ctl.abort();},8000):null;
+  try{
+    var r=await fetch("https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key="+FB_API_KEY,{
+      method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:res.data.customToken,returnSecureToken:true}),
+      signal:ctl?ctl.signal:undefined
+    });
+    d=await r.json();
+  }catch(e){d=null;}
+  finally{if(timer)clearTimeout(timer);}
+  if(!d||!d.idToken){_tenantAuthError=_tenantErrMsg({status:0});_tenantKioskBackoff(false);return false;}
+  if(_authEpoch!==ep)return !!_fbIdToken;
+  _fbIdToken=d.idToken;_fbRefreshToken=d.refreshToken;_fbTokenExpiry=Date.now()+parseInt(d.expiresIn)*1000;
+  _authEpoch++;
   _authRole="k";
   _authClaims={role:"k",expiresAt:null,sessionExpiresAt:res.data.sessionExpiresAt||null};
-  _tenantAuthError="";
+  _tenantAuthError="";_tenantKioskFailN=0;_tenantKioskRetryAt=0;
   // サーバが施設トークンを確認済みなので、次回以降の起動（URLにトークンが無いとき）に使えるよう保存する
   try{TLS.setItem("facilityToken",tok);TLS.setItem("tc_url_token",tok);}catch(e){}
   _saveAnonSession();
   return true;
 }
+/** 新会社の役割トークン（管理者・閲覧など）の業務上の期限が切れた。ログインし直してもらう。 */
+var _tenantExpiredNotified=false;
+function tenantSessionExpired(){
+  if(_tenantExpiredNotified)return;
+  _tenantExpiredNotified=true;
+  isAdminAuthenticated=false;
+  try{showAlert("ログインの有効期限が切れました。\nもう一度ログインしてください。",function(){location.reload();});}
+  catch(e){location.reload();}
+}
+// 施設URLはあるが接続できないあいだの状態（「接続しています」画面）
+var _tenantConnecting=false,_tenantConnectWake=null,_tenantWantAdmin=false;
+function tenantRetryNow(){_tenantKioskRetryAt=0;if(_tenantConnectWake)_tenantConnectWake();}
+function tenantUseAdminPin(){_tenantWantAdmin=true;if(_tenantConnectWake)_tenantConnectWake();}
 /**
  * 新会社の起動時セッション。initFirebase の最初に呼ぶ。
  * 施設端末・共有URLの役割トークンを確立する。どれも無ければ管理者PINの入力を待つ。
+ * ★ 施設URLがあるのに一時的に接続できないときは、管理者PIN画面へ落とさず
+ *   「接続しています」画面で間隔を空けて自動再試行する（施設の打刻端末を止めない）。
  * @return {Promise<void>}
  */
 async function tenantEnsureSession(){
@@ -519,8 +572,19 @@ async function tenantEnsureSession(){
     await establishSession("share",{kind:shareKind,token:shareTok||""},12000);
     return; // 失敗時は各URLの従来の判定（無効・期限切れ）がそのまま表示される
   }
-  try{await getAuthToken();return;}catch(e){}
-  // 施設URLが無い・使えない → 管理者PINで入る
+  while(true){
+    try{await getAuthToken();_tenantConnecting=false;return;}catch(e){}
+    if(!tenantKioskCredential()||_tenantKioskDead||_tenantWantAdmin)break;
+    _tenantConnecting=true;
+    try{render();}catch(e){}
+    var wait=Math.max(1000,_tenantKioskRetryAt-Date.now());
+    await new Promise(function(r){_tenantConnectWake=r;setTimeout(r,wait);});
+    _tenantConnectWake=null;
+    if(_tenantWantAdmin)break;
+    _tenantKioskRetryAt=0;
+  }
+  _tenantConnecting=false;
+  // 施設URLが無い・無効 → 管理者PINで入る
   await tenantWaitAdminPin("company");
 }
 var tenantAdminUrlResult=null;
@@ -591,10 +655,15 @@ function _clearAnonSession(){_anonSessRestored=false;try{TLS.removeItem(_ANON_SE
 var _authInFlight=null;
 async function getAuthToken(){
   if(!TENANT.legacy){
-    // ★ 新会社: 業務上の期限（sx）が切れた役割トークンは使わない（Rules が拒否する）。
-    //   施設端末として開いていれば、施設URLのトークンで取り直す（tenantEnsureSession）。
-    if(_fbIdToken&&!_tenantSxOk(_jwtClaims(_fbIdToken))){
+    // ★ 新会社: 業務上の期限（sx）が切れたトークンは使わない（Rules が拒否する）。
+    //   ・施設端末（k）とスタッフ（s）→ 施設URLのトークンで施設端末トークンを取り直す（打刻端末の通常状態）
+    //   ・管理者・閲覧・デモ（a/v/d/x）→ 黙って施設端末へ下げず、ログインし直してもらう
+    var _cl=_fbIdToken?_jwtClaims(_fbIdToken):null;
+    if(_fbIdToken&&!_tenantSxOk(_cl)){
+      var _r=_cl&&_cl.r;
       _fbIdToken="";_fbRefreshToken="";_fbTokenExpiry=0;_clearAnonSession();
+      if(_r&&_r!=="k"&&_r!=="s"){tenantSessionExpired();throw new Error("tenant session expired");}
+      if(_r==="s"&&(screen==="punch"||screen==="staffPin")){screen="home";staffName=null;}
     }
   }
   if(_fbIdToken&&Date.now()<_fbTokenExpiry-60000)return _fbIdToken;
@@ -4222,6 +4291,19 @@ function render(){
 function _renderInner(){
   var now=new Date();
   var app=document.getElementById("app");
+  // ── 新会社: 施設URLはあるが認証サーバへ接続できない（自動で再試行中）──
+  if(_tenantConnecting){
+    app.className="wrap";
+    app.innerHTML='<div class="center" style="padding-top:40px;">'
+      +tenantBrandHeaderHtml()
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">サーバに接続しています…</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;margin-bottom:6px;">'+esc(_tenantAuthError||"しばらくお待ちください")+'</div>'
+      +'<div style="font-size:.8rem;color:#8496a7;margin-bottom:18px;">自動で再試行します</div>'
+      +'<button class="btn-admin" onclick="tenantRetryNow()">今すぐ再試行</button>'
+      +'<button class="btn-admin" style="margin-top:8px;" onclick="tenantUseAdminPin()">管理者PINで入る</button>'
+      +'</div>';
+    return;
+  }
   // ── 未知の会社ID（?c=…）。穂乃味へ倒さず、ここで止める ──
   if(TENANT_INVALID){
     app.className="wrap";
@@ -9661,6 +9743,8 @@ async function tenantStaffLogin(){
   staffPinChecking=true;render();
   var nm=staffName,pin=String(staffPinInput);
   var tok="";try{tok=await getAuthToken();}catch(e){tok="";}
+  // ★ 施設端末トークンが無い＝サーバに届いていない。「PINが違います」と表示しない。
+  if(!tok)return _tenantStaffPinFail(_tenantAuthError||"認証サーバに接続できません。通信状態を確認して、もう一度お試しください。");
   var r=await establishSessionEx("staff",{idToken:tok,staffName:nm,pin:pin,deviceId:_authDeviceId},12000);
   if(r&&r.ok){
     staffPinChecking=false;staffPinError=false;
@@ -9676,6 +9760,7 @@ async function tenantStaffRegister(){
   staffPinChecking=true;render();
   var nm=staffName,pin=String(staffPinInput);
   var tok="";try{tok=await getAuthToken();}catch(e){tok="";}
+  if(!tok){staffPinStep=1;return _tenantStaffPinFail(_tenantAuthError||"認証サーバに接続できません。通信状態を確認して、もう一度お試しください。");}
   var res=await callAuthApi("pin-set",{idToken:tok,staffName:nm,pin:pin,deviceId:_authDeviceId},12000);
   if(!res.ok){
     staffPinStep=1;

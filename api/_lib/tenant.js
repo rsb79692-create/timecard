@@ -158,11 +158,27 @@ function run(cid, fn) {
  * 会社は body.tenant（未指定は穂乃味）で選ぶ。登録簿に無ければ 400。
  * ★ 認証済みの操作では、verifyIdToken がトークンの c とこのコンテキストの一致を検査する。
  */
-function handler(fn) {
+function handler(fn, opts) {
+  // opts.cors === false … CORS 応答ヘッダを一切付けないエンドポイント（端末APIの device-report）
+  const cors = !(opts && opts.cors === false);
+  // opts.gate === false … 入口の事前ふるい（Origin / Content-Type）を行わない。
+  //   独自の CORS 処理を持ち、従来 Origin 無しも受け付けていた通知API（line/discord）用。挙動を変えないため。
+  const gate = !(opts && opts.gate === false);
   return async function tenantScopedHandler(req, res) {
     // ★ OPTIONS（CORS プリフライト）や GET は本文を持たない。会社の判定は不要なので
     //   元のハンドラの応答（204 / 405 等）をそのまま返す。DB に触れる経路は無い。
     if (req && req.method && req.method !== "POST") return fn(req, res);
+    // ★ 元のハンドラが入口で拒否する要求（許可外の Origin・JSON 以外）は、会社の判定（＝DB 読み取り）を
+    //   せずにそのまま渡す。元のハンドラが DB に触れる前に 403 / 415 を返す。
+    const H = require("./http");
+    const ct = String((req && req.headers && req.headers["content-type"]) || "").split(";")[0].trim().toLowerCase();
+    const origin = cors ? H.pickOrigin(req) : "";
+    if (gate && (ct !== "application/json" || (cors && !origin))) return fn(req, res);
+    // 早期応答にも CORS を付ける（付けないとブラウザが本文を読めず、「利用停止」が「接続できません」に化ける）
+    const early = function (status, code) {
+      if (cors) H.setCors(res, origin); else res.setHeader("Cache-Control", "no-store");
+      return res.status(status).json({ error: code });
+    };
     const UNREADABLE = {};
     const body = (function () {
       // ★ req.body の読み取りは Vercel の JSON パーサ例外を投げうる。
@@ -174,10 +190,7 @@ function handler(fn) {
     if (body === UNREADABLE) return fn(req, res);
     // 本文なし（undefined / null）は従来どおり {} 扱い＝穂乃味。既存の応答を変えない。
     const t = fromBody(body && typeof body === "object" ? body : {});
-    if (!t) {
-      res.setHeader("Cache-Control", "no-store");
-      return res.status(400).json({ error: "unknown_tenant" });
-    }
+    if (!t) return early(400, "unknown_tenant");
     // ★ 利用停止の会社は、トークン発行も含めて全 API を入口で止める（二重チェックのサーバ側）。
     //   Rules 側（/tenantReg/{cid}/active）と合わせて二重に遮断する。
     //   システム会社（穂乃味）は停止対象外なので DB へ問い合わせない＝従来と挙動・通信量が同じ。
@@ -188,13 +201,9 @@ function handler(fn) {
       } catch (e) {
         // 取得できない＝判定不能。利用中とみなさない（フェイルクローズ）
         console.error("[tenant] active check failed", e && e.message);
-        res.setHeader("Cache-Control", "no-store");
-        return res.status(503).json({ error: "tenant_unavailable" });
+        return early(503, "tenant_unavailable");
       }
-      if (!active) {
-        res.setHeader("Cache-Control", "no-store");
-        return res.status(403).json({ error: "tenant_suspended" });
-      }
+      if (!active) return early(403, "tenant_suspended");
     }
     return als.run(t, function () { return fn(req, res); });
   };

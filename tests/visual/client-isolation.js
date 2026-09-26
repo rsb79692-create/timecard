@@ -123,6 +123,63 @@ async function main() {
     await ctx.close();
   }
 
+  // ---- 6. 施設端末: 一時的な失敗は自動で再試行して復帰する（管理者PIN画面へ落とさない）----
+  {
+    const opts = { share: (b, n) => (n <= 2 ? { status: 503, body: { error: "tenant_unavailable" } } : null) };
+    const { ctx, page } = await openApp(browser, ROOT, "?c=mantel&token=tokHonten", opts);
+    const txt1 = await page.evaluate(() => document.body.innerText);
+    check("一時的な失敗では「接続しています」画面（管理者PIN画面ではない）",
+      txt1.indexOf("サーバに接続しています") >= 0 && txt1.indexOf("管理者認証") < 0, txt1.slice(0, 80));
+    for (let i = 0; i < 4; i++) { try { await page.clock.runFor(6000); } catch (e) {} await settle(page); }
+    const txt2 = await page.evaluate(() => document.body.innerText);
+    check("再試行で復帰してスタッフ選択画面になる", txt2.indexOf("スタッフを選択してください") >= 0, txt2.slice(0, 80));
+    check("再試行は間隔を空ける（叩き続けない）", opts.shareCalls >= 3 && opts.shareCalls <= 5, String(opts.shareCalls));
+    await ctx.close();
+  }
+
+  // ---- 7. 施設端末: 無効な施設URL（401）は保存を消し、二度と試さない ----
+  {
+    const opts = { share: () => ({ status: 401, body: { error: "invalid_credentials" } }) };
+    const { ctx, page } = await openApp(browser, ROOT, "?c=mantel&token=tokHonten", opts);
+    const txt = await page.evaluate(() => document.body.innerText);
+    check("無効な施設URLでは管理者PIN画面へ（施設URLを直してもらう案内つき）",
+      txt.indexOf("管理者認証") >= 0 && txt.indexOf("施設URLが正しくありません") >= 0, txt.slice(0, 120));
+    const saved = await page.evaluate(() => [localStorage.getItem("t.mantel.facilityToken"), localStorage.getItem("t.mantel.tc_url_token")]);
+    check("無効な施設トークンは端末から消す", saved[0] === null && saved[1] === null, JSON.stringify(saved));
+    const before = opts.shareCalls;
+    for (let i = 0; i < 10; i++) { try { await page.clock.runFor(60000); } catch (e) {} }
+    await settle(page);
+    check("無効と分かった施設トークンで交換を繰り返さない（10分で追加 0 回）", opts.shareCalls === before, before + "→" + opts.shareCalls);
+    await ctx.close();
+  }
+
+  // ---- 8. 施設端末: 利用停止中は長い間隔でだけ確かめる ----
+  {
+    const opts = { share: () => ({ status: 403, body: { error: "tenant_suspended" } }) };
+    const { ctx, page } = await openApp(browser, ROOT, "?c=mantel&token=tokHonten", opts);
+    const txt = await page.evaluate(() => document.body.innerText);
+    check("利用停止は「停止されています」と表示する（接続できないと言わない）", txt.indexOf("停止されています") >= 0, txt.slice(0, 120));
+    for (let i = 0; i < 10; i++) { try { await page.clock.runFor(60000); } catch (e) {} }
+    await settle(page);
+    check("利用停止中は5分以上の間隔でしか確かめない（10分で3回以下）", opts.shareCalls <= 3, String(opts.shareCalls));
+    await ctx.close();
+  }
+
+  // ---- 9. 管理者の業務上の期限（sx）切れは、施設端末へ黙って下げずにログインし直させる ----
+  {
+    const { ctx, page } = await openApp(browser, ROOT, "?c=mantel");
+    await tapPin(page, "12345678");
+    const role0 = await page.evaluate(() => [_authRole, isAdminAuthenticated]);
+    await page.clock.setSystemTime(new Date(HN.FIXED_NOW.getTime() + 13 * 3600 * 1000));
+    const r = await page.evaluate(() => getAuthToken().then(() => "ok", (e) => String(e && e.message)));
+    const after = await page.evaluate(() => [isAdminAuthenticated, _fbIdToken, _authRole, document.body.innerText.indexOf("有効期限が切れました") >= 0]);
+    check("前提: 管理者としてログインしている", role0[0] === "a" && role0[1] === true, JSON.stringify(role0));
+    check("期限切れの管理者トークンを使わない", r === "tenant session expired" && after[1] === "", r);
+    check("施設端末トークンへ黙って下げない／管理画面の認証を外してログインし直させる",
+      after[0] === false && after[2] !== "k" && after[3] === true, JSON.stringify(after));
+    await ctx.close();
+  }
+
   await browser.close();
   console.log("\n==================================");
   console.log("  PASS " + pass + " / FAIL " + fail);

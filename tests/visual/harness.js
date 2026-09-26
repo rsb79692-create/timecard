@@ -128,6 +128,17 @@ async function installRoutes(page, srcDir, opts) {
         lastClaims.value = Object.assign({ r: "s" }, cl);
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ customToken: "ct", role: "s" }) });
       }
+      if (p === "/api/auth/share" && typeof opts.share === "function") {
+        opts.shareCalls = (opts.shareCalls || 0) + 1;
+        const r = opts.share(body, opts.shareCalls);
+        if (r) {
+          if (r.status === 200) {
+            const role = body.kind === "kiosk" ? "k" : "v";
+            lastClaims.value = Object.assign({ r: role }, cl, { sx: sx });
+          }
+          return route.fulfill({ status: r.status, contentType: "application/json", body: JSON.stringify(r.body || {}) });
+        }
+      }
       if (p === "/api/auth/share") {
         const role = body.kind === "kiosk" ? "k" : body.kind === "viewer" ? "v" : body.kind === "demo" ? "d" : "x";
         lastClaims.value = Object.assign({ r: role }, cl, role === "k" ? { sx: sx } : {});

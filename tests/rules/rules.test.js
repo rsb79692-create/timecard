@@ -95,6 +95,8 @@ const TENANT_OPS = [
   ["r", "tenants/mantel/master/locations"], ["r", "tenants/mantel/tc_master_depts"],
   ["r", "tenants/mantel/tc5_paid_leave_requests"], ["r", "tenants/mantel/config"],
   ["r", "tenants/mantel/viewerTokens/vt1"], ["r", "tenants/mantel"], ["r", "tenants"],
+  ["r", "tenants/mantel/viewerTokens"], ["r", "tenants/mantel/demoTokens"], ["r", "tenants/mantel/staffDemoTokens"],
+  ["r", "tenants/mantel/demoIssuedViewerTokens"], ["r", "tenants/mantel/tc5_fcm_tokens"],
   ["w", "tenants/mantel/tc5_records/r2", { staff: "x", type: "clockIn", date: "2026-09-26" }],
   ["w", "tenants/mantel/tc5_records", null],
   ["w", "tenants/mantel/tc5_paid_leave_requests/p2", { staffName: "x", status: "pending" }],
@@ -301,6 +303,20 @@ async function main() {
   check("施設端末 → mantel 全体は読めない", deny("mantelKiosk", "r", "tenants/mantel"));
   check("施設端末 → 打刻を書けない（スタッフのログインが必要）", deny("mantelKiosk", "w", "tenants/mantel/tc5_records/r2"));
   check("施設端末 → PIN フラグを書けない", deny("mantelKiosk", "w", "tenants/mantel/tc5_pins/山田"));
+
+  // 読み取りの許可リスト（トークン類は一覧を管理者だけに）
+  check("管理者は閲覧用・デモ・スタッフテストURLの一覧を読める",
+    allow("mantelAdmin", "r", "tenants/mantel/viewerTokens") && allow("mantelAdmin", "r", "tenants/mantel/demoTokens")
+    && allow("mantelAdmin", "r", "tenants/mantel/staffDemoTokens"));
+  check("スタッフはトークン類（閲覧用・デモ・スタッフテスト）を読めない",
+    deny("mantelStaff", "r", "tenants/mantel/viewerTokens") && deny("mantelStaff", "r", "tenants/mantel/demoTokens")
+    && deny("mantelStaff", "r", "tenants/mantel/staffDemoTokens") && deny("mantelStaff", "r", "tenants/mantel/viewerTokens/vt1")
+    && deny("mantelStaff", "r", "tenants/mantel/demoIssuedViewerTokens"));
+  check("労務士はトークンの一覧を読めない（自分のURLの1件だけ）",
+    deny("mantelViewer", "r", "tenants/mantel/viewerTokens") && allow("mantelViewer", "r", "tenants/mantel/viewerTokens/vt1")
+    && deny("mantelViewer", "r", "tenants/mantel/demoTokens"));
+  check("FCM の端末トークンはクライアントから読めない", allActors.every(function (a) { return M[a + " r tenants/mantel/tc5_fcm_tokens"] === "DENY"; }));
+  check("会社ノード全体は管理者でも一括で読めない（コレクションごとの許可だけ）", deny("mantelAdmin", "r", "tenants/mantel"));
 
   // 書き込みの許可リスト
   check("スタッフでも PIN フラグは書けない（サーバだけが書く）", deny("mantelStaff", "w", "tenants/mantel/tc5_pins/山田"));

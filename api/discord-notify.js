@@ -71,10 +71,15 @@ module.exports = T.handler(async function handler(req, res) {
   var ADMIN_URL = tenant.adminUrl;
   if (!tenant.legacy) {
     var reqBody = req.body || {};
+    // ★ スタッフ・管理者のトークンだけ（施設端末トークンや閲覧用では鳴らせない）
+    var nclaims = null;
     try {
-      await require("./_lib/google").verifyIdToken(typeof reqBody.idToken === "string" ? reqBody.idToken : "");
+      nclaims = await require("./_lib/google").verifyIdToken(typeof reqBody.idToken === "string" ? reqBody.idToken : "");
     } catch (e) {
       return res.status(401).json({ error: "invalid_credentials" });
+    }
+    if (!nclaims || (nclaims.r !== "s" && nclaims.r !== "a")) {
+      return res.status(403).json({ error: "forbidden" });
     }
   }
 
@@ -139,4 +144,4 @@ module.exports = T.handler(async function handler(req, res) {
     console.error("[discord-notify] Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
-});
+}, { cors: false, gate: false });

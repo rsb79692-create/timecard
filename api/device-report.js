@@ -511,6 +511,7 @@ async function handleReport(body) {
   };
 }
 
+// ★ 端末APIは CORS 応答ヘッダを一切返さない（ブラウザから呼ばせない）。会社の早期応答も同じ。
 module.exports = T.handler(async function handler(req, res) {
   if (guardApp(req, res)) return;
   const startedAt = Date.now();
@@ -588,4 +589,4 @@ module.exports = T.handler(async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-});
+}, { cors: false });
