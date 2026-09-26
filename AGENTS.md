@@ -2279,8 +2279,12 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
 会社ごとの違いは「会社設定」と「機能フラグ」だけで表し、**会社ごとにコードを複製・分岐しない**。
 共通機能の変更は1回の実装で全社へ反映される。
 
-⚠⚠ **本番の Firebase Rules の deploy と、マンテールの本番データ作成（`/tenantReg/mantel`・`/srv/mantel/authz`）は未実施。**
-ユーザーの確認を得てから行う（下記「本番反映の手順」）。それまでマンテールは API・Rules の両方で拒否される（未作成＝停止扱い）。
+★ **本番反映済み（2026-09-26）**: Firebase Rules（database・storage）を c42db49 の内容で deploy し、取り直して一致を確認した。
+変更前の本番 Rules はリポジトリ外 `Projects/rules-backup-20260926-192911/` に保存してある（rollback 用）。
+`/tenantReg/mantel`（`active:false`）と `/srv/mantel/authz/_meta` は firebase CLI（ユーザーのログイン）で作成した。
+**PIN の値（`/authz/systemAdminPin`・`/srv/mantel/authz/adminPin`）はサーバ経由でだけ作る**（下記「PIN の初回設定」）。
+★ **honomi-board リポジトリの `database.rules.json` は、この時点で本番と一致していない**（`tenants` と `/honomi` の他社トークン拒否が無い）。
+ボード側から Rules を deploy する前に、必ず本番の現行 Rules を取り直してマージすること（本書「RTDB のルールは honomi-board と共有」）。
 
 ### 会社ID と置き場所
 
@@ -2307,6 +2311,7 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
 
 ★ **利用停止は二重チェック**: API の入口（`T.handler` が `/tenantReg/<cid>/active` を確認。5秒キャッシュ）と Rules（毎回参照）。
 Storage のルールは RTDB を参照できないため、停止後もトークンの `sx`（最長24時間）までは Storage だけ読める。**Storage を即時に止めたい場合はこの時間差を認識すること。**
+⚠ **今後のセキュリティ改善項目（未対応）**: 利用停止後も Storage が最長24時間読める。即時に止めるには、Storage のアクセスをサーバ経由（署名付きURL等）にするか、停止時にその会社のユーザーの refresh token を失効させる仕組みが要る。
 
 ### 権限（今回実装したのは2つ。facility_manager は未実装）
 
@@ -2317,6 +2322,22 @@ Storage のルールは RTDB を参照できないため、停止後もトーク
 | facility_manager | **未実装**。施設端末トークンに施設キー `fk` を載せてあり、将来ここへ施設単位の権限を足せる | — |
 
 ★ **穂乃味の一般管理者（従来の管理者PIN／URL）では他社に入れない。** 他社へ入れるのはシステム管理者PINだけ。
+（例外: システム管理者PINが未設定のあいだは、穂乃味の管理者PINを知る人が初回設定できる。下記）
+
+### PIN の初回設定（鍵はサーバにしか無いので、サーバ経由でだけ作る）
+
+`TC_PIN_PEPPER` / `TC_ENC_KEY` は Vercel の Sensitive 型で、手元に控えが無い（`vercel env pull` でも値は取れない）。
+PIN レコードはこの2つで作る必要があるため、**PIN の値はすべて `/api/auth/admin-pin-set` で作る**。⚠ **この2つを変更・再生成してはならない**（穂乃味の全PINが照合できなくなる）。
+
+| 操作 | 誰が | 条件 | 画面 |
+|---|---|---|---|
+| システム管理者PINの初回設定（`scope:"system"`） | 穂乃味の管理者（sa 不要）。**いまの管理者PIN（`currentPin`）の再入力が必須**＝管理者URLだけを知る人は設定できない | `/authz/systemAdminPin` が**未設定のときだけ**。`if-match: null_etag` の条件付き書き込みで1回だけ成功し、設定済みなら 409。いまの管理者PINの照合は管理者ログインと同じレート制限の枠（`admin_ip` / `admin_all`）。管理者PINと同値は 400。レコードに設定元（`setBy`: uid・セッション時刻）を残す | マスター管理タブの「システム管理者PIN（未設定）」（サーバが未設定と答えたときだけ出る） |
+| システム管理者PINの変更（`scope:"system"`） | sa を持つセッション | 従来どおり | （画面なし） |
+| 他社の管理者PINの設定（`scope:"tenantAdmin", target`） | 穂乃味側のシステム管理者セッション（穂乃味の `?sys` で入る。他社の `?c=…&sys` 画面ではボタンを出さない） | 対象会社の `/srv/<会社>/authz/_meta` が在ること（無ければ 503）。**停止中の会社にも設定できる**（停止中は入口で全 API が 403 のため、その会社のセッションからは設定できない）。システム管理者PIN・穂乃味の管理者PINと同値は 400。設定すると `adminMinAt` でその会社の以前の管理者セッションを失効させる | 利用会社の管理の各社行「管理者PINを設定」 |
+
+⚠ システム管理者PINが未設定のあいだは、**穂乃味の管理者PINを知っている人なら最初の1回を設定でき、その人が全社の管理権限を持つ**。
+設定後はこの経路は閉じる（409）。未設定のまま放置しないこと。`/authz/systemAdminPin` を消すとこの経路が再び開く。
+★ 未知の `scope` は 400（自社の管理者PINの変更へ落とさない）。`op:"systemPinStatus"` は値が何かあれば「設定済み」を返す（条件付き書き込みの判定と揃える）。
 ★ システム管理者PINのログインは、穂乃味の管理者ログインと**同じレート制限の枠**（`admin_ip` / `admin_all`）を使う。別枠にすると総当たりの速度が倍になる。
 ⚠ システム管理者PINは「全社の管理」への入口なので、会社管理者PINとは別の値にし、知る人を限ること。
 ★ システム管理者でも「穂乃味として得たトークン」で他社の API は叩けない（会社ごとに入り直す）。
@@ -2368,8 +2389,11 @@ Storage のルールは RTDB を参照できないため、停止後もトーク
 2. `firebase deploy --only database`・`--only storage`（honomi-board と同居のため全体置換。手順1が必須）
 3. 取り直して照合。穂乃味の打刻・管理画面・ボードの動作を確認
 4. Vercel に `__MANTEL` の通知用環境変数（必要な分）を登録
-5. `node scripts/bootstrap-tenant.js --tenant mantel`（dry-run）→ `--apply`（停止状態で作成）
-6. マンテールの管理者PINで入り、施設・スタッフを登録 → system_admin が利用開始にする
+5. `/tenantReg/<会社>`（`active:false`）と `/srv/<会社>/authz/_meta` を作る。
+   `TC_PIN_PEPPER` / `TC_ENC_KEY` の控えがあれば `node scripts/bootstrap-tenant.js --tenant <会社>`（dry-run）→ `--apply`。
+   控えが無ければ firebase CLI で上の2つだけを作り（PIN 関連は書かない）、PIN は下の6で画面から設定する（2026-09-26 のマンテールはこの方法）
+6. システム管理者PIN（未設定なら穂乃味の管理者が初回設定）→ `?sys` で入り、利用会社の管理から対象会社の管理者PINを設定
+7. 会社間分離を本番で実測 → system_admin が利用開始にする → その会社の管理者PINで入り、施設・スタッフを登録
 
 **rollback**: 穂乃味のデータは一切変えていないので、コードの revert と Rules を手順1の保存版へ戻すだけでよい。
 マンテールだけを止める場合は `/tenantReg/mantel/active=false`（システム管理者画面から可）。

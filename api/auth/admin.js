@@ -57,6 +57,8 @@ module.exports = T.handler(async function handler(req, res) {
     // 資格情報は穂乃味の /authz/systemAdminPin（会社管理者PINとは別）。
     // 発行するトークンは「対象会社（body.tenant）の管理者」＋ sa:true。
     // ★ 会社管理者PINでは sa は付かない＝穂乃味の一般管理者は他社へ入れない。
+    //   例外: システム管理者PINが未設定のあいだは、穂乃味の管理者が（現在の管理者PINを再入力して）
+    //   初回設定できる（/api/auth/admin-pin-set）。設定後はその経路も閉じる。
     if (body.scope === "system") {
       return await handleSystemLogin(req, res, body, startedAt, cid);
     }
@@ -204,6 +206,7 @@ async function handleSystemLogin(req, res, body, startedAt, cid) {
  * 会社の一覧・利用停止（システム管理者のみ）。
  *   { op:"tenants", idToken }                      → { tenants:[{id,displayName,system,active}] }
  *   { op:"tenantSetActive", idToken, target, active } → { ok:true }
+ *   { op:"systemPinStatus", idToken }             → { set:boolean }（穂乃味の管理者なら sa 不要）
  * ★ 穂乃味（システム会社）は停止できない。
  */
 async function handleTenantOp(req, res, body, startedAt, cid) {
@@ -213,6 +216,22 @@ async function handleTenantOp(req, res, body, startedAt, cid) {
   } catch (e) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.fail(res, 401, H.INVALID);
+  }
+  // ★ システム管理者PINが設定済みかどうか（真偽だけ）。未設定のときだけ、穂乃味の管理画面に初回設定の欄を出すため。
+  //   穂乃味（システム会社）の管理者セッションなら sa が無くても聞ける。PIN の中身は一切返さない。
+  if (body.op === "systemPinStatus") {
+    if (!claims || claims.r !== "a" || !T.current().system) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "forbidden");
+    }
+    if (!(await S.adminSessionValid(claims))) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "session_revoked");
+    }
+    const rec = await G.dbGet(S.AUTHZ + "/systemAdminPin");
+    await H.withMinDuration(startedAt, MIN_MS);
+    // ★ 条件付き書き込み（値が何かあれば 412）と同じ基準にする。壊れたレコードで「未設定」と出して押すと 409、の行き止まりを作らない。
+    return res.status(200).json({ set: rec !== null && rec !== undefined });
   }
   if (!claims || claims.r !== "a" || claims.sa !== true) {
     await H.withMinDuration(startedAt, MIN_MS);

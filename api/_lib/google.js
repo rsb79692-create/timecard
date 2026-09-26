@@ -206,14 +206,7 @@ async function dbRequest(path, method, payload) {
   // ★ 会社コンテキストで分岐する。穂乃味（legacy）は従来の組み立てを1文字も変えない。
   //   新会社は /tenants/{cid}/… と /srv/{cid}/… へ写す（tenant.js の mapPath）。
   //   コンテキストが無ければ T.mapPath が例外を投げる（どの会社か分からないまま触らない）。
-  const mapped = T.mapPath(p);
-  let url;
-  if (mapped === null) {
-    const base = /^(authz|ratelimit|mileage|devmon)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
-    url = base + "/" + p + ".json";
-  } else {
-    url = dbRootBase() + "/" + mapped + ".json";
-  }
+  const url = dbUrlFor(p);
   const bodyStr = payload === undefined ? null : JSON.stringify(payload);
   const headers = { Authorization: "Bearer " + token };
   if (bodyStr) {
@@ -226,6 +219,39 @@ async function dbRequest(path, method, payload) {
     throw new Error("rtdb " + method + " failed: HTTP " + res.status);
   }
   return res.body;
+}
+
+/** dbRequest と同じ規則で、相対パスを REST の URL へ写す（会社コンテキスト必須）。 */
+function dbUrlFor(p) {
+  const mapped = T.mapPath(p);
+  if (mapped === null) {
+    const base = /^(authz|ratelimit|mileage|devmon)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
+    return base + "/" + p + ".json";
+  }
+  return dbRootBase() + "/" + mapped + ".json";
+}
+
+/**
+ * 値が無いときだけ書く（RTDB の条件付き書き込み。if-match: null_etag）。
+ * ★ 「読んでから書く」ではなく1回の要求で判定と書き込みを行う。同時に来ても1件だけが成功する。
+ * @returns {Promise<boolean>} 書けたら true。既に値があれば false（HTTP 412）。
+ */
+async function dbPutIfAbsent(path, value) {
+  const token = await getDbAccessToken();
+  const p = String(path).replace(/^\/+/, "");
+  const bodyStr = JSON.stringify(value);
+  const res = await httpRequest(dbUrlFor(p), {
+    method: "PUT",
+    headers: {
+      Authorization: "Bearer " + token,
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(bodyStr),
+      "if-match": "null_etag",
+    },
+  }, bodyStr);
+  if (res.status === 412) return false;
+  if (res.status < 200 || res.status >= 300) throw new Error("rtdb conditional PUT failed: HTTP " + res.status);
+  return true;
 }
 
 const dbGet = (path) => dbRequest(path, "GET");
@@ -459,6 +485,7 @@ module.exports = {
   dbGet,
   dbPut,
   dbPatch,
+  dbPutIfAbsent,
   dbIncrement,
   dbPatchRoot,
   dataPathPrefix,

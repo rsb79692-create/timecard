@@ -6286,7 +6286,7 @@ function _renderInner(){
       }).join("");
       // 監視設定はサーバ（/devmon）にしかない。マスター管理タブを開いた時点で1度だけ取得する。
       devWatchEnsure();
-      tc=sysTenantsHtml()+'<div class="admin-card">'
+      tc=sysTenantsHtml()+sysPinInitHtml()+'<div class="admin-card">'
         +'<div class="admin-title">部門マスター</div>'
         +(deptItems||'<div class="empty">未登録</div>')
         +'<div style="display:flex;gap:8px;margin-top:12px;">'
@@ -9695,11 +9695,14 @@ function sysTenantsHtml(){
     var st=t.system?'<span style="color:#475569;">システム管理会社</span>'
       :(t.active?'<span style="color:#047857;font-weight:700;">利用中</span>':'<span style="color:#dc2626;font-weight:700;">停止中</span>');
     var link=tenantUrlFor(t.id,"sys");
-    var btn=t.system?'':('<button onclick="sysTenantToggle(\''+t.id+'\','+(!t.active)+')" style="background:#fff;border:1px solid #adb5bd;padding:3px 10px;border-radius:2px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;">'+(t.active?'停止する':'利用を再開する')+'</button>');
+    // ★ 他社の管理者PINの設定は穂乃味の ?sys 画面からだけ（サーバも穂乃味のコンテキストに限る）。他社の画面では出さない。
+    var bs='background:#fff;border:1px solid #adb5bd;padding:7px 12px;min-height:34px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;';
+    var btn=t.system?'':((TENANT.legacy?'<button onclick="sysTenantPinOpen(\''+t.id+'\')" style="'+bs+'color:#0f172a;">管理者PINを設定</button>':'')
+      +'<button onclick="sysTenantToggle(\''+t.id+'\','+(!t.active)+')" style="'+bs+'color:'+(t.active?'#dc2626':'#047857')+';">'+(t.active?'停止する':'利用を再開する')+'</button>');
     return '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #e5e7eb;flex-wrap:wrap;">'
       +'<div><div style="font-size:.9rem;font-weight:700;color:#0f172a;">'+esc(t.displayName)+'</div>'
       +'<div style="font-size:.75rem;color:#8496a7;">会社ID: '+esc(t.id)+' ／ '+st+'</div></div>'
-      +'<div style="display:flex;gap:6px;align-items:center;">'
+      +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
       +'<a href="'+esc(link)+'" style="font-size:12px;font-weight:700;">この会社の管理画面へ</a>'+btn+'</div></div>';
   }).join("");
   return '<div class="admin-card">'
@@ -9729,6 +9732,147 @@ function sysTenantToggle(id,active){
         sysTenants.list=null;sysTenantsLoad();
       })();
     }
+  });
+}
+
+// ===== PIN の設定（システム管理者PINの初回設定／他社の管理者PIN）=====
+// ★ PIN の値はサーバ（/api/auth/admin-pin-set）でだけ作る。端末には保存しない。
+// ★ 権限の判定はサーバが行う。ここは入力と結果の表示だけ。
+// opts.needCurrent … 現在の管理者PINの入力欄を出す（システム管理者PINの初回設定）
+function sysPinModal(title,note,opts,onSubmit){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10050;display:flex;align-items:center;justify-content:center;padding:20px;overflow:auto;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:24px;max-width:360px;width:100%;max-height:calc(100vh - 40px);overflow-y:auto;box-sizing:border-box;";
+  var inp='width:100%;padding:10px;border:1px solid #adb5bd;border-radius:2px;font-size:1rem;font-family:inherit;margin-bottom:10px;box-sizing:border-box;';
+  var attrs='type="password" inputmode="numeric" pattern="[0-9]*" autocomplete="off" maxlength="8"';
+  var lbl='display:block;font-size:.85rem;font-weight:700;color:#334155;margin-bottom:4px;';
+  card.innerHTML='<div style="font-size:1rem;font-weight:700;color:#0f172a;margin-bottom:6px;">'+esc(title)+'</div>'
+    +(note?'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">'+esc(note)+'</div>':'')
+    +(opts&&opts.needCurrent?'<label style="'+lbl+'">いまの管理者PIN</label><input id="sys-pin-cur" '+attrs+' style="'+inp+'">':'')
+    +'<label style="'+lbl+'">新しいPIN（数字8桁）</label>'
+    +'<input id="sys-pin-a" '+attrs+' style="'+inp+'">'
+    +'<input id="sys-pin-b" '+attrs+' placeholder="確認のためもう一度" aria-label="新しいPIN（確認）" style="'+inp+'">'
+    +'<div id="sys-pin-err" style="color:#dc2626;font-size:.85rem;min-height:1.2em;margin-bottom:8px;"></div>'
+    +'<div style="display:flex;gap:10px;">'
+    +'<button id="sys-pin-cancel" style="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+    +'<button id="sys-pin-ok" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">設定する</button>'
+    +'</div>';
+  ov.appendChild(card);document.body.appendChild(ov);
+  var busy=false;
+  var okBtn=card.querySelector("#sys-pin-ok");
+  function close(){if(ov.parentNode)ov.parentNode.removeChild(ov);}
+  function err(m){card.querySelector("#sys-pin-err").textContent=m||"";}
+  function setBusy(b){busy=b;okBtn.disabled=b;okBtn.textContent=b?"設定中…":"設定する";okBtn.style.opacity=b?".6":"1";}
+  function submit(){
+    if(busy)return;
+    var ce=card.querySelector("#sys-pin-cur");
+    var cur=ce?ce.value.trim():"";
+    var a=card.querySelector("#sys-pin-a").value.trim(),b=card.querySelector("#sys-pin-b").value.trim();
+    if(ce&&!/^\d{8}$/.test(cur)){err("いまの管理者PINを数字8桁で入力してください");return;}
+    if(!/^\d{8}$/.test(a)){err("新しいPINを数字8桁で入力してください");return;}
+    if(a!==b){err("新しいPINの2回の入力が一致しません");return;}
+    err("");setBusy(true);
+    onSubmit({pin:a,currentPin:cur},function(msg){
+      setBusy(false);
+      if(msg){err(msg);return;}
+      close();
+    });
+  }
+  card.querySelector("#sys-pin-cancel").onclick=function(){if(!busy)close();};
+  okBtn.onclick=submit;
+  card.querySelector("#sys-pin-b").onkeydown=function(e){if(e.key==="Enter")submit();};
+  var f=card.querySelector("#sys-pin-cur")||card.querySelector("#sys-pin-a");if(f)f.focus();
+}
+async function _sysPinPost(payload){
+  if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+  var tok=await getAuthToken().catch(function(){return "";});
+  return callAuthApi("admin-pin-set",Object.assign({idToken:tok},payload),12000);
+}
+function _sysPinErrMsg(r,initial){
+  var c=r&&r.data&&r.data.error;
+  if(c==="same_as_admin_pin")return "穂乃味の管理者PINと同じ値は使えません。別の値にしてください";
+  if(c==="same_as_system_pin")return "システム管理者PINと同じ値は使えません。別の値にしてください";
+  if(c==="already_set")return "すでに設定されています";
+  if(c==="rate_limited")return "試行回数が多すぎます。しばらく待ってから再度お試しください";
+  if(c==="session_revoked")return "この管理画面のセッションは無効です。入り直してから操作してください";
+  if(initial&&r&&r.status===401)return "いまの管理者PINが違います";
+  if(r&&r.status===403)return "この操作の権限がありません";
+  if(r&&r.status===503)return "認証の準備ができていないため設定できません";
+  if(r&&r.status===400)return "入力内容を確認してください";
+  return "設定できませんでした。通信状態を確認して再度お試しください";
+}
+
+// システム管理者PINの初回設定（穂乃味の管理者だけ。サーバが「未設定」と答えたときだけ表示する）
+// ★ 取得に失敗したときは表示しない（従来の画面のまま）。設定済みかどうかを推測で決めない。
+// ★ 失敗したら60秒は取り直さない。権限が無い（403）ならこのページでは二度と聞かない（描画のたびに撃たない）。
+var sysPinStatus={set:null,loading:false,retryAt:0,denied:false};
+function sysPinStatusLoad(){
+  if(!TENANT.legacy||isSystemAdmin||demoMode||sysPinStatus.loading||sysPinStatus.set!==null||sysPinStatus.denied)return;
+  if(Date.now()<sysPinStatus.retryAt)return;
+  sysPinStatus.loading=true;
+  (async function(){
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    var tok="";try{tok=await getAuthToken();}catch(e){tok="";}
+    var res=await callAuthApi("admin",{op:"systemPinStatus",idToken:tok},12000);
+    sysPinStatus.loading=false;
+    if(res.ok&&res.data&&typeof res.data.set==="boolean"){
+      sysPinStatus.set=res.data.set;
+      if(res.data.set===false&&screen==="admin"&&adminTab==="master")render();
+    } else if(res.status===403){
+      sysPinStatus.denied=true;
+    } else {
+      sysPinStatus.retryAt=Date.now()+60000;
+    }
+  })();
+}
+function sysPinInitHtml(){
+  if(!TENANT.legacy||isSystemAdmin||demoMode)return "";
+  if(sysPinStatus.set===null){if(!sysPinStatus.loading)setTimeout(sysPinStatusLoad,0);return "";}
+  if(sysPinStatus.set!==false)return "";
+  return '<div class="admin-card">'
+    +'<div class="admin-title">システム管理者PIN（未設定）</div>'
+    +'<div style="font-size:.85rem;color:#475569;margin-bottom:12px;">利用会社の管理（マンテールなど）に使うPINです。管理者PINとは別の値にしてください。</div>'
+    +'<button onclick="sysPinInitOpen()" style="background:var(--brand);color:#fff;border:none;padding:10px 16px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">設定する</button>'
+    +'</div>';
+}
+function sysPinInitOpen(){
+  sysPinModal("システム管理者PINを設定","いまの管理者PINと、新しいシステム管理者PIN（管理者PINとは別の数字8桁）を入力してください。",{needCurrent:true},function(v,done){
+    (async function(){
+      var r=await _sysPinPost({pin:v.pin,currentPin:v.currentPin,scope:"system"});
+      if(!r.ok){
+        if(r.data&&r.data.error==="already_set"){sysPinStatus.set=true;render();}
+        done(_sysPinErrMsg(r,true));return;
+      }
+      sysPinStatus.set=true;done("");render();
+      sysPinDoneDialog(tenantUrlFor("honomi","sys"));
+    })().catch(function(){done("設定できませんでした");});
+  });
+}
+// 設定完了の案内。URL はスマホ幅でも途中で折り返して全体が見えるようにする（showModal は全画面共通なので変えない）
+function sysPinDoneDialog(url){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10050;display:flex;align-items:center;justify-content:center;padding:20px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border:1px solid #adb5bd;border-radius:2px;padding:24px;max-width:360px;width:100%;box-sizing:border-box;";
+  card.innerHTML='<div style="font-size:1rem;font-weight:700;color:#0f172a;margin-bottom:8px;">システム管理者PINを設定しました</div>'
+    +'<div style="font-size:.9rem;color:#334155;margin-bottom:8px;">利用会社の管理は、次のURLを開いてこのPINで入ります。</div>'
+    +'<div style="font-size:.9rem;font-family:monospace;color:#0f172a;background:#f1f5f9;padding:8px;border-radius:2px;overflow-wrap:anywhere;word-break:break-all;margin-bottom:14px;">'+esc(url)+'</div>'
+    +'<button id="sys-pin-done" style="width:100%;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:11px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">OK</button>';
+  ov.appendChild(card);document.body.appendChild(ov);
+  card.querySelector("#sys-pin-done").onclick=function(){if(ov.parentNode)ov.parentNode.removeChild(ov);};
+}
+// 他社の管理者PINの設定（穂乃味の ?sys で入ったシステム管理者だけ。停止中の会社にも設定できる）
+function sysTenantPinOpen(id){
+  if(!isSystemAdmin)return;
+  var c=Object.prototype.hasOwnProperty.call(TENANT_CONFIGS,id)?TENANT_CONFIGS[id]:null;
+  var nm=c?c.displayName:id;
+  sysPinModal(nm+" の管理者PINを設定","設定すると、この会社の以前の管理者ログインは無効になります。",null,function(v,done){
+    (async function(){
+      var r=await _sysPinPost({pin:v.pin,scope:"tenantAdmin",target:id});
+      if(!r.ok){done(_sysPinErrMsg(r,false));return;}
+      done("");showAlert(nm+" の管理者PINを設定しました。");
+    })().catch(function(){done("設定できませんでした");});
   });
 }
 

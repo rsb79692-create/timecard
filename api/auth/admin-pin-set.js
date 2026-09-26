@@ -4,6 +4,8 @@
  * 管理者PINを新認証基盤（/authz/adminPin）へ設定・変更する。
  *
  * 入力 : { idToken, pin }   … pin は現行仕様どおり数字8桁
+ *        { idToken, pin, scope:"system" }                 … システム管理者PIN（未設定なら穂乃味の管理者が初回設定できる）
+ *        { idToken, pin, scope:"tenantAdmin", target }    … 他社の管理者PIN（システム管理者のみ）
  * 出力 : { ok: true }
  * 失敗 : 401 invalid_credentials / 403 forbidden / 503 not_ready
  *
@@ -23,6 +25,13 @@ const S = require("../_lib/secrets");
 const T = require("../_lib/tenant");
 
 const MIN_MS = 150;
+// システム管理者PINの初回設定で、現在の管理者PINを照合するときのレート制限。
+// ★ api/auth/admin.js の管理者ログインと同じ値・同じ枠（admin_ip / admin_all）にする。
+const SOFT_IP = 8;
+const SOFT_ALL = 40;
+const HARD_IP = 40;
+const HARD_ALL = 600;
+const HARD_IP_UNDER_GLOBAL = 12;
 
 module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
@@ -33,6 +42,11 @@ module.exports = T.handler(async function handler(req, res) {
     const body = req.body || {};
     const pin = H.str(body.pin, 32);
 
+    // ★ 未知の scope を既定（自社の管理者PINの変更）へ落とさない。綴り誤りで別の PIN を書き換えないため。
+    if (body.scope !== undefined && body.scope !== "system" && body.scope !== "tenantAdmin") {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 400, "bad_request");
+    }
     // 現行仕様どおり数字8桁。DB へ触る前に形式で落とす。
     if (!/^\d{8}$/.test(pin)) {
       await H.withMinDuration(startedAt, MIN_MS);
@@ -74,11 +88,111 @@ module.exports = T.handler(async function handler(req, res) {
     // ===== システム管理者PINの変更（scope:"system"）=====
     // ★ sa クレームを持つセッションだけ。保存先は穂乃味（システム会社）の /authz。
     //   会社管理者PINとは別の値で、変更すると全社のシステム管理者セッションが失効する。
-    if (body.scope === "system") {
-      if (claims.sa !== true) {
+    if (body.scope === "system" && claims.sa !== true) {
+      // ===== システム管理者PINの初回設定 =====
+      // ★ 未設定のときに限り、穂乃味（システム会社）の管理者セッションが設定できる。
+      //   鍵（pepper・暗号鍵）はサーバにしか無いので、初回もサーバ経由でしか作れない。
+      // ★ 「無ければ書く」は条件付き書き込み（if-match: null_etag）の1回で行う。
+      //   読んでから書くと、同時に来た2件が両方とも「未設定」を見て上書きし合う。
+      // ★ 設定済みなら 409。以後の変更は sa を持つセッション（システム管理者PINで入った人）だけ。
+      // ★ 現在の穂乃味の管理者PIN（currentPin）の再入力を必須にする。管理者URLだけを知る人
+      //   （URL の漏えい）が先に設定して全社の管理権限を取り、正規の管理者が取り消せなくなるのを防ぐ。
+      //   照合は管理者ログインと同じレート制限の枠（admin_ip / admin_all）を使う（総当たりの窓口を増やさない）。
+      if (!T.current().system) {
         await H.withMinDuration(startedAt, MIN_MS);
         return H.fail(res, 403, "forbidden");
       }
+      const currentPin = H.str(body.currentPin, 32);
+      if (!/^\d{8}$/.test(currentPin)) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      const ipKey = S.sanitizeKey(H.clientIp(req));
+      const [nIp, nAll] = await Promise.all([
+        S.bumpAndCount("admin_ip", ipKey),
+        S.bumpAndCount("admin_all", "global"),
+      ]);
+      if (nIp > HARD_IP || (nAll > HARD_ALL && nIp > HARD_IP_UNDER_GLOBAL)) {
+        res.setHeader("Retry-After", "300");
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 429, "rate_limited");
+      }
+      const adminRec = await G.dbGet(S.AUTHZ + "/adminPin");
+      const cur = S.verifyPinCompat(currentPin, adminRec && typeof adminRec === "object" ? adminRec : null);
+      // ログインと同じく、失敗が重なるほど応答を遅らせる（上限に達するまでの速さを揃える）
+      const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
+      if (throttleMs) await new Promise(function (r) { setTimeout(r, throttleMs); });
+      if (!cur.ok) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      await S.resetCount("admin_ip", ipKey).catch(function () {});
+      // 会社管理者PINと同じ値にしない（知る人を分けるため）
+      if (currentPin === pin) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_admin_pin");
+      }
+      const rec = S.makePinRecord(pin);
+      // 誰が初回設定したかを残す（値は含めない）。照合は dk / salt だけを見るので影響しない。
+      rec.setBy = { sub: String(claims.sub || "").slice(0, 64), at: typeof claims.at === "number" ? claims.at : 0, via: "initial" };
+      const created = await G.dbPutIfAbsent(S.AUTHZ + "/systemAdminPin", rec);
+      if (!created) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 409, "already_set");
+      }
+      console.log("[auth/admin-pin-set] system admin pin initialized by=" + String(claims.sub || "").slice(0, 64)
+        + " at=" + (typeof claims.at === "number" ? claims.at : 0) + " cid=" + cid);
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({ ok: true });
+    }
+
+    // ===== 他社の管理者PINの設定（システム管理者のみ）=====
+    // ★ 穂乃味側のシステム管理者セッション（sa:true）から、対象会社の /srv/<会社>/authz/adminPin を書く。
+    //   停止中の会社は入口（T.handler）で全 API が止まるため、その会社のセッションからは設定できない。
+    //   PIN の値はサーバ（pepper・暗号鍵）でだけ作る。
+    // ★ 対象会社の認証の準備（/srv/<会社>/authz/_meta）が無ければ 503（勝手に作らない）。
+    // ★ 変更時刻を adminMinAt に書き、それ以前のその会社の管理者セッションを失効させる。
+    if (body.scope === "tenantAdmin") {
+      const target = T.get(H.str(body.target, 32));
+      if (claims.sa !== true || !T.current().system) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 403, "forbidden");
+      }
+      if (!target || target.system) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "bad_request");
+      }
+      // 知る人を分けるため、システム管理者PIN・穂乃味の管理者PINと同じ値にしない
+      const [sysRec, hoRec] = await Promise.all([
+        G.dbGet(S.AUTHZ + "/systemAdminPin"),
+        G.dbGet(S.AUTHZ + "/adminPin"),
+      ]);
+      if (sysRec && typeof sysRec === "object" && S.verifyPinCompat(pin, sysRec).ok) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_system_pin");
+      }
+      if (hoRec && typeof hoRec === "object" && S.verifyPinCompat(pin, hoRec).ok) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 400, "same_as_admin_pin");
+      }
+      const result = await T.run(target.id, async function () {
+        if (!(await S.authzReady())) return "not_ready";
+        await G.dbPatchRoot({
+          "authz/adminPin": S.makePinRecord(pin),
+          "authz/adminMinAt": Math.floor(Date.now() / 1000),
+        });
+        return "ok";
+      });
+      if (result !== "ok") {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 503, "not_ready");
+      }
+      console.log("[auth/admin-pin-set] tenant admin pin set by system admin tenant=" + target.id + " cid=" + cid);
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({ ok: true });
+    }
+
+    if (body.scope === "system") {
       await T.run("honomi", function () {
         return G.dbPatchRoot({
           "authz/systemAdminPin": S.makePinRecord(pin),
