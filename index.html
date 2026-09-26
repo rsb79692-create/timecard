@@ -659,7 +659,11 @@ async function getAuthToken(){
     //   ・施設端末（k）とスタッフ（s）→ 施設URLのトークンで施設端末トークンを取り直す（打刻端末の通常状態）
     //   ・管理者・閲覧・デモ（a/v/d/x）→ 黙って施設端末へ下げず、ログインし直してもらう
     var _cl=_fbIdToken?_jwtClaims(_fbIdToken):null;
-    if(_fbIdToken&&!_tenantSxOk(_cl)){
+    // 施設端末・スタッフは10分の余裕を見て取り直す。管理者・閲覧・デモは期限を過ぎたときだけ
+    // （当日が期限の閲覧用URLで、交換した直後に再ログインの案内が繰り返し出ないように）。
+    var _rr=_cl&&_cl.r;
+    var _sxOk=(_rr==="k"||_rr==="s")?_tenantSxOk(_cl):!!(_cl&&typeof _cl.sx==="number"&&_cl.sx*1000>Date.now());
+    if(_fbIdToken&&!_sxOk){
       var _r=_cl&&_cl.r;
       _fbIdToken="";_fbRefreshToken="";_fbTokenExpiry=0;_clearAnonSession();
       if(_r&&_r!=="k"&&_r!=="s"){tenantSessionExpired();throw new Error("tenant session expired");}
