@@ -39,6 +39,7 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
 
 const MIN_MS = 120;
 const SOFT_SUBJECT = 8;   // staff.js と同じ予算
@@ -46,7 +47,24 @@ const SOFT_IP = 30;
 const SOFT_GLOBAL = 60;
 const HARD_IP = 200;
 
-module.exports = async function handler(req, res) {
+// RTDB のキーに使える氏名か（. $ # [ ] / と制御文字を含まない・768バイト以下）
+function validNameKey(name) {
+  return typeof name === "string" && name.length > 0 && Buffer.byteLength(name, "utf8") <= 768 &&
+    !/[.$#[\]/\x00-\x1f\x7f]/.test(name);
+}
+
+/**
+ * 新会社だけ: 「PIN登録済みか」の真偽を業務データ側（/tenants/{cid}/tc5_pins/{氏名}）へ置く。
+ * ★ 新会社の tc5_pins は PIN もハッシュも持たない（施設端末から読めるため）。
+ *   穂乃味は従来どおりクライアントが tc5_pins を書くので、ここでは一切触らない。
+ */
+async function setPinFlag(name, on) {
+  if (T.current().legacy) return;
+  if (!validNameKey(name)) throw new Error("bad name key");
+  await G.dbPut("tc5_pins/" + name, on ? { set: true, updatedAt: Date.now() } : null);
+}
+
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -94,6 +112,30 @@ module.exports = async function handler(req, res) {
 
     const ipKey = S.sanitizeKey(H.clientIp(req));
     const subject = S.subjectKey(staffName);
+    const legacyTenant = T.current().legacy;
+
+    // 新会社では氏名がキーになるため、キーに使えない氏名は受け付けない
+    if (!legacyTenant && (!validNameKey(staffName) || (renameTo && !validNameKey(renameTo)))) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 400, "bad_name");
+    }
+
+    // ---- PIN確認（管理者のみ・新会社のみ）----
+    // ★ 新会社では PIN の平文をクライアントへ配らない。管理者が「PIN確認」を押したときだけ、
+    //   サーバで暗号化平文を復号して返す。穂乃味は従来どおり tc5_pins の plain を表示する。
+    if (body.reveal === true) {
+      if (!isAdmin || legacyTenant) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 403, "forbidden");
+      }
+      const rec = await G.dbGet(S.AUTHZ + "/pins/" + subject);
+      let plain = "";
+      if (rec && typeof rec === "object" && typeof rec.plainEnc === "string") {
+        try { plain = S.decryptPlain(rec.plainEnc); } catch (e) { plain = ""; }
+      }
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({ ok: true, pin: plain || null, registered: !!(rec && typeof rec === "object") });
+    }
 
     // ---- 改名: レコードを移送する（管理者のみ）----
     // ★ 旧実装は「旧キーを削除するだけ」だったため、平文が分からないスタッフは
@@ -107,6 +149,8 @@ module.exports = async function handler(req, res) {
       if (existing && typeof existing === "object") {
         await G.dbPut(S.AUTHZ + "/pins/" + S.subjectKey(renameTo), existing);
         await G.dbPut(S.AUTHZ + "/pins/" + subject, null);
+        await setPinFlag(renameTo, true);
+        await setPinFlag(staffName, false);
       }
       await H.withMinDuration(startedAt, MIN_MS);
       return res.status(200).json({ ok: true });
@@ -121,6 +165,7 @@ module.exports = async function handler(req, res) {
     // ---- 管理者は照合不要。レート制限にも掛けない（正規の一括設定を妨げない）----
     if (isAdmin) {
       await G.dbPut(S.AUTHZ + "/pins/" + subject, S.makePinRecord(pin));
+      await setPinFlag(staffName, true);
       await H.withMinDuration(startedAt, MIN_MS);
       return res.status(200).json({ ok: true });
     }
@@ -168,6 +213,7 @@ module.exports = async function handler(req, res) {
     }
 
     await G.dbPut(S.AUTHZ + "/pins/" + subject, S.makePinRecord(pin));
+    await setPinFlag(staffName, true);
     // 成功したので、この subject の試行カウンタだけ戻す（共有次元は戻さない）
     await S.resetCount("pin_sub", subject).catch(function () {});
     await H.withMinDuration(startedAt, MIN_MS);
@@ -177,4 +223,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

@@ -95,7 +95,7 @@ export default function App() {
   async function onRegister() {
     if (busy) return;
     const v = code.trim().toUpperCase();
-    if (v.length !== 8) { Alert.alert("登録コードは8文字です"); return; }
+    if (W.splitEnrollCode(v).code.length !== 8) { Alert.alert("登録コードは8文字です"); return; }
     setBusy(true); setMsg("");
     const p = await W.requestPermissions();
     if (!p.ok) {

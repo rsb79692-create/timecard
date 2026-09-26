@@ -22,7 +22,17 @@ if (missing.length) {
   process.exit(1);
 }
 
-const FB_DB_URL = process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "");
+// ===== 会社（テナント）=====
+// ★ 既定は穂乃味（TENANT_ID 未指定＝従来どおり）。他社は /tenants/<会社ID> の申請と端末だけを見る。
+const TENANT_ID = (process.env.TENANT_ID || "").trim() || "honomi";
+if (!/^[a-z][a-z0-9]{1,23}$/.test(TENANT_ID)) {
+  console.error("[ERROR] TENANT_ID の形式が不正です");
+  process.exit(1);
+}
+const TENANT_IS_LEGACY = TENANT_ID === "honomi";
+const FB_DB_URL = TENANT_IS_LEGACY
+  ? process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "")
+  : (new URL(process.env.FIREBASE_DATABASE_URL).origin + "/tenants/" + TENANT_ID);
 const DRY_RUN = (process.env.DRY_RUN || "").trim() === "true";
 
 let SERVICE_ACCOUNT;
@@ -154,7 +164,10 @@ async function sendFcmV1(token, count, projectId, accessToken) {
   const payload = JSON.stringify({
     message: {
       token,
-      data: { pendingCount: String(count), type: "correction" },
+      // 他社は会社IDを付ける（sw.js が会社ごとのアイコン・遷移先を選ぶ）。穂乃味は従来と同じ内容。
+      data: TENANT_IS_LEGACY
+        ? { pendingCount: String(count), type: "correction" }
+        : { pendingCount: String(count), type: "correction", tenant: TENANT_ID },
       android: { priority: "high" },
     },
   });

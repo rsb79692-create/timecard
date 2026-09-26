@@ -1,0 +1,30 @@
+{
+  "id": "./?c=mantel",
+  "name": "マンテール タイムカード",
+  "short_name": "マンテール打刻",
+  "start_url": "./?c=mantel",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#FFFFFF",
+  "theme_color": "#B40000",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "brand/mantel/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "brand/mantel/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "brand/mantel/apple-touch-icon.png",
+      "sizes": "180x180",
+      "type": "image/png"
+    }
+  ]
+}

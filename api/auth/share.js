@@ -24,6 +24,8 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
+const crypto = require("crypto");
 
 const MIN_MS = 150;
 const SOFT_IP = 20;
@@ -34,7 +36,28 @@ const KINDS = {
   viewer: { node: "viewerTokens", role: "v", requireExpiry: false },
   demo: { node: "demoTokens", role: "d", requireExpiry: true },
   sandbox: { node: "staffDemoTokens", role: "x", requireExpiry: true },
+  // ★ 施設端末（新会社のみ）。施設URLのトークンを、会社ID付きの端末トークン（r:"k"）へ交換する。
+  //   穂乃味は従来どおり匿名サインインで起動するので、この種別は穂乃味では受け付けない。
+  kiosk: { node: null, role: "k", requireExpiry: false, tenantOnly: true },
 };
+
+/** 施設名 → 16桁のキー（将来の facility_manager 用に端末トークンへ載せる。施設名そのものは載せない） */
+function facilityKey(name) {
+  const n = String(name || "").normalize("NFKC").replace(/\s+/g, "");
+  return crypto.createHash("sha256").update(n, "utf8").digest("hex").slice(0, 16);
+}
+
+/** master/locations から施設トークンに一致する施設を探す（全件を定数時間比較で走査する） */
+async function findFacilityByToken(token) {
+  const raw = await G.dbGet("master/locations");
+  const arr = Array.isArray(raw) ? raw : Object.values(raw || {});
+  let found = null;
+  for (const f of arr) {
+    if (!f || typeof f !== "object" || typeof f.token !== "string" || !f.token) continue;
+    if (S.timingSafeEqualStr(f.token, token) && !found) found = f;
+  }
+  return found;
+}
 
 /** JST基準の当日文字列。既存実装（getTodayJSTStr）と同じ判定にそろえる。 */
 function todayJst() {
@@ -54,7 +77,7 @@ function safeToken(t) {
   return /^[A-Za-z0-9_-]{1,64}$/.test(t);
 }
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -82,6 +105,32 @@ module.exports = async function handler(req, res) {
       return H.fail(res, 429, "rate_limited");
     }
     const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
+
+    // ===== 施設端末（新会社のみ）=====
+    if (spec.role === "k") {
+      if (T.current().legacy) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      const fac = await findFacilityByToken(token);
+      if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
+      if (!fac) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      await S.resetCount("share_ip", ipKey)
+        .catch(function (e) { console.error("[rate] reset failed", cid, e && e.message); });
+      const nowK = Math.floor(Date.now() / 1000);
+      const tidK = S.tokenHash(token).slice(0, 16);
+      const claimsK = T.decorateClaims({ r: "k", fk: facilityKey(fac.name), at: nowK, cv: 1 }, "k");
+      const customTokenK = G.createCustomToken(T.uid("k", tidK), claimsK);
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({
+        customToken: customTokenK,
+        role: "k",
+        sessionExpiresAt: claimsK.sx || null,
+      });
+    }
 
     const rec = await G.dbGet(spec.node + "/" + token);
     const today = todayJst();
@@ -142,18 +191,21 @@ module.exports = async function handler(req, res) {
     if (spec.role !== "x") claims.ro = true;      // viewer / demo は読み取り専用
     if (demoIssued) claims.di = true;             // デモ発行の閲覧用URL（完全読み取り専用）
 
-    const customToken = G.createCustomToken(spec.role + ":" + tokenId, claims);
+    // ★ 穂乃味は従来と同一。新会社は c が付き、uid に会社IDが入る。
+    //   sx はトークン自身の期限（expiresAt 当日末）のままとし、新会社でも延ばさない。
+    const outClaims = T.decorateClaims(claims, spec.role);
+    const customToken = G.createCustomToken(T.uid(spec.role, tokenId), outClaims);
 
     await H.withMinDuration(startedAt, MIN_MS);
     return res.status(200).json({
       customToken: customToken,
       role: spec.role,
       expiresAt: rec.expiresAt || null,
-      sessionExpiresAt: sx,
+      sessionExpiresAt: typeof outClaims.sx === "number" ? outClaims.sx : null,
     });
   } catch (e) {
     console.error("[auth/share]", cid, e && e.message);
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

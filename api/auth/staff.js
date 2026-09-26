@@ -26,6 +26,7 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
 
 const MIN_MS = 120; // タイミング差を潰す下限。画面遷移はブロックしないので体感に影響しない
 
@@ -35,7 +36,7 @@ const SOFT_DEVICE = 25;
 const SOFT_IP = 25;
 const SOFT_GLOBAL = 60;
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -132,7 +133,8 @@ module.exports = async function handler(req, res) {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const customToken = G.createCustomToken("s:" + subject, { r: "s", at: now, cv: 1 });
+    // ★ 穂乃味は従来と同一。新会社は subject 自体に会社IDが混ざり、クレームに c と sx が付く。
+    const customToken = G.createCustomToken(T.uid("s", subject), T.decorateClaims({ r: "s", at: now, cv: 1 }, "s"));
 
     await H.withMinDuration(startedAt, MIN_MS);
     return res.status(200).json({ customToken: customToken, role: "s" });
@@ -141,4 +143,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

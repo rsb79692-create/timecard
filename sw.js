@@ -1,7 +1,7 @@
 // ===== キャッシュ版 =====
 // ★ sw.js を変更したら必ず CACHE_NAME を上げる。activate で旧キャッシュを全削除するため、
 //   これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
-const CACHE_NAME = 'timecard-v13';
+const CACHE_NAME = 'timecard-v14';
 
 // app shell（index.html）のキャッシュキー。
 // ★ クエリ付き（?admin= / ?token= 等）でも必ずこの1つのキーへ正規化する。
@@ -15,8 +15,34 @@ const OFFLINE_URLS = [
   '/timecard/manifest.json',
   '/timecard/icon-192-v2.png',
   '/timecard/icon-512-v2.png',
-  '/timecard/apple-touch-icon-v2.png'
+  '/timecard/apple-touch-icon-v2.png',
+  // 会社ごとの表示用アセット（配信物のみ。業務データは含まない）
+  '/timecard/manifest-mantel.json',
+  '/timecard/brand/mantel/logo-160.png',
+  '/timecard/brand/mantel/logo-320.png',
+  '/timecard/brand/mantel/icon-192.png',
+  '/timecard/brand/mantel/apple-touch-icon.png'
 ];
+
+// ===== 会社（通知の表示とクリック時の遷移先）=====
+// ★ 会社ごとの違いはこの表だけ。穂乃味は従来と同じ（c を持たない URL・従来のアイコン）。
+const APP_URL = 'https://rsb79692-create.github.io/timecard/';
+const TENANT_NOTIFY = {
+  honomi: { icon: '/timecard/icon-192-v2.png', url: APP_URL },
+  mantel: { icon: '/timecard/brand/mantel/icon-192.png', url: APP_URL + '?c=mantel' }
+};
+function tenantOfPush(data) {
+  const t = data && typeof data.tenant === 'string' ? data.tenant : 'honomi';
+  return Object.prototype.hasOwnProperty.call(TENANT_NOTIFY, t) ? t : null;
+}
+// その会社の画面を開いているタブか（穂乃味は c を持たない URL、他社は c=<会社ID>）
+function clientIsTenant(clientUrl, tenant) {
+  let u;
+  try { u = new URL(clientUrl); } catch (e) { return false; }
+  if (u.pathname.indexOf('/timecard/') !== 0) return false;
+  const c = u.searchParams.get('c');
+  return tenant === 'honomi' ? !c : c === tenant;
+}
 
 // ===== キャッシュしてよいもの／絶対にキャッシュしないもの =====
 // ★ Cache Storage へ入れるのは「配信物」だけである。
@@ -208,6 +234,10 @@ self.addEventListener('message', function(event) {
 self.addEventListener('push', function(event) {
   var data = {};
   try { data = event.data ? event.data.json() : {}; } catch(e) {}
+  // ★ 未知の会社の通知は表示しない（他社の通知を別の会社の画面へ誘導しない）
+  var tenant = tenantOfPush(data);
+  if (!tenant) return;
+  var tn = TENANT_NOTIFY[tenant];
   var count = parseInt(data.pendingCount || '0', 10);
 
   if (count > 0 && 'setAppBadge' in self.navigator) {
@@ -218,22 +248,24 @@ self.addEventListener('push', function(event) {
   event.waitUntil(
     self.registration.showNotification(title, {
       body: '承認待ちの申請があります。タップして確認してください。',
-      icon: '/timecard/icon-192-v2.png',
-      badge: '/timecard/icon-192-v2.png',
-      data: { url: 'https://rsb79692-create.github.io/timecard/' },
-      tag: 'correction-requests'
+      icon: tn.icon,
+      badge: tn.icon,
+      data: { url: tn.url, tenant: tenant },
+      tag: tenant === 'honomi' ? 'correction-requests' : ('correction-requests-' + tenant)
     })
   );
 });
 
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
-  var url = (event.notification.data && event.notification.data.url)
-    || 'https://rsb79692-create.github.io/timecard/';
+  var nd = event.notification.data || {};
+  var tenant = (typeof nd.tenant === 'string' && Object.prototype.hasOwnProperty.call(TENANT_NOTIFY, nd.tenant)) ? nd.tenant : 'honomi';
+  // ★ 遷移先は会社の表から引く（通知の data の URL をそのまま開かない）
+  var url = TENANT_NOTIFY[tenant].url;
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function(clients) {
       for (var i = 0; i < clients.length; i++) {
-        if (clients[i].url.includes('/timecard/') && 'focus' in clients[i]) {
+        if (clientIsTenant(clients[i].url, tenant) && 'focus' in clients[i]) {
           return clients[i].focus();
         }
       }

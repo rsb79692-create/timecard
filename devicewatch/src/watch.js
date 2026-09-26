@@ -28,6 +28,19 @@ const REGION_ID = "facility";
 const K_ID = "dw_device_id";
 const K_TOKEN = "dw_device_token";
 const K_CONFIG = "dw_config";
+// 会社ID（穂乃味は保存しない＝従来どおり tenant を送らない）
+const K_TENANT = "dw_tenant";
+
+/**
+ * 登録コードを「会社ID」と「コード」に分ける。
+ * 穂乃味のコードは8文字（従来どおり）。他社は管理画面が「MANTEL-XXXXXXXX」の形で表示する。
+ */
+export function splitEnrollCode(input) {
+  const v = String(input || "").trim().toUpperCase();
+  const m = /^([A-Z][A-Z0-9]{1,23})-([A-Z0-9]{8})$/.exec(v);
+  if (m) return { tenant: m[1].toLowerCase(), code: m[2] };
+  return { tenant: "", code: v };
+}
 
 // 定期報告の目安。サーバの受信途絶しきい値（24時間）より十分短い。
 // ★ iOS は静止している端末への背景実行を保証しない。これは「守られる約束」ではなく目安である。
@@ -68,12 +81,15 @@ export async function loadCreds() {
   let config = null;
   try { config = JSON.parse((await SecureStore.getItemAsync(K_CONFIG)) || "null"); } catch (e) { config = null; }
   if (!id || !token) return null;
-  return { deviceId: id, deviceToken: token, config: config };
+  const tenant = (await SecureStore.getItemAsync(K_TENANT)) || "";
+  return { deviceId: id, deviceToken: token, config: config, tenant: tenant };
 }
 
-async function saveCreds(id, token, config) {
+async function saveCreds(id, token, config, tenant) {
   await SecureStore.setItemAsync(K_ID, String(id));
   await SecureStore.setItemAsync(K_TOKEN, String(token));
+  if (tenant) await SecureStore.setItemAsync(K_TENANT, String(tenant));
+  else await SecureStore.deleteItemAsync(K_TENANT);
   await saveConfig(config);
 }
 
@@ -85,6 +101,7 @@ export async function clearCreds() {
   await SecureStore.deleteItemAsync(K_ID);
   await SecureStore.deleteItemAsync(K_TOKEN);
   await SecureStore.deleteItemAsync(K_CONFIG);
+  await SecureStore.deleteItemAsync(K_TENANT);
 }
 
 // ===== 権限 =====
@@ -161,19 +178,20 @@ async function postJson(payload) {
  */
 export async function register(code) {
   const coords = await currentPosition();
-  const r = await postJson({
+  const sc = splitEnrollCode(code);
+  const r = await postJson(Object.assign(sc.tenant ? { tenant: sc.tenant } : {}, {
     action: "register",
-    code: String(code || "").trim().toUpperCase(),
+    code: sc.code,
     platform: Platform.OS,
     label: Platform.OS === "ios" ? "iPhone" : "Android",
     lat: coords ? coords.latitude : null,
     lng: coords ? coords.longitude : null,
     acc: coords ? coords.accuracy : null,
-  });
+  }));
   if (!r.ok || !r.data || !r.data.ok) {
     return { ok: false, error: (r.data && r.data.error) || "network", status: r.status };
   }
-  await saveCreds(r.data.deviceId, r.data.deviceToken, r.data.config);
+  await saveCreds(r.data.deviceId, r.data.deviceToken, r.data.config, sc.tenant);
   // ★ サーバ登録は済んでいる。監視の開始に失敗しても「登録できませんでした」にしてはならない
   //   （同じコードは二度使えないため、利用者が再登録できなくなる）。
   let watchError = "";
@@ -196,7 +214,7 @@ export async function report(event) {
   await markReported(Date.now());
   const coords = await currentPosition();
   const perm = await permissionState();
-  const r = await postJson({
+  const r = await postJson(Object.assign(creds.tenant ? { tenant: creds.tenant } : {}, {
     action: "report",
     deviceId: creds.deviceId,
     deviceToken: creds.deviceToken,
@@ -206,7 +224,7 @@ export async function report(event) {
     lng: coords ? coords.longitude : null,
     acc: coords ? coords.accuracy : null,
     permission: perm,
-  });
+  }));
   if (r.status === 403 && r.data && r.data.error === "revoked") {
     // 管理者が解除した端末。監視を止めて資格情報も消す。
     await stopWatch();

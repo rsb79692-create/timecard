@@ -29,6 +29,7 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
 
 const MIN_MS = 200;
 const SOFT_IP = 8;
@@ -40,13 +41,25 @@ const HARD_ALL = 600;
 // グローバル過熱時に適用する、IPあたりの厳しい上限
 const HARD_IP_UNDER_GLOBAL = 12;
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
 
   try {
     const body = req.body || {};
+    // ===== システム管理者（穂乃味）による会社の管理 =====
+    // ★ ログインとは別の操作。sa クレームを持つ管理者トークンが必須。
+    if (body.op !== undefined) {
+      return await handleTenantOp(req, res, body, startedAt, cid);
+    }
+    // ===== システム管理者ログイン（scope:"system"）=====
+    // 資格情報は穂乃味の /authz/systemAdminPin（会社管理者PINとは別）。
+    // 発行するトークンは「対象会社（body.tenant）の管理者」＋ sa:true。
+    // ★ 会社管理者PINでは sa は付かない＝穂乃味の一般管理者は他社へ入れない。
+    if (body.scope === "system") {
+      return await handleSystemLogin(req, res, body, startedAt, cid);
+    }
     const pin = H.str(body.pin, 32);
     const adminToken = H.str(body.adminToken, 128);
 
@@ -128,7 +141,8 @@ module.exports = async function handler(req, res) {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const customToken = G.createCustomToken("a:main", { r: "a", at: now, cv: 1 });
+    // ★ 穂乃味は従来と同一（uid "a:main"・クレーム {r,at,cv}）。新会社だけ c と sx が付く。
+    const customToken = G.createCustomToken(T.uid("a", "main"), T.decorateClaims({ r: "a", at: now, cv: 1 }, "a"));
 
     await H.withMinDuration(startedAt, MIN_MS);
     return res.status(200).json({ customToken: customToken, role: "a" });
@@ -137,4 +151,92 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});
+
+/**
+ * システム管理者ログイン。
+ * PIN の照合とレート制限は穂乃味（システム会社）のコンテキストで行い、
+ * トークンは対象会社のコンテキストで発行する。
+ */
+async function handleSystemLogin(req, res, body, startedAt, cid) {
+  const target = T.current();
+  const pin = H.str(body.pin, 32);
+  if (!/^\d{8}$/.test(pin)) {
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 401, H.INVALID);
+  }
+  const ipKey = S.sanitizeKey(H.clientIp(req));
+  const verdict = await T.run("honomi", async function () {
+    const [nIp, nAll] = await Promise.all([
+      S.bumpAndCount("sysadmin_ip", ipKey),
+      S.bumpAndCount("sysadmin_all", "global"),
+    ]);
+    if (nIp > HARD_IP || (nAll > HARD_ALL && nIp > HARD_IP_UNDER_GLOBAL)) return { limited: true };
+    const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
+    const rec = await G.dbGet(S.AUTHZ + "/systemAdminPin");
+    // ★ レコードが無い（未設定）ときも同じ計算量を通して 401。システム管理者は存在しないものとして扱う。
+    const v = S.verifyPinCompat(pin, rec && typeof rec === "object" && rec.dk ? rec : null);
+    if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
+    if (v.ok) await S.resetCount("sysadmin_ip", ipKey).catch(function () {});
+    return { ok: v.ok };
+  });
+  if (verdict.limited) {
+    res.setHeader("Retry-After", "300");
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 429, "rate_limited");
+  }
+  if (!verdict.ok) {
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 401, H.INVALID);
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const customToken = G.createCustomToken(T.uid("a", "sys"),
+    T.decorateClaims({ r: "a", at: now, cv: 1, sa: true }, "a"));
+  await H.withMinDuration(startedAt, MIN_MS);
+  return res.status(200).json({ customToken: customToken, role: "a", system: true, tenant: target.id });
+}
+
+/**
+ * 会社の一覧・利用停止（システム管理者のみ）。
+ *   { op:"tenants", idToken }                      → { tenants:[{id,displayName,system,active}] }
+ *   { op:"tenantSetActive", idToken, target, active } → { ok:true }
+ * ★ 穂乃味（システム会社）は停止できない。
+ */
+async function handleTenantOp(req, res, body, startedAt, cid) {
+  let claims = null;
+  try {
+    claims = await G.verifyIdToken(H.str(body.idToken, 4096));
+  } catch (e) {
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 401, H.INVALID);
+  }
+  if (!claims || claims.r !== "a" || claims.sa !== true) {
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 403, "forbidden");
+  }
+  if (!(await S.adminSessionValid(claims))) {
+    await H.withMinDuration(startedAt, MIN_MS);
+    return H.fail(res, 403, "session_revoked");
+  }
+  if (body.op === "tenants") {
+    const reg = await G.tenantRegAll();
+    const out = T.list().map(function (t) {
+      const r = reg && typeof reg[t.id] === "object" && reg[t.id] ? reg[t.id] : {};
+      return { id: t.id, displayName: t.displayName, system: !!t.system, active: t.system ? true : r.active === true };
+    });
+    await H.withMinDuration(startedAt, MIN_MS);
+    return res.status(200).json({ tenants: out });
+  }
+  if (body.op === "tenantSetActive") {
+    const target = T.get(H.str(body.target, 32));
+    if (!target || target.system || typeof body.active !== "boolean") {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 400, "bad_request");
+    }
+    await G.tenantRegSetActive(target.id, body.active, T.current().id + ":sys");
+    await H.withMinDuration(startedAt, MIN_MS);
+    return res.status(200).json({ ok: true });
+  }
+  await H.withMinDuration(startedAt, MIN_MS);
+  return H.fail(res, 400, "bad_request");
+}

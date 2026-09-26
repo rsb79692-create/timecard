@@ -36,6 +36,7 @@
 
 const crypto = require("crypto");
 const G = require("./google");
+const T = require("./tenant");
 const S = require("./secrets");
 
 const ROOT = "devmon";
@@ -542,8 +543,15 @@ function buildDigest(kind, items, atMs) {
  * ★ 値はログへ出さない（存在の真偽だけ）。
  */
 async function sendLine(text) {
-  const token = process.env.LINE_CHANNEL_ACCESS_TOKEN || "";
-  const to = process.env.LINE_TO_ID || "";
+  // ★ 宛先は会社ごと（穂乃味は従来の環境変数名）。会社が分からないときは送らない。
+  //   他社の持ち出し検知が穂乃味の LINE へ届く、を構造的に起こさない。
+  const tenant = T.peek();
+  if (!tenant) {
+    console.error("[device] tenant context missing; LINE not sent");
+    return false;
+  }
+  const token = T.notifyEnv("LINE_CHANNEL_ACCESS_TOKEN", tenant);
+  const to = T.notifyEnv("LINE_TO_ID", tenant);
   if (!token || !to) {
     console.error("[device] LINE credentials not configured");
     return false;
@@ -588,16 +596,18 @@ async function loadDevices() {
  * ★ ウォームインスタンス内では2回目以降を省く。`_meta` を読む処理はどこにも無く、
  *   書込 action ごとに GET を1往復払う意味が無い。
  */
-let _metaChecked = false;
+// ★ 会社ごとに持つ（穂乃味で作成済みでも新会社の /srv/{cid}/devmon/_meta は別）。
+const _metaChecked = new Set();
 async function ensureMeta() {
-  if (_metaChecked) return;
-  _metaChecked = true;
+  const tid = T.current().id;
+  if (_metaChecked.has(tid)) return;
+  _metaChecked.add(tid);
   try {
     const meta = await G.dbGet(ROOT + "/_meta");
     if (meta && typeof meta === "object") return;
     await G.dbPut(ROOT + "/_meta", { createdAt: new Date().toISOString(), version: 1 });
   } catch (e) {
-    _metaChecked = false;                 // 次回やり直せるようにする
+    _metaChecked.delete(tid);             // 次回やり直せるようにする
     throw e;
   }
 }
@@ -654,11 +664,18 @@ async function markDevices(items, field, value) {
 const EXIT_SENT_TTL_MS = 60 * 60 * 1000;
 const EXIT_SENT_MAX = 200;
 const _exitSent = new Map();
+// ★ キーに会社IDを混ぜる（端末IDはランダムだが、会社をまたいで記録を共有しない）。
+function _exitKey(key) {
+  const t = T.peek();
+  return (t ? t.id : "_") + "|" + key;
+}
 function exitSentRecently(key, nowMs) {
+  key = _exitKey(key);
   const at = _exitSent.get(key);
   return typeof at === "number" && nowMs - at < EXIT_SENT_TTL_MS;
 }
 function markExitSent(key, nowMs) {
+  key = _exitKey(key);
   // 古い記録を捨ててから足す（無制限に増やさない）。
   for (const [k, at] of _exitSent) {
     if (nowMs - at >= EXIT_SENT_TTL_MS) _exitSent.delete(k);

@@ -9,11 +9,28 @@
 const https = require("https");
 const crypto = require("crypto");
 
+// ===== 会社（テナント）=====
+// ★ 既定は穂乃味（TENANT_ID 未指定）。既存のワークフロー・Secrets はそのままで従来どおり動く。
+// ★ 他社は TENANT_ID=<会社ID> で起動し、その会社の Secrets（名前の末尾に __<会社ID大文字>）と
+//   その会社のデータ（/tenants/<会社ID>）だけを使う。穂乃味の宛先・データへは倒さない。
+const TENANT_ID = (process.env.TENANT_ID || "").trim() || "honomi";
+if (!/^[a-z][a-z0-9]{1,23}$/.test(TENANT_ID)) {
+  console.error("[ERROR] TENANT_ID の形式が不正です");
+  process.exit(1);
+}
+const TENANT_IS_LEGACY = TENANT_ID === "honomi";
+const TENANT_ENV_SUFFIX = TENANT_IS_LEGACY ? "" : ("__" + TENANT_ID.toUpperCase());
+
 // ===== Secrets バリデーション =====
-const REQUIRED_SECRETS = [
+// 穂乃味は従来どおり。他社は匿名認証を使わない（Rules が匿名を拒否する）のでサービスアカウントが必須。
+const REQUIRED_SECRETS = TENANT_IS_LEGACY ? [
   "LINE_CHANNEL_ACCESS_TOKEN",
   "FIREBASE_API_KEY",
   "FIREBASE_DATABASE_URL",
+] : [
+  "LINE_CHANNEL_ACCESS_TOKEN" + TENANT_ENV_SUFFIX,
+  "FIREBASE_DATABASE_URL",
+  "FIREBASE_SERVICE_ACCOUNT_KEY",
 ];
 const missing = REQUIRED_SECRETS.filter((k) => !process.env[k]);
 if (missing.length) {
@@ -22,7 +39,7 @@ if (missing.length) {
 }
 
 // LINE_TO_ID: 必須。未設定または "temp" の場合は明確なエラーで停止。
-const LINE_TO_ENV = (process.env.LINE_TO_ID || "").trim();
+const LINE_TO_ENV = (process.env["LINE_TO_ID" + TENANT_ENV_SUFFIX] || "").trim();
 if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
   console.error("[ERROR] LINE_TO_ID が未設定です");
   console.error("GitHub Secrets → LINE_TO_ID を設定してください");
@@ -30,8 +47,11 @@ if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
 }
 
 const FB_API_KEY  = process.env.FIREBASE_API_KEY;
-const FB_DB_URL   = process.env.FIREBASE_DATABASE_URL.replace(/\/$/, ""); // 末尾スラッシュ除去
-const LINE_TOKEN  = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁止
+// 判定データのベース。穂乃味は従来どおり Secret の値（.../honomi）。他社はオリジン + /tenants/<会社ID>。
+const FB_DB_URL   = TENANT_IS_LEGACY
+  ? process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "") // 末尾スラッシュ除去
+  : (new URL(process.env.FIREBASE_DATABASE_URL).origin + "/tenants/" + TENANT_ID);
+const LINE_TOKEN  = process.env["LINE_CHANNEL_ACCESS_TOKEN" + TENANT_ENV_SUFFIX]; // ログ出力禁止
 const LINE_TO     = LINE_TO_ENV;
 
 // testNotify=true のとき Firebase をスキップしてテスト通知のみ送信
@@ -78,6 +98,47 @@ const RUN_ID = (
 ).replace(/[^A-Za-z0-9-]/g, "").slice(0, 64);
 
 // MORNING-CHECK-HOURS-BEGIN
+// ===== 会社ごとの朝の判定設定 =====
+// ★ 施設名・判定時刻・除外施設・通知の見出しは会社ごと。下の共通処理へ直書きしない。
+// ★ 会社の追加は MORNING_TENANTS に1件足すだけ（コードの複製はしない）。
+//   設定が決まるまでは enabled:false（起動しても何も読まず・送らずに終わる）。
+const MORNING_TENANT_ID = (function () {
+  const env = (typeof process !== "undefined" && process && process.env) || {};
+  return String(env.TENANT_ID || "").trim() || "honomi";
+})();
+const MORNING_TENANT_LEGACY = MORNING_TENANT_ID === "honomi";
+const MORNING_TENANTS = {
+  // 穂乃味（従来の値。変更していない）
+  honomi: {
+    enabled: true,
+    appName: "穂乃味タイムカード",
+    // 施設一覧の控え兼「監視が成立しているかの期待値」（下の DEFAULT_FACILITIES の説明を参照）
+    defaultFacilities: [
+      "ナナイロ", "ココラ", "ハーベスト",
+      "ミュゲ貝塚", "ミュゲ春木", "ミュゲの泉", "ハルイロ",
+    ],
+    // ハーベストは朝の未打刻通知の対象外（打刻機能・管理画面は通常通り）
+    notifyExclude: ["ハーベスト"],
+    lateCheckFacilities: {
+      "ハルイロ": 7,
+      "ミュゲの泉": 7,
+    },
+  },
+  // マンテール株式会社（施設・判定時刻が決まるまで無効）
+  mantel: {
+    enabled: false,
+    appName: "マンテール タイムカード",
+    defaultFacilities: [],
+    notifyExclude: [],
+    lateCheckFacilities: {},
+  },
+};
+if (!Object.prototype.hasOwnProperty.call(MORNING_TENANTS, MORNING_TENANT_ID)) {
+  console.error("[ERROR] 朝の判定設定が無い会社です（MORNING_TENANTS に未登録）");
+  process.exit(1);
+}
+const MORNING_CFG = MORNING_TENANTS[MORNING_TENANT_ID];
+
 // ===== 施設一覧の控え兼「監視が成立しているかの期待値」 =====
 // ⚠⚠ **index.html と同期しないこと。** index.html 側の DEFAULT_FACILITIES は空配列であり
 //    （実施設名を配布物へ埋め込まないため）、ここへ写すと下の2つの役割が同時に壊れる。
@@ -86,14 +147,11 @@ const RUN_ID = (
 //       施設マスタは一般スタッフでも書けるので、期待値だけは改ざんされない場所に置く必要がある。
 //       空にすると期待値が常に0になり、施設を消されても「設定異常」を検知できなくなる。
 // **施設が増減したときはここを更新する。**
-const DEFAULT_FACILITIES = [
-  "ナナイロ", "ココラ", "ハーベスト",
-  "ミュゲ貝塚", "ミュゲ春木", "ミュゲの泉", "ハルイロ",
-];
+const DEFAULT_FACILITIES = MORNING_CFG.defaultFacilities;
 
 // ===== 朝打刻通知から除外する施設 =====
 // ハーベストは朝の未打刻通知の対象外（打刻機能・管理画面は通常通り）
-const NOTIFY_EXCLUDE = ["ハーベスト"];
+const NOTIFY_EXCLUDE = MORNING_CFG.notifyExclude;
 
 // ===== 施設別 未打刻判定時刻（JST時） =====
 // 1回の実行は「その回の判定時刻に属する施設」だけを見る。
@@ -117,10 +175,7 @@ const CHECK_HOURS = [6, 7];
 
 // 既定（6時）と異なる判定時刻を持つ施設。キーは施設名を normalizeFacility したもの。
 // ここに書いた施設名が施設マスタに見当たらない場合は findMissingLateFacilities が警告する。
-const LATE_CHECK_FACILITIES = {
-  "ハルイロ": 7,
-  "ミュゲの泉": 7,
-};
+const LATE_CHECK_FACILITIES = MORNING_CFG.lateCheckFacilities;
 
 // 施設マスタから受け入れる上限。master/locations は一般スタッフでも書けるため、
 // 件数・名前の長さを無制限に信用しない（ログ肥大・LINE本文の肥大による送信失敗を防ぐ）。
@@ -300,7 +355,8 @@ function findMonitoringAnomalies(entries, hour, selectedCount, fallbackReason) {
 //    リース切れ後の実行が**同じ要求をそのまま**再送する。LINE は24時間以内の同一 retry key を 409 で弾く。
 //    本文を作り直して新しい retry key で送ると二重通知になる。
 // ⚠ 記録を読めない・書けないときは送らない（exit 1）。二重送信より、赤い実行として気づかせる方を選ぶ。
-const DEDUPE_ROOT = "morningNotify";
+// ★ 会社ごとに分ける。穂乃味は従来どおりルート直下、他社は /srv/<会社ID>/morningNotify（どちらもルール未定義＝クライアントから不可）。
+const DEDUPE_ROOT = MORNING_TENANT_LEGACY ? "morningNotify" : ("srv/" + MORNING_TENANT_ID + "/morningNotify");
 const DEDUPE_ANOMALY_SLOT = "anomaly";
 const DEDUPE_LEASE_MS = 10 * 60 * 1000;       // 送信権の保持時間。1回の送信（最大 約1分）より十分長く
 // 他の実行が送信中なら、そのリースが切れるまで待つ（切れたら同じ要求を引き継いで再送する）。
@@ -319,7 +375,7 @@ const HTTP_TIMEOUT_MS = 15 * 1000;
 const RETRY_KEY_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // 再送する本文の検査（多層防御）。記録はサービスアカウントしか書けないが、万一書き換えられても
 // 固定の見出しで始まらない本文・LINE の上限を超える本文は管理者の LINE へ流さない。
-const MORNING_MESSAGE_PREFIX = "【穂乃味タイムカード】\n朝出勤未確認（";
+const MORNING_MESSAGE_PREFIX = "【" + MORNING_CFG.appName + "】\n朝出勤未確認（";
 const MAX_MESSAGE_LEN = 5000;
 
 // 通知記録のベース URL。
@@ -532,7 +588,7 @@ async function sendBatchWithRetry(sendOnce, batch, sleep) {
 // 通知の本文。初回（通知済みの枠が無い）は従来と1文字も違わない。
 // freshNames: 今回はじめて通知する未打刻施設 / suppressedCount: 通知済み等で今回は載せない未打刻施設の数
 function buildMorningMessage(p) {
-  const head = `【穂乃味タイムカード】\n朝出勤未確認（${p.hour}時判定）\n\n` +
+  const head = `【${MORNING_CFG.appName}】\n朝出勤未確認（${p.hour}時判定）\n\n` +
     (p.targetDate ? `判定対象日：${p.targetDate}（手動指定）\n` : "") +
     `確認時刻：${p.nowStr}\n\n`;
   const names = p.freshNames || [];
@@ -854,7 +910,8 @@ async function fetchRTDB(path, idToken) {
   // auth トークンは URL から除いてログ出力
   const logUrl = `${FB_DB_URL}/${path}.json`;
   console.log(`[RTDB]  GET ${logUrl}`);
-  const fullUrl = `${logUrl}?auth=${idToken}`;
+  // 穂乃味は従来どおり匿名の ID トークン。他社はサービスアカウントの OAuth トークン（Rules を迂回）。
+  const fullUrl = TENANT_IS_LEGACY ? `${logUrl}?auth=${idToken}` : `${logUrl}?access_token=${idToken}`;
   const res = await httpRequest(fullUrl);
   console.log(`[RTDB]  HTTP ${res.status}`);
   if (res.status !== 200) {
@@ -1033,7 +1090,14 @@ async function main() {
   console.log(`[CONFIG] TEST_NOTIFY=${TEST_NOTIFY} DRY_RUN=${DRY_RUN} TARGET_DATE="${TARGET_DATE_ENV || "(なし)"}"`);
   console.log(`[CONFIG] CHECK_HOUR=${CHECK_HOUR}時${CHECK_HOUR_ENV ? "" : "（CHECK_HOUR 未指定 → 既定）"}`);
   console.log(`[FIREBASE] base URL: ${FB_DB_URL}`);
+  console.log(`[TENANT] ${TENANT_ID}`);
   console.log("========================================");
+
+  // ── 会社の朝の判定設定が無効なら何もしない（施設・判定時刻が決まるまで） ──
+  if (MORNING_CFG.enabled !== true) {
+    console.log("[SKIP]  この会社の朝出勤確認は無効です（MORNING_TENANTS の enabled）");
+    return;
+  }
 
   // ── 二重通知防止の自己診断（LINE は送らない） ──
   if (DEDUPE_SELFTEST) {
@@ -1052,7 +1116,7 @@ async function main() {
   if (TEST_NOTIFY) {
     console.log("[TEST]  testNotify=true → Firebase スキップ・テスト通知送信");
     const testMessage =
-      "【穂乃味タイムカード】\nテスト通知\n\n" +
+      "【" + MORNING_CFG.appName + "】\nテスト通知\n\n" +
       "LINE通知設定は正常です。\n\n" +
       `送信時刻：${getNowJSTWithSeconds()}`;
     await sendLineMessage(testMessage);
@@ -1070,8 +1134,15 @@ async function main() {
   }
 
   // ── Firebase 認証 ──
-  console.log("[AUTH]  Firebase Anonymous Auth 開始");
-  const idToken = await getFirebaseIdToken();
+  // ★ 他社は匿名で読めない（/tenants は会社ID付きのトークンだけ）。サービスアカウントで読む。
+  let idToken;
+  if (TENANT_IS_LEGACY) {
+    console.log("[AUTH]  Firebase Anonymous Auth 開始");
+    idToken = await getFirebaseIdToken();
+  } else {
+    console.log("[AUTH]  サービスアカウントで認証（会社: " + TENANT_ID + "）");
+    idToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+  }
   console.log("[AUTH]  idToken 取得完了");
 
   // ── records 取得 ──

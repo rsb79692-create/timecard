@@ -88,7 +88,8 @@ function makeCtx(opts) {
     loadData: (k, d) => (opts.ls && opts.ls[k] !== undefined ? opts.ls[k] : d),
     // ★ 期間取得ブロックは前半の script ブロックにあり、loadData() はまだ定義されていない。
     //   そのため端末保存は localStorage を直接読む。テストでも同じ経路を通す。
-    localStorage: {
+    // 端末保存は会社別ラッパー（TLS）経由。穂乃味では localStorage と同じキーをそのまま使う。
+    TLS: {
       getItem: (k) => (opts.ls && opts.ls[k] !== undefined ? JSON.stringify(opts.ls[k]) : null),
       setItem: () => {}
     },
@@ -691,7 +692,7 @@ section("8. index.html 側の結線");
     //   評価時点で呼ぶと ReferenceError になり、その script ブロックの残り
     //   （_LAZY_RETRY_MS の初期化など）が丸ごと実行されなくなる。実機で発生させた事故。
     ["期間取得ブロックが評価時に loadData() を呼ばない", /^(?!.*var _recOldestDate=loadData)/s],
-    ["最古日の端末保存は参照時に遅延復元する", /function _recOldestFromStorage\(\)\{[\s\S]{0,400}?localStorage\.getItem\("tc5_records_oldest"\)/],
+    ["最古日の端末保存は参照時に遅延復元する", /function _recOldestFromStorage\(\)\{[\s\S]{0,400}?TLS\.getItem\("tc5_records_oldest"\)/],
     ["SW が古い版を報告したらバナーを出す", /if\(_swSaysStale\)\{_appVersionLastCheck=now;_appUpdateNotified=true;_showAppUpdateBanner\(\);return;\}/],
     // ★ 「後で」を押した直後の画面復帰で即再表示されないこと（間隔ゲートのあとで判定する）
     ["_swSaysStale の判定は5分間隔ゲートのあと", /if\(now-_appVersionLastCheck<APP_VERSION_MIN_GAP_MS\)return;\s*\n\s*if\(_swSaysStale\)/],
@@ -738,7 +739,9 @@ section("9. sw.js（app shell キャッシュ）");
   const offlineList = (sw.match(/const OFFLINE_URLS = \[([\s\S]*?)\];/) || [, ""])[1];
   const offlineUrls = (offlineList.match(/'[^']+'/g) || []).map((s) => s.slice(1, -1));
   check("OFFLINE_URLS は同一オリジンの静的アセットだけ（外部・API・認証を含まない）",
-    offlineUrls.length > 0 && offlineUrls.every((u) => /^\/timecard\/[A-Za-z0-9._-]+$/.test(u)));
+    // 会社ごとの表示用アセット（/timecard/brand/<会社ID>/）も配信物。拡張子は静的アセットに限る。
+    offlineUrls.length > 0 && offlineUrls.every((u) =>
+      /^\/timecard\/(brand\/[a-z][a-z0-9]{1,23}\/)?[A-Za-z0-9._-]+\.(png|json|svg|webp|ico)$/.test(u)));
   check("OFFLINE_URLS に HTML を含めない（app shell は専用の経路で扱う）",
     offlineUrls.every((u) => !/\.html$/.test(u)));
   check("ナビゲーション以外では cache.put を呼ばない（fetch ハンドラ後半）",

@@ -15,6 +15,7 @@
 
 const crypto = require("crypto");
 const { dbGet, dbPut, dbPatch } = require("./google");
+const T = require("./tenant");
 
 const AUTHZ = "authz";
 
@@ -112,7 +113,13 @@ function verifyPinCompat(pin, record) {
  *   名前そのものは保存せず、ハッシュだけをキーに使う。
  */
 function subjectKey(staffName) {
-  return "n_" + crypto.createHash("sha256").update(String(staffName), "utf8").digest("hex").slice(0, 40);
+  // ★ 穂乃味（legacy）は従来の導出を1文字も変えない（既存スタッフにPIN再設定を求めないため）。
+  // ★ 新会社は hash(会社ID + 氏名)。会社をまたいだ同姓同名でキーが衝突しない。
+  //   保管場所も /srv/{cid}/authz に分かれるが、uid（"s:" + subject）が Firebase Auth 上で
+  //   会社をまたいで同一ユーザーにならないよう、キー自体にも会社IDを混ぜる。
+  const t = T.current();
+  const input = t.legacy ? String(staffName) : ("tenant:" + t.id + "\u0000" + String(staffName));
+  return "n_" + crypto.createHash("sha256").update(input, "utf8").digest("hex").slice(0, 40);
 }
 
 // ===== 実在スタッフの確認 / bootstrap 完了の確認 =====
@@ -126,13 +133,17 @@ function subjectKey(staffName) {
  *   (3) 全ログインが失敗し続けてレート制限だけが積み上がる
  *   いずれも実害があるため、_meta が無い間は書き込みも認証も行わない。
  */
-let _readyCache = { ok: false, exp: 0 };
+// ★ キャッシュは会社ごとに持つ。共有すると、穂乃味の bootstrap 済みを見て
+//   未 bootstrap の新会社を「準備完了」と誤認する（第三者がPINを先に占有できる）。
+const _readyCache = new Map();
 async function authzReady() {
   const now = Date.now();
-  if (_readyCache.ok && now < _readyCache.exp) return true;
+  const tid = T.current().id;
+  const c = _readyCache.get(tid);
+  if (c && c.ok && now < c.exp) return true;
   const meta = await dbGet(AUTHZ + "/_meta");
   const ok = !!(meta && typeof meta === "object");
-  if (ok) _readyCache = { ok: true, exp: now + 60000 };
+  if (ok) _readyCache.set(tid, { ok: true, exp: now + 60000 });
   return ok;
 }
 
@@ -143,7 +154,14 @@ async function authzReady() {
  *   実在性を何も担保しない）。
  * 名簿は短時間メモリキャッシュして RTDB 往復を増やさない。
  */
-let _staffCache = { names: null, exp: 0 };
+// ★ 会社ごとに持つ。共有すると A社の名簿で B社の実在確認をしてしまう。
+const _staffCaches = new Map();
+function _staffCacheOf() {
+  const tid = T.current().id;
+  let c = _staffCaches.get(tid);
+  if (!c) { c = { names: null, exp: 0 }; _staffCaches.set(tid, c); }
+  return c;
+}
 async function loadStaffNames() {
   const raw = await dbGet("tc5_staff");
   const arr = Array.isArray(raw) ? raw : Object.values(raw || {});
@@ -151,11 +169,14 @@ async function loadStaffNames() {
   for (const s of arr) {
     if (s && typeof s === "object" && typeof s.name === "string" && s.name) set.add(s.name);
   }
-  _staffCache = { names: set, exp: Date.now() + 60000 };
+  const c = _staffCacheOf();
+  c.names = set;
+  c.exp = Date.now() + 60000;
   return set;
 }
 async function staffNameExists(name) {
   const key = String(name);
+  const _staffCache = _staffCacheOf();
   let set = _staffCache.names;
   if (!set || Date.now() >= _staffCache.exp) set = await loadStaffNames();
   if (set.has(key)) return true;
@@ -197,9 +218,15 @@ async function staffNameExists(name) {
 const ADMIN_AT_SKEW_SEC = 30;
 
 async function adminSessionValid(claims) {
+  const at = claims && typeof claims.at === "number" ? claims.at : 0;
+  // ★ システム管理者（sa）のセッションは、システム管理者PINの変更でも失効させる。
+  //   その値は穂乃味（システム会社）の /authz に置くので、そのコンテキストで読む。
+  if (claims && claims.sa === true) {
+    const smin = await T.run("honomi", function () { return dbGet(AUTHZ + "/systemAdminMinAt"); });
+    if (typeof smin === "number" && smin > 0 && !(at + ADMIN_AT_SKEW_SEC >= smin)) return false;
+  }
   const min = await dbGet(AUTHZ + "/adminMinAt");
   if (typeof min !== "number" || !(min > 0)) return true;
-  const at = claims && typeof claims.at === "number" ? claims.at : 0;
   return at + ADMIN_AT_SKEW_SEC >= min;
 }
 

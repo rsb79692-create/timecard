@@ -17,6 +17,7 @@
 const H = require("./_lib/http");
 const G = require("./_lib/google");
 const S = require("./_lib/secrets");
+const T = require("./_lib/tenant");
 const D = require("./_lib/device");
 
 const MIN_MS = 60;
@@ -281,7 +282,11 @@ async function handleIssueEnroll(body, actor) {
   expired.slice(0, 50).forEach(function (c) { map[D.ROOT + "/enroll/" + c] = null; });
   await G.dbPatchRoot(map);
   return {
-    status: 200, ok: true, code: code, expiresAt: rec.expiresAt,
+    // ★ 新会社の登録コードは「会社ID-コード」で表示する（監視アプリが会社を選べるようにする）。
+    //   穂乃味は従来どおり8文字のまま。
+    status: 200, ok: true,
+    code: T.current().legacy ? code : (T.current().id.toUpperCase() + "-" + code),
+    expiresAt: rec.expiresAt,
     setBaseFromDevice: rec.setBaseFromDevice, name: name,
   };
 }
@@ -297,7 +302,7 @@ async function handleRevokeDevice(body, actor) {
   return { status: 200, ok: true };
 }
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -309,6 +314,11 @@ module.exports = async function handler(req, res) {
     if (!allowed) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 400, "bad_action");
+    }
+    // ★ 会社ごとの機能フラグ（api/_lib/tenant.js）。無効な会社では一切の操作を受け付けない。
+    if (!T.feature("deviceWatch")) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "feature_disabled");
     }
 
     const ident = await D.resolveIdentity(H.str(body.idToken, 4096));
@@ -353,7 +363,7 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});
 
 module.exports.ACTIONS = ACTIONS;
 module.exports.WRITE_ACTIONS = WRITE_ACTIONS;

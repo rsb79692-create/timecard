@@ -15,6 +15,7 @@
 
 const https = require("https");
 const crypto = require("crypto");
+const T = require("./tenant");
 
 const IDENTITY_TOOLKIT_AUD =
   "https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit";
@@ -202,8 +203,17 @@ async function dbRequest(path, method, payload) {
   // ★ "devmon"（施設端末の持ち出し監視）も同じ理由でルート直下。/honomi 配下へ置くと
   //   打刻のために開けてある経路から、監視対象の端末が自分で
   //   「監視OFF」「基準位置＝自宅」「範囲内」と書けてしまい、検知そのものを無効化できる。
-  const base = /^(authz|ratelimit|mileage|devmon)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
-  const url = base + "/" + p + ".json";
+  // ★ 会社コンテキストで分岐する。穂乃味（legacy）は従来の組み立てを1文字も変えない。
+  //   新会社は /tenants/{cid}/… と /srv/{cid}/… へ写す（tenant.js の mapPath）。
+  //   コンテキストが無ければ T.mapPath が例外を投げる（どの会社か分からないまま触らない）。
+  const mapped = T.mapPath(p);
+  let url;
+  if (mapped === null) {
+    const base = /^(authz|ratelimit|mileage|devmon)(\/|$)/.test(p) ? dbRootBase() : dbUrlBase();
+    url = base + "/" + p + ".json";
+  } else {
+    url = dbRootBase() + "/" + mapped + ".json";
+  }
   const bodyStr = payload === undefined ? null : JSON.stringify(payload);
   const headers = { Authorization: "Bearer " + token };
   if (bodyStr) {
@@ -268,8 +278,13 @@ async function dbPatchRoot(map) {
     if (!ROOT_PATH_KEY.test(k)) throw new Error("unsafe multi-path key");
     if (tops.indexOf(k.split("/")[0]) < 0) throw new Error("multi-path key outside allowed roots");
   }
+  // ★ 新会社では各キーを /tenants/{cid}/… と /srv/{cid}/… へ写す（穂乃味は恒等写像）。
+  //   検査（上）は写像の前に行う。呼び出し側が渡してよい形は会社によらず同じ。
+  const prefix = dataPathPrefix();
+  const mappedMap = {};
+  for (const k of keys) mappedMap[T.mapRootKey(k, prefix)] = map[k];
   const token = await getDbAccessToken();
-  const bodyStr = JSON.stringify(map);
+  const bodyStr = JSON.stringify(mappedMap);
   const res = await httpRequest(
     dbRootBase() + "/.json",
     {
@@ -373,7 +388,66 @@ async function verifyIdToken(idToken) {
   const ok = verifier.verify(pem, Buffer.from(parts[2], "base64url"));
   if (!ok) throw new Error("bad token");
 
+  // ★ 会社の一致を検査する（会社間の遮断の要）。
+  //   リクエストの会社（body.tenant）とトークンの会社（クレーム c。無ければ穂乃味）が
+  //   食い違うトークンは、署名が正しくても無効として扱う。
+  //   各 API は verifyIdToken の失敗を 401 にするので、個別の検査漏れが起きない。
+  const ctx = T.peek();
+  if (ctx && T.claimTenantId(payload) !== ctx.id) throw new Error("tenant mismatch");
+
   return payload;
+}
+
+// ===== 会社の登録簿（/tenantReg/{cid}）=====
+// ★ ルート直下・Rules では読み取りのみ参照（書き込みはサーバだけ）。
+//   Rules は root.child('tenantReg').child($cid).child('active') を見て、停止中の会社を拒否する。
+
+/** 会社が利用中か。システム会社（穂乃味）は停止の対象にしない。取得失敗は throw（呼び出し側で 500）。 */
+// ★ 未認証の入口（PINログイン・端末報告）でも毎回ここを通るため、短時間だけ使い回す。
+//   停止の反映は最大 ACTIVE_TTL_MS 遅れるだけ（Rules 側は即時に止まる）。
+const ACTIVE_TTL_MS = 5000;
+const _activeCache = new Map();
+async function tenantActive(cid) {
+  const t = T.get(cid);
+  if (!t) return false;
+  if (t.system) return true;
+  const c = _activeCache.get(t.id);
+  if (c && Date.now() - c.at < ACTIVE_TTL_MS) return c.v;
+  const v = await _tenantActiveFetch(t);
+  _activeCache.set(t.id, { v: v, at: Date.now() });
+  return v;
+}
+async function _tenantActiveFetch(t) {
+  const token = await getDbAccessToken();
+  const res = await httpRequest(dbRootBase() + "/tenantReg/" + t.id + "/active.json",
+    { method: "GET", headers: { Authorization: "Bearer " + token } });
+  if (res.status !== 200) throw new Error("tenantReg read failed: HTTP " + res.status);
+  // ★ 明示的に true のときだけ利用中（未作成・false・その他はすべて停止扱い）
+  return res.body === true;
+}
+
+/** 会社の登録簿を読む（全社）。システム管理者の会社一覧用。 */
+async function tenantRegAll() {
+  const token = await getDbAccessToken();
+  const res = await httpRequest(dbRootBase() + "/tenantReg.json",
+    { method: "GET", headers: { Authorization: "Bearer " + token } });
+  if (res.status !== 200) throw new Error("tenantReg read failed: HTTP " + res.status);
+  return res.body && typeof res.body === "object" ? res.body : {};
+}
+
+/** 会社の利用状態を書く。★ システム会社は変更不可。 */
+async function tenantRegSetActive(cid, active, by) {
+  const t = T.get(cid);
+  if (!t || t.system) throw new Error("tenant not switchable");
+  const token = await getDbAccessToken();
+  const bodyStr = JSON.stringify({ active: active === true, updatedAt: Date.now(), updatedBy: String(by || "").slice(0, 64) });
+  const res = await httpRequest(dbRootBase() + "/tenantReg/" + t.id + ".json", {
+    method: "PATCH",
+    headers: { Authorization: "Bearer " + token, "Content-Type": "application/json", "Content-Length": Buffer.byteLength(bodyStr) },
+  }, bodyStr);
+  if (res.status < 200 || res.status >= 300) throw new Error("tenantReg write failed: HTTP " + res.status);
+  _activeCache.delete(t.id);
+  return true;
 }
 
 module.exports = {
@@ -387,4 +461,7 @@ module.exports = {
   dbPatchRoot,
   dataPathPrefix,
   httpRequest,
+  tenantActive,
+  tenantRegAll,
+  tenantRegSetActive,
 };

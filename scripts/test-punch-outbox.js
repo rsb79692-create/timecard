@@ -162,6 +162,9 @@ function makeCtx(opts) {
     Date: clock.Date,
     encodeURIComponent,
     localStorage: ls,
+    // 会社別の保存領域（穂乃味は接頭辞・接尾辞なし＝従来のキー名・DB名）
+    TLS: ls,
+    TENANT_IDB_SUFFIX: "",
     indexedDB: opts.noIndexedDb ? undefined : makeFakeIndexedDB(opts.idb),
     window: { addEventListener() {} },
     document: { hidden: false, addEventListener() {}, querySelector() { return null; } },

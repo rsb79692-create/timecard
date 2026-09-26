@@ -90,6 +90,9 @@ const ALLOW_NO_ADMIN_CREDENTIAL = process.argv.includes("--allow-no-admin-creden
 
 const G = require(path.join(__dirname, "..", "api", "_lib", "google.js"));
 const S = require(path.join(__dirname, "..", "api", "_lib", "secrets.js"));
+// ★ このスクリプトは穂乃味（既定テナント・従来の /authz）専用。共通ライブラリは会社コンテキストが
+//   無いと DB に触れない（フェイルクローズ）ので、穂乃味として動かす。新会社は bootstrap-tenant.js を使う。
+require(path.join(__dirname, "..", "api", "_lib", "tenant.js")).enterForScript("honomi");
 
 function stableStringify(o) {
   if (o === null || typeof o !== "object") return JSON.stringify(o);

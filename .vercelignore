@@ -62,3 +62,6 @@ scripts
 # ★ ここを除外しないと、Vercel がルート以外の package.json / 依存を拾いうる。
 #   アプリのビルドは EAS またはローカルで行う（devicewatch/README.md）。
 devicewatch
+
+# --- テスト（エミュレータ・ブラウザテスト。Vercel の関数には不要）---
+tests/

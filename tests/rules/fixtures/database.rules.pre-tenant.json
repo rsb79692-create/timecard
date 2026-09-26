@@ -1,122 +1,48 @@
 {
   "rules": {
     "honomi": {
-      ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && auth.token.r != null && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()",
-      ".write": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && (auth.token.r === 'a' || auth.token.r === 's') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()",
+      ".read": "auth != null && auth.token.r != null && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()",
+      ".write": "auth != null && (auth.token.r === 'a' || auth.token.r === 's') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()",
       "tc5_staff": {
-        ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists()"
+        ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists()"
       },
       "tc_master_depts": {
-        ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists()"
+        ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists()"
       },
       "master": {
         "locations": {
-          ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists()"
+          ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists()"
         }
       },
       "tc5_pins": {
-        ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists()",
-        ".write": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists() && auth.token.ro != true && auth.token.r != 'x' && newData.exists()"
+        ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists()",
+        ".write": "auth != null && !root.child('guestOf').child(auth.uid).exists() && auth.token.ro != true && auth.token.r != 'x' && newData.exists()"
       },
       "tc5_records": {
-        ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists()",
-        ".write": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists() && auth.token.ro != true && auth.token.r != 'x' && newData.exists()",
+        ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists()",
+        ".write": "auth != null && !root.child('guestOf').child(auth.uid).exists() && auth.token.ro != true && auth.token.r != 'x' && newData.exists()",
         ".indexOn": [
           "date"
         ]
       },
       "viewerTokens": {
         "$token": {
-          ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)",
-          ".write": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && (auth.token.r === 'a' || auth.token.r === 'd') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()"
+          ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)",
+          ".write": "auth != null && (auth.token.r === 'a' || auth.token.r === 'd') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()"
         }
       },
       "demoTokens": {
         "$token": {
-          ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)"
+          ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)"
         }
       },
       "staffDemoTokens": {
         "$token": {
-          ".read": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)"
+          ".read": "auth != null && !root.child('guestOf').child(auth.uid).exists() && $token.matches(/^[A-Za-z0-9_-]{1,64}$/)"
         }
       },
       "demoIssuedViewerTokens": {
-        ".write": "auth != null && (auth.token.c == null || auth.token.c === 'honomi') && (auth.token.r === 'a' || auth.token.r === 'd') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()"
-      }
-    },
-    "tenants": {
-      "$cid": {
-        ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's' || auth.token.r === 'v' || auth.token.r === 'd' || auth.token.r === 'x')",
-        "tc5_staff": {
-          ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'k'",
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc_master_depts": {
-          ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'k'",
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "master": {
-          "locations": {
-            ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'k'",
-            ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-          }
-        },
-        "tc5_pins": {
-          ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'k'"
-        },
-        "tc5_records": {
-          ".read": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'k'",
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's') && newData.exists()",
-          ".indexOn": [
-            "date"
-          ]
-        },
-        "tc5_approvals": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_correction_requests": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_paid_leave_requests": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_paid_leave_balances": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_monthly_days_import": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_monthly_review_status": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_meals": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_meal_confirmations": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_staff_notifications": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "tc5_fcm_tokens": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "documents": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 's')"
-        },
-        "viewerTokens": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 'd')"
-        },
-        "demoIssuedViewerTokens": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && (auth.token.r === 'a' || auth.token.r === 'd')"
-        },
-        "demoTokens": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'a'"
-        },
-        "staffDemoTokens": {
-          ".write": "auth != null && auth.token.c === $cid && auth.token.sx != null && auth.token.sx * 1000 > now && root.child('tenantReg').child($cid).child('active').val() === true && auth.token.r === 'a'"
-        }
+        ".write": "auth != null && (auth.token.r === 'a' || auth.token.r === 'd') && (auth.token.sx == null || auth.token.sx * 1000 > now) && !root.child('guestOf').child(auth.uid).exists()"
       }
     },
     "members": {

@@ -1,0 +1,13 @@
+{
+  "name": "timecard-rules-tests",
+  "private": true,
+  "description": "Firebase エミュレータで database.rules.json / storage.rules の会社間分離を検証する（本番へは一切接続しない）",
+  "scripts": {
+    "test": "firebase emulators:exec --only database,storage --project demo-timecard-rules \"node rules.test.js\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.0.0",
+    "firebase-tools": "^14.0.0"
+  }
+}

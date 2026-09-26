@@ -338,8 +338,12 @@ check("当日の clockIn・削除済み除外の判定を変えていない",
   /r\.type === "clockIn" && r\.date === today && !r\.deleted/.test(SRC));
 check("施設マスタは RTDB の master/locations から取る",
   /fetchRTDB\("master\/locations", idToken\)/.test(SRC));
+// 施設の値は会社ごとの表（MORNING_TENANTS）へ移した。穂乃味の値が変わっていないことと、
+// 共通処理がその表から引いていることの両方を固定する。
 check("朝通知の除外施設（ハーベスト）を維持している",
-  /const NOTIFY_EXCLUDE = \["ハーベスト"\];/.test(SRC));
+  /honomi: \{[\s\S]{0,800}?notifyExclude: \["ハーベスト"\],/.test(SRC)
+  && /const NOTIFY_EXCLUDE = MORNING_CFG\.notifyExclude;/.test(SRC)
+  && JSON.stringify(mod.NOTIFY_EXCLUDE) === JSON.stringify(["ハーベスト"]));
 check("LINE 送信処理（push API）を変えていない",
   /https:\/\/api\.line\.me\/v2\/bot\/message\/push/.test(SRC));
 check("dryRun で LINE 送信をスキップする経路が残っている",
@@ -586,10 +590,11 @@ section("監視の成立判定（findMonitoringAnomalies）");
 section("LATE_CHECK_FACILITIES の設定不正で起動を止める");
 {
   const bad = [
-    ['const LATE_CHECK_FACILITIES = {\n  "ハルイロ": 7,\n  "ミュゲの泉": 7,\n};',
-     'const LATE_CHECK_FACILITIES = {\n  "ハルイロ": 23,\n};', "範囲外の判定時刻"],
-    ['const LATE_CHECK_FACILITIES = {\n  "ハルイロ": 7,\n  "ミュゲの泉": 7,\n};',
-     'const LATE_CHECK_FACILITIES = {\n  "ハルイロ": 7,\n  "ハル イロ": 6,\n};', "正規化後に衝突"],
+    // 穂乃味の判定時刻は会社ごとの表（MORNING_TENANTS.honomi.lateCheckFacilities）にある
+    ['    lateCheckFacilities: {\n      "ハルイロ": 7,\n      "ミュゲの泉": 7,\n    },',
+     '    lateCheckFacilities: {\n      "ハルイロ": 23,\n    },', "範囲外の判定時刻"],
+    ['    lateCheckFacilities: {\n      "ハルイロ": 7,\n      "ミュゲの泉": 7,\n    },',
+     '    lateCheckFacilities: {\n      "ハルイロ": 7,\n      "ハル イロ": 6,\n    },', "正規化後に衝突"],
   ];
   bad.forEach(([from, to, why]) => {
     if (BLOCK.indexOf(from) === -1) {

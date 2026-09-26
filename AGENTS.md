@@ -2273,6 +2273,103 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
 
 ---
 
+## マルチテナント（複数の会社で共用）— 2026-09-26
+
+**1つのコード・1つの Firebase プロジェクトを、株式会社 穂乃味とマンテール株式会社（以降も追加可）で共用する。**
+会社ごとの違いは「会社設定」と「機能フラグ」だけで表し、**会社ごとにコードを複製・分岐しない**。
+共通機能の変更は1回の実装で全社へ反映される。
+
+⚠⚠ **本番の Firebase Rules の deploy と、マンテールの本番データ作成（`/tenantReg/mantel`・`/srv/mantel/authz`）は未実施。**
+ユーザーの確認を得てから行う（下記「本番反映の手順」）。それまでマンテールは API・Rules の両方で拒否される（未作成＝停止扱い）。
+
+### 会社ID と置き場所
+
+| 会社ID | 業務データ | サーバ専用 | 利用状態 |
+|---|---|---|---|
+| `honomi`（既定・システム会社） | `/honomi`（**従来のまま。移動・一括更新しない**） | `/authz` `/mileage` `/devmon` `/ratelimit` `/morningNotify`（従来のまま） | 停止の対象外 |
+| `mantel` | `/tenants/mantel` | `/srv/mantel/{authz,mileage,devmon,ratelimit,morningNotify}` | `/tenantReg/mantel/active === true` のときだけ利用可 |
+
+- 画面は URL の **`?c=<会社ID>`** で会社を選ぶ。無ければ穂乃味（**既存の穂乃味の URL・QR は一切変わらない**）。未知の会社IDは穂乃味へ倒さず「このURLは正しくありません」で止まる。
+- `/tenantReg` と `/srv` は Rules 未定義＝クライアントから読み書き不可（Rules が内部で参照するだけ）。
+- ★ **会社を増やすときにコードをコピーしない。** 次の4か所に1件ずつ足す（`scripts/test-multitenant.js` が一致を検査する）:
+  `api/_lib/tenant.js` の `TENANTS` ／ `index.html` の `TENANT_CONFIGS` ／ `sw.js` の `TENANT_NOTIFY` ／ `scripts/notify-check.js`・`scripts/morning-check.js` の会社表。
+  そのうえで `scripts/bootstrap-tenant.js` で `/tenantReg/<id>` と `/srv/<id>/authz` を作る。
+
+### 会社間の遮断（画面だけでなく DB・API・Storage で遮断する）
+
+| 層 | 遮断の方法 |
+|---|---|
+| トークン | 新会社のトークンはクレーム **`c`（会社ID）と `sx`（業務上の期限）** を持つ。穂乃味のトークンは**従来と同一**（`c` を持たない。uid も従来どおり `a:main` / `s:<キー>`） |
+| API | 全ハンドラを `T.handler` で包む。会社は `body.tenant`（未指定＝穂乃味）で選び、**`verifyIdToken` がトークンの会社とリクエストの会社の一致を検査**する（不一致は署名が正しくても無効＝401）。DB のパスは `google.js` が会社コンテキストから1か所で写す。**会社コンテキストが無いまま DB に触れると例外**（穂乃味へ倒さない） |
+| RTDB Rules | `/tenants/$cid` は `auth.token.c === $cid` ＋ `sx` 未失効 ＋ `/tenantReg/$cid/active === true`。書き込みは**コレクションごとの許可リスト**（許可外のノード・打刻の全消去・PIN フラグの書き込みは拒否）。`/honomi` には「他社のトークン（`c` が honomi 以外）を拒否する」条件だけを足した（穂乃味のトークンの判定は変わらない） |
+| Storage Rules | 新会社は `tenants/<cid>/documents/…`・`tenants/<cid>/staff_uploads/…`。`c` と `sx` を検査。穂乃味のパスは他社のトークンを拒否 |
+| 端末 | localStorage は会社別の接頭辞（`t.<cid>.`。穂乃味は従来のキー名）、IndexedDB（未送信打刻）は `timecard_punch_outbox__<cid>`。**穂乃味の保存内容をマンテールの画面が読むことはない** |
+
+★ **利用停止は二重チェック**: API の入口（`T.handler` が `/tenantReg/<cid>/active` を確認。5秒キャッシュ）と Rules（毎回参照）。
+Storage のルールは RTDB を参照できないため、停止後もトークンの `sx`（最長24時間）までは Storage だけ読める。**Storage を即時に止めたい場合はこの時間差を認識すること。**
+
+### 権限（今回実装したのは2つ。facility_manager は未実装）
+
+| 役割 | 実体 | できること |
+|---|---|---|
+| system_admin（株式会社 穂乃味） | **システム管理者PIN**（穂乃味の `/authz/systemAdminPin`。会社管理者PINとは別）。`?c=<会社>&sys` で入ると、その会社の管理者トークン（`sa:true`）が出る | 全社の管理。会社一覧・利用停止／再開（マスター管理タブの「利用会社の管理」） |
+| company_admin | 各社の管理者PIN／管理者URL（`/srv/<cid>/authz` または穂乃味は従来の `/authz`） | 自社のみ |
+| facility_manager | **未実装**。施設端末トークンに施設キー `fk` を載せてあり、将来ここへ施設単位の権限を足せる | — |
+
+★ **穂乃味の一般管理者（従来の管理者PIN／URL）では他社に入れない。** 他社へ入れるのはシステム管理者PINだけ。
+★ システム管理者でも「穂乃味として得たトークン」で他社の API は叩けない（会社ごとに入り直す）。
+
+### マンテールは穂乃味の弱い方式を引き継がない
+
+- **匿名サインインを一切使わない。** 起動時は次のどれかで会社ID付きのトークンを取ってから読む。
+  施設URL（`?c=mantel&token=<施設トークン>` → 施設端末トークン `r:"k"`）／管理者URL／閲覧・デモ・スタッフテストURL／どれも無ければ管理者PIN入力で待つ。
+- 施設端末トークン（`k`）が読めるのは PIN 画面までに要る最小限（スタッフ一覧・部門・施設マスタ・PIN登録済みフラグ・打刻）だけ。**書き込みは一切できない**（打刻はスタッフのログイン後）。
+- **スタッフPINは端末に置かない。** `/tenants/mantel/tc5_pins` は「登録済みか」の真偽だけで、照合・登録・確認（管理者の「PIN確認」）はすべてサーバ（`/api/auth/pin-set`・`/api/auth/staff`）。
+  ★ そのため**マンテールでは打刻画面へ入るのに認証サーバ（Vercel）への接続が要る**（穂乃味は従来どおり）。
+- PIN のキーは `hash("tenant:"+会社ID+"\0"+氏名)`。**会社をまたいだ同姓同名で衝突しない**。穂乃味のキーは従来の `hash(氏名)` のまま（既存スタッフにPIN再設定を求めない）。
+- ★ 穂乃味の匿名読み取りの穴（本書「残っている穴」）は**今回は変更していない**（ユーザー指示。別工程で扱う）。
+
+### ブランド（会社設定）
+
+- 色は CSS 変数（`--brand` ほか）。**既定値は穂乃味の現在の色そのもの**で、穂乃味の見た目は変わらない（`tests/visual/visual-regression.js` で変更前と1画素単位で比較し、10画面すべて同一を確認）。
+- マンテール: ロゴ（`brand/mantel/`。元画像 1181×1181 を縦横比 1:1 のまま 160/320/180/192/512px の PNG へ最適化）・会社名・主色 `#B40000`（ロゴの赤）・背景白。`manifest-mantel.json`（`id` を分けて別アプリとしてインストールされる）。
+- ★ **出勤の色（`--punch-in`）と土曜日の青は会社で変えない。** 「出勤＝青／退勤＝赤」「土＝青／日＝赤」の区別なので、赤がブランド色の会社で赤くすると見分けられなくなる。
+- 機能フラグ（`features`）: マンテールは **移動距離・端末持ち出し監視を無効**（穂乃味の施設間距離表・専用アプリが前提のため）。有効化は会社設定の値を変えるだけ（サーバ側も同じ値で API を拒否している）。
+
+### 通知
+
+| 通知 | 会社ごとの分離 |
+|---|---|
+| アップロード通知（`/api/line-notify`・`/api/discord-notify`） | 宛先は環境変数 `<名前>` + `__<会社ID大文字>`（例 `DISCORD_WEBHOOK_URL__MANTEL`）。**未設定なら送らない（穂乃味の宛先へ倒さない）**。新会社はログイン中のトークン必須 |
+| 持ち出し検知（`api/_lib/device.js`） | 同上の環境変数。定期スイープは全社を回し、各社のコンテキストで判定・送信（機能が無効な会社・停止中の会社は回さない） |
+| 朝の未打刻（`scripts/morning-check.js`） | `TENANT_ID` 環境変数（未指定＝穂乃味＝従来どおり）。施設・判定時刻・除外施設・見出しは `MORNING_TENANTS`。**マンテールは施設と判定時刻が決まるまで `enabled:false`**。送信記録は `/srv/<cid>/morningNotify` |
+| 通知確認（`scripts/notify-check.js`）・FCM（`scripts/fcm-check.js`） | `TENANT_ID` 環境変数。FCM の通知には会社IDが入り、`sw.js` がその会社の画面へ遷移する |
+
+★ ワークフロー（`.github/workflows/`）は**変更していない**（穂乃味は従来どおり）。マンテールの定期通知を動かすには、`TENANT_ID=mantel` のジョブと `__MANTEL` の Secrets の追加が要る（人間の確認が必要）。
+
+### テスト（マルチテナント関係の変更では全部実行必須）
+
+| コマンド | 内容 |
+|---|---|
+| `node scripts/test-multitenant.js` | API 側。本物のハンドラと `google.js` を模擬の Firebase に向けて動かす（送信なし・本番非接続）。パスの写像・トークンの会社検査・system_admin・同姓同名・利用停止・施設端末・機能フラグ・通知の宛先・会社一覧の一致 |
+| `cd tests/rules && npm install && npm test` | Firebase エミュレータで Rules を検証。**穂乃味・ボードの全シナリオが変更前の Rules と完全一致**すること＋会社間の遮断（Storage 含む）。Java が必要 |
+| `node tests/visual/client-isolation.js` | 実ブラウザ（Playwright）。マンテールが `/honomi` に触れない・匿名サインインしない、端末保存が混ざらない、未知の会社IDで何も読まない |
+| `node tests/visual/visual-regression.js [比較元コミット]` | 穂乃味の画面が変更前と1画素単位で同一か（10画面）。マンテールの画面も保存する |
+
+### 本番反映の手順（★ ユーザーの確認後に行う。Agent が勝手に行わない）
+
+1. 本番の現行 Rules を取得して保存（バックアップ）し、リポジトリの `database.rules.json` と**ボード側・穂乃味側の差分が無いこと**を確認する（差分があればマージしてから）
+2. `firebase deploy --only database`・`--only storage`（honomi-board と同居のため全体置換。手順1が必須）
+3. 取り直して照合。穂乃味の打刻・管理画面・ボードの動作を確認
+4. Vercel に `__MANTEL` の通知用環境変数（必要な分）を登録
+5. `node scripts/bootstrap-tenant.js --tenant mantel`（dry-run）→ `--apply`（停止状態で作成）
+6. マンテールの管理者PINで入り、施設・スタッフを登録 → system_admin が利用開始にする
+
+**rollback**: 穂乃味のデータは一切変えていないので、コードの revert と Rules を手順1の保存版へ戻すだけでよい。
+マンテールだけを止める場合は `/tenantReg/mantel/active=false`（システム管理者画面から可）。
+
+---
+
 ## 使用技術
 
 - **フロントエンド**: 単一 `index.html`（バニラ JS、ビルドなし）。Firebase JS SDK 10.12.0（`firebase-app-compat` / `firebase-messaging-compat`、CDN）。
@@ -2427,6 +2524,9 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
     `TC_ENC_KEY` → 保存済み PIN の平文が**復号不能**。
     `DEVICE_SWEEP_KEY` → `action:"sweep"` が 503 になり**持ち出し検知の確定の主経路が止まる**
     （保険の経路だけが残る）。
+- **会社ごとの通知用（任意・名前のみ）**: 穂乃味以外の会社は、上の通知用の名前に `__<会社ID大文字>` を付けたものを使う
+  （例 `LINE_CHANNEL_ACCESS_TOKEN__MANTEL` / `LINE_TO_ID__MANTEL` / `DISCORD_WEBHOOK_URL__MANTEL`）。
+  **未設定の会社の通知は送られない**（穂乃味の宛先へは倒さない）。2026-09-26 時点で未登録。
 - **クライアント側（`index.html` に埋め込み。Firebase 公開クライアント設定）**: `FB_URL`（Realtime Database URL）/ `FB_API_KEY` / `FCM_MESSAGING_SENDER_ID` / `FCM_VAPID_KEY`
 - **スクリプトの実行制御**: `DRY_RUN` / `TEST_NOTIFY` / `TARGET_DATE`（秘匿情報ではないが、挙動に影響）
 
@@ -2452,7 +2552,8 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
 10. **存在しない npm script を使わない**（npm プロジェクトではない。build/lint/test の npm コマンドは無い）
 11. **未整備のものを勝手に使わない**: Playwright / smoke / `agent:ship` は**未整備**。使わず、必要なら未整備である旨を報告する
 12. **Vercel への手動デプロイ（`vercel --prod` 等）をしない**（連携の有無も未確認）。デプロイは git push → GitHub Pages 自動配信が前提
-13. **`/devmon`（施設端末の持ち出し監視）のデータを変更・削除しない**。`/devmon/facilities`（基準位置・許容半径・監視ON/OFF）と `/devmon/devices`（端末トークンのハッシュと状態）は検知の成否そのものを決める。読み取り・コードレビューのみ
+13. **`/tenants`・`/srv`・`/tenantReg`（他社の業務データ・サーバ専用データ・会社の利用状態）を変更・削除しない**。作成は `scripts/bootstrap-tenant.js` をユーザーの確認後に実行するときだけ
+13b. **`/devmon`（施設端末の持ち出し監視）のデータを変更・削除しない**。`/devmon/facilities`（基準位置・許容半径・監視ON/OFF）と `/devmon/devices`（端末トークンのハッシュと状態）は検知の成否そのものを決める。読み取り・コードレビューのみ
 14. **`fix-monthly-days-year.js` 等の副作用スクリプトを勝手に実行しない**
 15. **判断に迷ったら編集・実行せず停止してユーザーに報告**
 
@@ -2477,6 +2578,7 @@ handler で固定するのは、`guardApp`（GET=405 / 非JSON=415 / OPTIONS=403
 13. **朝出勤未確認の施設別判定時刻の回帰テスト**: `node scripts/test-morning-check.js`（全件 PASS / 0 FAIL を確認）。**朝出勤未確認 LINE通知・施設別の判定時刻・`morning-check.yml` の cron に関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 14. **打刻時の顔撮影の回帰テスト**: `node scripts/test-face-photo.js`（全件 PASS / 0 FAIL を確認）。**顔撮影・スタッフ管理モーダルの当該項目・`_execPunch` の結線に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 15. **施設端末の持ち出し検知の回帰テスト**: `node scripts/test-device-watch.js`（全件 PASS / 0 FAIL を確認）。**持ち出し検知・`api/device.js` / `api/device-report.js` / `api/_lib/device.js`・`/devmon`・管理画面の監視UIに関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
+15b. **マルチテナント（会社間分離）の検証**: `node scripts/test-multitenant.js`（全件 PASS / 0 FAIL）。**`api/` 全般・`index.html` の会社設定／認証／端末保存・`database.rules.json`・`storage.rules`・`sw.js`・通知スクリプトに関係する変更では実行必須**。Rules を変えた場合は `tests/rules`（エミュレータ）、画面を変えた場合は `node tests/visual/client-isolation.js` と `node tests/visual/visual-regression.js`（穂乃味が変更前と同一）も実行する
 16. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）。判定時刻ごとに確認する場合は `CHECK_HOUR=6` / `CHECK_HOUR=7` を付ける
 17. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 

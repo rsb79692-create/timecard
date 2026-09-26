@@ -70,6 +70,10 @@ require.cache[require.resolve(path.join(ROOT, "api", "_lib", "google.js"))] = {
 };
 
 const D = require(path.join(ROOT, "api", "_lib", "device.js"));
+// ★ 会社コンテキスト。ライブラリを直接呼ぶ節（runSweep 等）は穂乃味として動かす
+//   （コンテキストが無いと sendLine は送らない＝他社の通知を穂乃味へ流さない設計のため）。
+//   handler を通す節は handler 自身が body.tenant からコンテキストを張る。
+require(path.join(ROOT, "api", "_lib", "tenant.js")).enterForScript("honomi");
 // ★ require だけ（I/O 関数は呼ばない）。secrets.js の資格情報の読み込みは遅延評価である。
 const S = require(path.join(ROOT, "api", "_lib", "secrets.js"));
 
@@ -674,7 +678,7 @@ section("8f. 定期実行の入口（共有鍵・二重実装なし・認証前�
     rep.indexOf("api.line.me") < 0);
 
   // ★ 鍵の照合はレート制限（RTDB 2〜3往復）より前。鍵を知らない相手に RTDB を触らせない。
-  const hIdx = rep.indexOf("module.exports = async function handler");
+  const hIdx = rep.search(/module\.exports = (?:T\.handler\()?async function handler/);
   const handler = hIdx > 0 ? rep.slice(hIdx) : "";
   const iKey = handler.indexOf("sweepKeyError(body)");
   const iBump = handler.indexOf("bumpAndCount(");
@@ -706,8 +710,10 @@ section("8f. 定期実行の入口（共有鍵・二重実装なし・認証前�
     /REGISTER_LIMIT_IP = 20;/.test(rep) && /REPORT_LIMIT_IP = 120;/.test(rep));
   // ★ 定期実行の直後に、同じインスタンスへ来た報告が同じスイープをもう1回走らせない
   //   （/devmon/facilities と /devmon/devices の全件取得が二重になる）。
+  // 会社ごとの1社分（sweepOneTenant）が、その会社の間引きタイマーを進める。
   check("定期実行はスイープの間引きタイマーを進める",
-    /async function handleSweep[\s\S]{0,400}?_lastSweepAt = nowMs;/.test(rep));
+    /async function sweepOneTenant[\s\S]{0,400}?_setLastSweepAt\(nowMs\);/.test(rep)
+    && /async function handleSweep[\s\S]{0,1200}?T\.run\(t\.id, sweepOneTenant\)/.test(rep));
 
   // ★ 鍵の値をログ・応答へ出さない
   check("鍵の値をログへ出さない", !/console\.[a-z]+\([^)]*DEVICE_SWEEP_KEY/.test(rep));
@@ -930,7 +936,7 @@ section("11. 設定の置き場所（クライアントから触れない）");
   //   ★★ 位置の比較は**必ず対象の関数本体へスコープする**。ファイル全体の indexOf で
   //   比べると、同じ字句を使う別の関数（sweepKeyError / handleSweep）の位置を拾い、
   //   handleReport の順序が崩れても PASS してしまう（2026-09-13 のレビューで実際に発覚）。
-  const hIdx = rep.indexOf("module.exports = async function handler");
+  const hIdx = rep.search(/module\.exports = (?:T\.handler\()?async function handler/);
   const handler = hIdx > 0 ? rep.slice(hIdx) : "";
   check("レート制限は action の振り分けより前（handler 内の順序）",
     handler.indexOf("bumpAndCount(") > 0
@@ -1045,6 +1051,9 @@ function dwCtx(opts) {
     showConfirm: function (m, ok) { rec.alerts.push(String(m)); if (ok) ok(); },
     showModal: function (o) { if (o && o.onOK) o.onOK(); },
     getAuthToken: function () { return Promise.resolve("tok"); },
+    // 会社（穂乃味として動かす）。穂乃味の本文には何も足さない・監視機能は有効。
+    tenantPayload: function (o) { return o; },
+    tenantFeature: function (n) { return opts.featureOff !== true; },
     fetch: function () {
       rec.fetches++;
       const resp = opts.response || {

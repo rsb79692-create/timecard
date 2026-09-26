@@ -1,19 +1,61 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    // ===== 会社の判定 =====
+    // 穂乃味（既定テナント）のトークンはクレーム c を持たない（匿名を含む従来のトークン）。
+    // ★ 他社（c が honomi 以外）のトークンでは穂乃味のファイルを読み書きさせない。
+    function isHonomiToken() {
+      return request.auth != null
+        && (!('c' in request.auth.token) || request.auth.token.c == 'honomi');
+    }
+    // 新会社のトークン。★ Storage のルールは RTDB（/tenantReg の利用状態）を参照できないため、
+    //   トークンの業務上の期限 sx（最長24時間。発行時に利用中かを検査済み）で止める。
+    function isTenantToken(cid) {
+      return request.auth != null
+        && ('c' in request.auth.token) && request.auth.token.c == cid
+        && ('sx' in request.auth.token) && request.auth.token.sx * 1000 > request.time.toMillis()
+        && ('r' in request.auth.token);
+    }
+    function tenantCanRead(cid) {
+      return isTenantToken(cid)
+        && request.auth.token.r in ['a', 's', 'v', 'd', 'x'];
+    }
+    function tenantCanWrite(cid) {
+      return isTenantToken(cid)
+        && request.auth.token.r in ['a', 's'];
+    }
+
+    // ===== 穂乃味（従来のパス。条件は従来のまま ＋ 他社トークンの拒否）=====
     match /documents/{allPaths=**} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if request.auth != null && isHonomiToken();
+      allow write: if request.auth != null && isHonomiToken()
         && request.resource.size <= 20 * 1024 * 1024
         && request.resource.contentType.matches(
              'application/pdf|application/vnd\\.openxmlformats.*|application/msword|image/(png|jpeg)');
     }
     match /staff_uploads/{allPaths=**} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null
+      allow read: if request.auth != null && isHonomiToken();
+      allow write: if request.auth != null && isHonomiToken()
         && request.resource.size <= 20 * 1024 * 1024
         && request.resource.contentType.matches('image/(png|jpeg)|application/pdf');
     }
+
+    // ===== 新会社（/tenants/{cid}/documents・/tenants/{cid}/staff_uploads）=====
+    // ★ 自社のトークンだけ。サイズと種類の制限は穂乃味と同じ。
+    match /tenants/{cid}/documents/{allPaths=**} {
+      allow read: if tenantCanRead(cid);
+      allow write: if tenantCanWrite(cid)
+        && request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType.matches(
+             'application/pdf|application/vnd\\.openxmlformats.*|application/msword|image/(png|jpeg)');
+    }
+    match /tenants/{cid}/staff_uploads/{allPaths=**} {
+      allow read: if tenantCanRead(cid);
+      allow write: if tenantCanWrite(cid)
+        && request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType.matches('image/(png|jpeg)|application/pdf');
+    }
+
     match /{allPaths=**} {
       allow read, write: if false;
     }

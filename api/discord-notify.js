@@ -7,9 +7,10 @@
 "use strict";
 
 const https = require("https");
+const T = require("./_lib/tenant");
 
 const ALLOWED_ORIGIN = "https://rsb79692-create.github.io";
-const ADMIN_URL = "https://rsb79692-create.github.io/timecard/?token=all";
+// ★ 管理画面URL・社名は会社設定（api/_lib/tenant.js）から引く。共通処理へ直書きしない。
 
 function httpsPost(url, headers, bodyStr) {
   return new Promise(function (resolve, reject) {
@@ -38,7 +39,7 @@ function httpsPost(url, headers, bodyStr) {
   });
 }
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   var origin = req.headers["origin"] || "";
 
   // CORS: GitHub Pages からのリクエストのみ許可
@@ -62,7 +63,23 @@ module.exports = async function handler(req, res) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  var WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL || "";
+  // ===== 会社 =====
+  // ★ 宛先・社名・URL は会社ごと。穂乃味は従来の環境変数名・文言・URLのまま（挙動不変）。
+  // ★ 穂乃味以外の会社は、その会社のログイン中トークンを必須にする
+  //   （誰でも他社の通知を鳴らせないようにする。穂乃味の既存経路は変えない）。
+  var tenant = T.current();
+  var ADMIN_URL = tenant.adminUrl;
+  if (!tenant.legacy) {
+    var reqBody = req.body || {};
+    try {
+      await require("./_lib/google").verifyIdToken(typeof reqBody.idToken === "string" ? reqBody.idToken : "");
+    } catch (e) {
+      return res.status(401).json({ error: "invalid_credentials" });
+    }
+  }
+
+  // ★ 見つからなければ送らない。穂乃味の宛先へ倒さない。
+  var WEBHOOK_URL = T.notifyEnv("DISCORD_WEBHOOK_URL", tenant);
 
   if (!WEBHOOK_URL) {
     console.error("[discord-notify] DISCORD_WEBHOOK_URL not configured");
@@ -87,7 +104,7 @@ module.exports = async function handler(req, res) {
     hour: "2-digit", minute: "2-digit", hour12: false,
   }).format(uploadDate);
 
-  var message = [
+  var message = (tenant.legacy ? [] : ["【" + tenant.appName + "】"]).concat([
     "📷 写真アップロード通知",
     "",
     "施設：" + (facilityName || "（不明）"),
@@ -96,7 +113,7 @@ module.exports = async function handler(req, res) {
     "",
     "確認URL",
     ADMIN_URL,
-  ].join("\n");
+  ]).join("\n");
 
   var payload = JSON.stringify({ content: message });
 
@@ -122,4 +139,4 @@ module.exports = async function handler(req, res) {
     console.error("[discord-notify] Error:", err.message);
     return res.status(500).json({ error: err.message });
   }
-};
+});

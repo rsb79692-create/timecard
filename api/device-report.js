@@ -47,6 +47,7 @@ const crypto = require("crypto");
 const H = require("./_lib/http");
 const G = require("./_lib/google");
 const S = require("./_lib/secrets");
+const T = require("./_lib/tenant");
 const D = require("./_lib/device");
 
 const MIN_MS = 60;
@@ -81,7 +82,10 @@ const BASE_ACC_MAX_M = 100;
 //   59秒なら窓が1秒に縮み、同条件の実測で **0回/日**になる。
 //   cron 停止時も、端末の報告間隔120秒 ≥ 59秒なので保険②は全報告で走る（遅れは最大14秒増）。
 const SWEEP_MIN_INTERVAL_MS = Math.min(59 * 1000, D.MIN_DWELL_SEC * 1000 - 1000);
-let _lastSweepAt = 0;
+// ★ 会社ごとに持つ（ある会社の報告で走ったスイープが、別の会社のスイープを間引かないように）。
+const _lastSweepAtBy = new Map();
+function _lastSweepAt() { return _lastSweepAtBy.get(T.current().id) || 0; }
+function _setLastSweepAt(v) { _lastSweepAtBy.set(T.current().id, v); }
 
 /**
  * 共通の前処理。戻り値 true ならこの時点で応答済み。
@@ -255,20 +259,44 @@ function sweepKeyError(body) {
  * 端末が範囲外を1回報告した直後に沈黙しても（電源を切る・機内モードにする）、
  * 経過はサーバ受信時刻で測っているため、ここで確定できる。
  */
-async function handleSweep() {
+async function sweepOneTenant() {
   const nowMs = Date.now();
   // 直後に同じインスタンスへ報告が来ても、同じスイープを二重に走らせない。
-  _lastSweepAt = nowMs;
+  _setLastSweepAt(nowMs);
   const [settings, facilities, devices] = await Promise.all([
     loadSettings(), D.loadFacilities(), D.loadDevices(),
   ]);
   const r = await D.runSweep(facilities, devices, nowMs, settings);
   return {
-    status: 200, ok: true,
     devices: Object.keys(devices).length,
     sent: r.sent, confirmed: r.confirmed,
     confirms: r.confirms, stales: r.stales, unjudged: r.unjudged,
   };
+}
+
+/**
+ * 定期実行は1本の cron で全社を回す（会社ごとに cron を増やさない）。
+ * ★ 各社は自社のコンテキストで判定・通知する（宛先も会社ごと）。
+ * ★ 監視機能が無効な会社・利用停止の会社は回さない。
+ * ★ 1社の失敗で他社を止めない。ただし1社でも失敗したら最後に throw して 500 にする
+ *   （外部スケジューラの実行履歴に失敗として残す）。
+ */
+async function handleSweep() {
+  const total = { devices: 0, sent: 0, confirmed: 0, confirms: 0, stales: 0, unjudged: 0 };
+  let failed = null;
+  for (const t of T.list()) {
+    if (!(t.features && t.features.deviceWatch === true)) continue;
+    try {
+      if (!t.system && !(await G.tenantActive(t.id))) continue;
+      const r = await T.run(t.id, sweepOneTenant);
+      Object.keys(total).forEach(function (k) { total[k] += Number(r[k]) || 0; });
+    } catch (e) {
+      failed = failed || e;
+      console.error("[device-report] sweep failed tenant=" + t.id, e && e.message);
+    }
+  }
+  if (failed) throw failed;
+  return Object.assign({ status: 200, ok: true }, total);
 }
 
 /**
@@ -281,15 +309,18 @@ async function handleSweep() {
  * ★ 無期限にしてはならない（設定変更が永久に反映されなくなる）。
  */
 const SETTINGS_TTL_MS = 5 * 60 * 1000;
-let _settingsCache = null, _settingsAt = 0;
+// ★ 会社ごとに持つ（他社の設定を使い回さない）。
+const _settingsBy = new Map();
 async function loadSettings() {
   const now = Date.now();
-  if (_settingsCache && now - _settingsAt < SETTINGS_TTL_MS) return _settingsCache;
+  const tid = T.current().id;
+  const c = _settingsBy.get(tid);
+  if (c && now - c.at < SETTINGS_TTL_MS) return c.value;
   const raw = await G.dbGet(D.ROOT + "/settings");
   const o = raw && typeof raw === "object" ? raw : {};
-  _settingsCache = { dwellSec: D.normDwellSec(o.dwellSec), staleSec: D.normStaleSec(o.staleSec) };
-  _settingsAt = now;
-  return _settingsCache;
+  const value = { dwellSec: D.normDwellSec(o.dwellSec), staleSec: D.normStaleSec(o.staleSec) };
+  _settingsBy.set(tid, { value: value, at: now });
+  return value;
 }
 
 async function handleRegister(body) {
@@ -405,8 +436,8 @@ async function handleReport(body) {
   }
 
   // ★ ③認証後に取得する。スイープを走らせる回だけ全件を読み、それ以外は自施設1件だけにする。
-  const doSweep = (nowMs - _lastSweepAt) >= SWEEP_MIN_INTERVAL_MS;
-  if (doSweep) _lastSweepAt = nowMs;
+  const doSweep = (nowMs - _lastSweepAt()) >= SWEEP_MIN_INTERVAL_MS;
+  if (doSweep) _setLastSweepAt(nowMs);
   let settings, facilities = null, fac = null, sweepDevices = null;
   if (doSweep) {
     [settings, facilities, sweepDevices] = await Promise.all([
@@ -480,7 +511,7 @@ async function handleReport(body) {
   };
 }
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (guardApp(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -533,6 +564,13 @@ module.exports = async function handler(req, res) {
     //   else を handleSweep にすると、将来 RATE へ4つ目の action を足したときに、
     //   その action が上の鍵照合（`action === "sweep"` の枝）を通らずに
     //   スイープへ落ちる＝無認証で起動できてしまう。
+    // ★ 会社ごとの機能フラグ。無効な会社の端末は登録も報告も受け付けない。
+    //   sweep は全社を回す入口で、会社ごとに handleSweep が判定する。
+    if (action !== "sweep" && !T.feature("deviceWatch")) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "feature_disabled");
+    }
+
     const r = action === "register" ? await handleRegister(body)
       : action === "report" ? await handleReport(body)
         : action === "sweep" ? await handleSweep()
@@ -550,4 +588,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

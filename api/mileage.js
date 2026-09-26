@@ -26,6 +26,7 @@ const M = require("./_lib/mileage");
 const A = require("./_lib/mileage-auto");     // 打刻→経路の共通計算（index.html と同一ソース）
 const P = require("./_lib/mileage-punch");    // 打刻データの読み取り専用アクセス
 const STD = require("./_lib/mileage-standard"); // 7施設42方向の標準距離と取り込み計画（純粋計算）
+const T = require("./_lib/tenant");             // 会社コンテキスト（/mileage は会社ごとに /srv/{cid}/mileage へ写る）
 
 const MIN_MS = 60;
 
@@ -1129,7 +1130,7 @@ async function handleMonthlyReport(body) {
 
 // ===== エントリポイント =====
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -1138,6 +1139,11 @@ module.exports = async function handler(req, res) {
     const body = req.body || {};
     const action = H.str(body.action, 32);
     const allowed = Object.prototype.hasOwnProperty.call(ACTIONS, action) ? ACTIONS[action] : null;
+    // ★ 会社ごとの機能フラグ（api/_lib/tenant.js）。無効な会社では一切の操作を受け付けない。
+    if (!T.feature("mileage")) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "feature_disabled");
+    }
     if (!allowed) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 400, "bad_action");
@@ -1272,7 +1278,10 @@ module.exports = async function handler(req, res) {
       case "deletePlace": r = await handleDeletePlace(body, actor); break;
       case "saveLeg": r = await handleSaveLeg(body, actor); break;
       case "deleteLeg": r = await handleDeleteLeg(body, actor); break;
-      case "importLegs": r = await handleImportLegs(body, actor); break;
+      case "importLegs":
+        // ★ 標準区間距離（STANDARD_LEGS）は穂乃味の7施設の実測値。他社へ取り込ませない。
+        r = T.current().legacy ? await handleImportLegs(body, actor) : { status: 400, error: "not_available" };
+        break;
       case "setSettings": r = await handleSetSettings(body, actor); break;
       case "approveRequest": r = await handleRequestStatus(body, actor, "approved"); break;
       case "approveAll": r = await handleApproveAll(body, actor); break;
@@ -1294,4 +1303,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

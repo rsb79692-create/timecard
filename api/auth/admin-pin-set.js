@@ -20,10 +20,11 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
 
 const MIN_MS = 150;
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -70,6 +71,24 @@ module.exports = async function handler(req, res) {
     //   「PINは変わったが失効していない」中間状態を作らない。
     //   ★ 操作中の管理者自身も失効対象になるため、クライアントは成功後に
     //     新しいPINでセッションを張り直す（自己ロックアウト回避）。
+    // ===== システム管理者PINの変更（scope:"system"）=====
+    // ★ sa クレームを持つセッションだけ。保存先は穂乃味（システム会社）の /authz。
+    //   会社管理者PINとは別の値で、変更すると全社のシステム管理者セッションが失効する。
+    if (body.scope === "system") {
+      if (claims.sa !== true) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 403, "forbidden");
+      }
+      await T.run("honomi", function () {
+        return G.dbPatchRoot({
+          "authz/systemAdminPin": S.makePinRecord(pin),
+          "authz/systemAdminMinAt": Math.floor(Date.now() / 1000),
+        });
+      });
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({ ok: true });
+    }
+
     await G.dbPatchRoot({
       "authz/adminPin": S.makePinRecord(pin),
       "authz/adminMinAt": Math.floor(Date.now() / 1000),
@@ -81,4 +100,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});

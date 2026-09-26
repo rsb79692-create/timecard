@@ -8,10 +8,27 @@
 const https = require("https");
 const crypto = require("crypto");
 
+// ===== 会社（テナント）=====
+// ★ 既定は穂乃味（TENANT_ID 未指定）。既存のワークフロー・Secrets はそのまま従来どおり動く。
+// ★ 他社は TENANT_ID=<会社ID> で起動し、その会社の Secrets（末尾 __<会社ID大文字>）と
+//   その会社のデータ（/tenants/<会社ID>）だけを使う。穂乃味の宛先・データ・社名へは倒さない。
+const TENANTS = {
+  honomi: { appName: "穂乃味タイムカード", adminUrl: "https://rsb79692-create.github.io/timecard/?token=all" },
+  mantel: { appName: "マンテール タイムカード", adminUrl: "https://rsb79692-create.github.io/timecard/?c=mantel" },
+};
+const TENANT_ID = (process.env.TENANT_ID || "").trim() || "honomi";
+if (!Object.prototype.hasOwnProperty.call(TENANTS, TENANT_ID)) {
+  console.error("[ERROR] 未登録の TENANT_ID です");
+  process.exit(1);
+}
+const TENANT = TENANTS[TENANT_ID];
+const TENANT_IS_LEGACY = TENANT_ID === "honomi";
+const TENANT_ENV_SUFFIX = TENANT_IS_LEGACY ? "" : ("__" + TENANT_ID.toUpperCase());
+
 // ===== Secrets バリデーション =====
 // ⚠ FIREBASE_API_KEY はもう使わない（RTDB を匿名で叩くのをやめたため）。
 const REQUIRED_SECRETS = [
-  "LINE_CHANNEL_ACCESS_TOKEN",
+  "LINE_CHANNEL_ACCESS_TOKEN" + TENANT_ENV_SUFFIX,
   "FIREBASE_DATABASE_URL",
   "FIREBASE_SERVICE_ACCOUNT_KEY",
 ];
@@ -21,14 +38,17 @@ if (missing.length) {
   process.exit(1);
 }
 
-const LINE_TO_ENV = (process.env.LINE_TO_ID || "").trim();
+const LINE_TO_ENV = (process.env["LINE_TO_ID" + TENANT_ENV_SUFFIX] || "").trim();
 if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
   console.error("[ERROR] LINE_TO_ID が未設定です");
   console.error("GitHub Secrets → LINE_TO_ID を設定してください");
   process.exit(1);
 }
 
-const FB_DB_URL  = process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "");
+// 穂乃味は従来どおり Secret の値（.../honomi）。他社はオリジン + /tenants/<会社ID>。
+const FB_DB_URL  = TENANT_IS_LEGACY
+  ? process.env.FIREBASE_DATABASE_URL.replace(/\/$/, "")
+  : (new URL(process.env.FIREBASE_DATABASE_URL).origin + "/tenants/" + TENANT_ID);
 
 let SERVICE_ACCOUNT;
 try {
@@ -45,7 +65,7 @@ try {
     process.exit(1);
   }
 }
-const LINE_TOKEN = process.env.LINE_CHANNEL_ACCESS_TOKEN; // ログ出力禁止
+const LINE_TOKEN = process.env["LINE_CHANNEL_ACCESS_TOKEN" + TENANT_ENV_SUFFIX]; // ログ出力禁止
 const LINE_TO    = LINE_TO_ENV;
 
 const TEST_NOTIFY = (process.env.TEST_NOTIFY || "").trim() === "true";
@@ -377,7 +397,7 @@ async function main() {
   if (TEST_NOTIFY) {
     console.log("[TEST]  testNotify=true → Firebase スキップ・テスト通知送信");
     const testMessage =
-      "【穂乃味タイムカード】\nテスト通知\n\n" +
+      "【" + TENANT.appName + "】\nテスト通知\n\n" +
       "LINE通知設定は正常です。\n\n" +
       `送信時刻：${getNowJSTWithSeconds()}`;
     if (DRY_RUN) {
@@ -652,13 +672,13 @@ async function main() {
     formatMissingLines(missingList);
 
   const message =
-    "【穂乃味タイムカード】\n" +
+    "【" + TENANT.appName + "】\n" +
     "未承認・打刻漏れ通知\n" +
     `（前日分: ${yesterday}）\n\n` +
     unapprovedSection + "\n\n" +
     missingSection + "\n\n" +
     "▼管理者画面\n" +
-    "https://rsb79692-create.github.io/timecard/?token=all";
+    TENANT.adminUrl;
 
   if (DRY_RUN) {
     console.log("[DRY]   dryRun=true → LINE送信スキップ");

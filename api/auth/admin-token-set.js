@@ -31,6 +31,7 @@
 const H = require("../_lib/http");
 const G = require("../_lib/google");
 const S = require("../_lib/secrets");
+const T = require("../_lib/tenant");
 
 const MIN_MS = 150;
 
@@ -43,7 +44,7 @@ const MIN_MS = 150;
  */
 const SAFE_TOKEN = /^[A-Za-z0-9_-]{4,128}$/;
 
-module.exports = async function handler(req, res) {
+module.exports = T.handler(async function handler(req, res) {
   if (H.guard(req, res)) return;
   const startedAt = Date.now();
   const cid = H.correlationId();
@@ -122,4 +123,4 @@ module.exports = async function handler(req, res) {
     await H.withMinDuration(startedAt, MIN_MS);
     return H.serverError(res, cid);
   }
-};
+});
