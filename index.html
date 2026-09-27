@@ -3748,6 +3748,24 @@ function zipEntryName(n){var v=String(n==null?"":n).replace(/[\\/]/g,"_").replac
 var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
 var staffList=loadData("tc5_staff",DEF_STAFF);
+// ===== スタッフ管理一覧の並び順（社員番号の数値昇順）=====
+// 数字だけの社員番号は数値として比較する（桁数→文字列。桁数が多くても精度を失わない）。
+// 数字以外を含む番号はその後ろ、社員番号なしは最後。同順位はよみがな順。
+function cmpStaffByEmployeeId(a,b){
+  function key(s){
+    var id=String((s&&s.employeeId)||"").normalize("NFKC").trim();
+    if(!id)return {g:2,id:""};
+    if(/^\d+$/.test(id))return {g:0,id:id,n:id.replace(/^0+(?=\d)/,"")};
+    return {g:1,id:id};
+  }
+  var ka=key(a),kb=key(b);
+  if(ka.g!==kb.g)return ka.g-kb.g;
+  if(ka.g===0&&ka.n!==kb.n)return ka.n.length!==kb.n.length?ka.n.length-kb.n.length:(ka.n<kb.n?-1:1);
+  var c=ka.id.localeCompare(kb.id,"ja",{numeric:true});
+  if(c)return c;
+  return ((a&&a.yomi)||"").localeCompare((b&&b.yomi)||"","ja");
+}
+// ===== スタッフ管理一覧の並び順ここまで =====
 var staffPins={};  // スタッフPIN（Firebaseからのみ、localStorageには保存しない）
 var staffPinsLoaded=false; // tc5_pins をサーバから取得できたか（未取得のままPIN新規登録させないため）
 var firebaseReady=false;  // スタッフ選択画面を操作可能にする最小データの読込完了フラグ
@@ -6114,7 +6132,7 @@ function _renderInner(){
     }
 
     if(adminTab==="staff"){
-      var sorted=staffList.slice().sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
+      var sorted=staffList.slice().sort(cmpStaffByEmployeeId);
       var tabFiltered;
       if(staffHrmTab==="在籍中") tabFiltered=sorted.filter(function(s){return !s.status||s.status==="在籍"||s.status==="休職";});
       else if(staffHrmTab==="退職済み") tabFiltered=sorted.filter(function(s){return s.status==="退職";});
