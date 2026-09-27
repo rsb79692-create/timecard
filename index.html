@@ -1183,10 +1183,122 @@ function patchRecord(id, partial) {
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
 }
+// ===== ADMIN-APPROVE-SAVE-BEGIN =====
 // 管理者の時刻修正（出勤・退勤）を「打刻の保存」と「その日の承認」を1回の多パス更新で書き込む。
 // ★ RTDB の多パス更新は全パス成功か全パス失敗のどちらかになる（時刻だけ・承認だけ、にならない）。
 // ★ tc5_approvals は全体PUTせず、そのキー1件だけを書く（他の承認に触れない）。
-// 失敗時は onFail を呼ぶ（呼び出し側でメモリ上の承認を戻す）。
+// 失敗時は onFail を呼ぶ（呼び出し側でメモリ上の承認・打刻を編集前へ戻す）。
+//
+// ★ 保存中（通信エラー後の読み直し中を含む）は、同じ日・同じ職員の打刻を変える操作を止める（apvSaveBusy）。
+//   onFail は「編集を始めた時点の控え」へ戻すため、保存中に次の編集を許すと、
+//   1回目の失敗が2回目の編集まで画面上で巻き戻し、サーバと食い違う。
+// ★ 保存中に承認・一括承認・引き戻し（saveApprovals＝全体PUT）が押された場合は、保存が終わってから
+//   その時点の approvals で書く（保存前の内容で上書きしたり、未確定の承認をサーバへ書いたりしない）。
+// ★ 通信エラー（応答が無い）は、サーバに届いたかどうかが分からない。控えへ戻したうえで、
+//   その日・その職員の打刻と承認キーをサーバから読み直して画面をサーバへ合わせる。
+//   読み直せないときは「未確認」として、その日・その職員の操作と、承認の保存（承認ボタン・一括承認・引き戻し）を
+//   止めたまま再読み込みを案内する（フェイルクローズ）。通信が戻ったら（online）読み直しを再試行する。
+var _apvBusy={};          // "日付__氏名" → 保存中・確認中の件数
+var _apvBusyCount=0;
+var _apvPutDeferred=false; // 保存中に saveApprovals が呼ばれた（保存が終わってから書く）
+var _apvUnknown={};       // "日付__氏名" → {staff,date,retrying}：通信エラー後にサーバの状態を確認できていない
+var _apvPutInFlight=0;     // 承認の全体PUT（saveApprovals）の送信中件数
+// ★ 承認データへの書込み（同時保存の PATCH・全体PUT）の開始と完了のたびに進める世代。
+//   承認データを GET で取り直して画面へ反映する経路（定期取得・管理画面の初回読込・_apvResyncApprovals）は
+//   送った時点の世代を控え、応答までに世代が変わっていたら応答を捨てる（書込み前に読んだ古い内容で戻さない）。
+var _apvGen=0;
+var MSG_APV_UNKNOWN="保存できたか確認できていない勤怠があります。\n画面を再読み込みしてから操作してください。";
+function _apvHasUnknown(){for(var k in _apvUnknown){if(Object.prototype.hasOwnProperty.call(_apvUnknown,k))return true;}return false;}
+function apvSaveBusy(staff,date){
+  var key=date+"__"+staff;
+  if(_apvUnknown[key]){showAlert(MSG_APV_UNKNOWN);_apvRetryUnknown();return true;}
+  if(_apvBusy[key]||_apvPutInFlight>0){
+    showAlert("この日の保存が完了していません。\n少し待ってから操作してください。");
+    return true;
+  }
+  return false;
+}
+// 承認ボタン・引き戻し（key あり）と一括承認（key なし）の入口で使う。
+// 未確認の勤怠がある間は承認の保存そのものを止める（全体PUTで未確認のキーを書かないため）。
+function apvApprovalBlocked(key){
+  if(_apvHasUnknown()){showAlert(MSG_APV_UNKNOWN);_apvRetryUnknown();return true;}
+  if(key&&_apvBusy[key]){showAlert("この日の保存が完了していません。\n少し待ってから操作してください。");return true;}
+  return false;
+}
+// 承認データをサーバから取り直して画面へ合わせる（保存中・後回し中は差し替えない）
+function _apvResyncApprovals(){
+  var g=_apvGen;
+  authFetch(FB_URL+"/tc5_approvals.json")
+    .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+    .then(function(v){
+      if(v!==null&&typeof v!=="object")return;
+      if(g!==_apvGen||_apvBusyCount>0||_apvPutDeferred||_apvPutInFlight>0)return; // 取得中に書込みがあった応答は使わない
+      approvals=v||{};
+      _lsSet("tc5_approvals",JSON.stringify(approvals));
+      if(!document.querySelector(".time-edit-wrap")&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
+    })
+    .catch(function(e){console.error("[_apvResyncApprovals] error:",e);});
+}
+function _apvFlushDeferred(){
+  if(_apvBusyCount===0&&!_apvHasUnknown()&&_apvPutDeferred){_apvPutDeferred=false;saveApprovals(approvals);}
+}
+function _apvRelease(key){
+  _apvGen++;
+  if(_apvBusy[key]){
+    _apvBusy[key]--;
+    if(!_apvBusy[key])delete _apvBusy[key];
+    _apvBusyCount--;
+  }
+  _apvFlushDeferred();
+}
+// 未確認の日を読み直す（online・操作を止めたとき）。確認できたら止めていた操作を再開する。
+function _apvRetryUnknown(){
+  Object.keys(_apvUnknown).forEach(function(key){
+    var u=_apvUnknown[key];
+    if(!u||u.retrying)return;
+    u.retrying=true;
+    _apvReconcile(u.staff,u.date,key,function(ok){
+      u.retrying=false;
+      if(!ok)return;
+      delete _apvUnknown[key];
+      _apvResyncApprovals();
+      render();
+      showAlert("通信が戻ったため、保存結果をサーバーから読み直しました。\n表示されている時刻と承認の状態を確認してください。");
+      _apvFlushDeferred();
+    });
+  });
+}
+if(typeof window!=="undefined"&&window.addEventListener)window.addEventListener("online",function(){_apvRetryUnknown();});
+// その日・その職員の打刻と承認キーをサーバから読み直し、画面（メモリ・端末保存）へ反映する。
+// 他の保存が進行中（savingCount>0）のあいだは最大約30秒待つ（読み直しで未送信の保存を消さないため）。
+// 待ちきれなくても続行する（置き換えるのはこの日・この職員だけで、その操作は止めてある）。
+function _apvReconcile(staff,date,key,done,st){
+  st=st||{wait:0,fetch:0};
+  if(savingCount>0&&st.wait<60){st.wait++;setTimeout(function(){_apvReconcile(staff,date,key,done,st);},500);return;}
+  Promise.all([
+    fetchRecordsRange(date,date),
+    authFetch(FB_URL+"/tc5_approvals/"+encodeURIComponent(key)+".json")
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .catch(function(){return undefined;})
+  ]).then(function(res){
+    var v=res[0],a=res[1];
+    if(v===null||a===undefined){
+      if(st.fetch<3){st.fetch++;setTimeout(function(){_apvReconcile(staff,date,key,done,st);},3000);return;}
+      st.finished=true;done(false);return;
+    }
+    var inc=(Array.isArray(v)?v:Object.values(v)).filter(function(r){return r&&r.staff===staff&&r.date===date;});
+    records=records.filter(function(r){return !(r&&r.staff===staff&&r.date===date);}).concat(inc);
+    punchOutboxMergeInto(records);
+    if(a!==null&&a!==false)approvals[key]=a;else delete approvals[key];
+    _lsSet("tc5_records",JSON.stringify(records));
+    _lsSet("tc5_approvals",JSON.stringify(approvals));
+    st.finished=true;done(true);
+  }).catch(function(e){
+    // 反映中の例外は「確認できなかった」として扱う（推測で確定しない）
+    console.error("[_apvReconcile] error:", e);
+    if(!st.finished){st.finished=true;done(false);}
+  });
+}
 function saveRecordWithApproval(rec, approvalKey, onFail) {
   if(demoWriteBlocked()){if(onFail)onFail();return;}
   // ★ ルート直下への多パス更新なので、id が空・不正だと tc5_records 全体を置き換えうる。書かずに止める。
@@ -1203,11 +1315,12 @@ function saveRecordWithApproval(rec, approvalKey, onFail) {
   console.log("[saveRecordWithApproval] called:", rec.id, approvalKey);
   _lsSet("tc5_records", JSON.stringify(records));
   _lsSet("tc5_approvals", JSON.stringify(approvals));
+  _apvBusy[approvalKey]=(_apvBusy[approvalKey]||0)+1;
+  _apvBusyCount++;
+  _apvGen++;
   savingCount++;
-  function failed(){
-    if(onFail)onFail();
-    showAlert("保存に失敗しました（時刻・承認とも保存されていません）。通信状態を確認して再度実行してください。");
-  }
+  // ★ 応答ありと通信エラーを then の第1・第2引数で分ける（応答処理中の例外を「通信エラー」と誤認して
+  //   savingCount を二重に減らしたり、成功した保存を巻き戻したりしない）。ロックは finally で必ず外す。
   authFetch(FB_URL + ".json", {
     method: "PATCH",
     headers: {"Content-Type": "application/json"},
@@ -1215,16 +1328,45 @@ function saveRecordWithApproval(rec, approvalKey, onFail) {
   }).then(function(res){
     savingCount--;
     if(!res.ok){
-      res.text().catch(function(){return "";}).then(function(t){console.error("[saveRecordWithApproval] HTTP", res.status, rec.id, t);failed();});
-    } else {
-      console.log("[saveRecordWithApproval] OK:", rec.id, approvalKey);
+      // HTTP エラー＝サーバは何も書いていない（多パス更新は全体が不成立）。控えへ戻せば一致する。
+      return res.text().catch(function(){return "";}).then(function(t){
+        console.error("[saveRecordWithApproval] HTTP", res.status, rec.id, t);
+        try{
+          if(onFail)onFail();
+          showAlert("保存に失敗しました（時刻・承認とも保存されていません）。通信状態を確認して再度実行してください。");
+        }finally{_apvRelease(approvalKey);}
+      });
     }
-  }).catch(function(e){
+    console.log("[saveRecordWithApproval] OK:", rec.id, approvalKey);
+    _apvRelease(approvalKey);
+  }, function(e){
     savingCount--;
     console.error("[saveRecordWithApproval] network error:", e);
-    failed();
+    // 通信エラー＝サーバに届いたか分からない。控えへ戻したうえで、サーバから読み直して合わせる。
+    try{
+      if(onFail)onFail();
+    }finally{
+      _apvReconcile(rec.staff, rec.date, approvalKey, function(ok){
+        if(ok){
+          showAlert("通信が途切れたため、保存結果をサーバーから読み直しました。\n表示されている時刻と承認の状態を確認してください。");
+        } else {
+          // 読み直せない＝サーバの状態が分からない。この日を「未確認」にして操作と承認の保存を止める
+          //（apvSaveBusy / apvApprovalBlocked / saveApprovals）。通信が戻ったら読み直しを再試行する。
+          _apvUnknown[approvalKey]={staff:rec.staff,date:rec.date,retrying:false};
+          //   保存中に後回しにした承認・引き戻しは書かない（確認まで無期限に待たない）。取り消して伝え、サーバへ合わせる。
+          var _dropped=_apvPutDeferred;
+          _apvPutDeferred=false;
+          showAlert("保存できたか確認できませんでした。\n画面を再読み込みしてから確認してください。"+(_dropped?"\n\nこの間に行った承認・引き戻しは保存されていません。再読み込み後にやり直してください。":""));
+        }
+        _apvRelease(approvalKey);
+        // 取り直しはロックを外した後に送る（外す前に送ると世代が進み、応答が捨てられるため）
+        if(!ok&&_dropped)_apvResyncApprovals();
+        render();
+      });
+    }
   });
 }
+// ===== ADMIN-APPROVE-SAVE-END =====
 
 // ===== PUNCH-OUTBOX-BEGIN =====
 // 打刻の端末永続保存と自動再送（IndexedDB）
@@ -1958,18 +2100,37 @@ function saveApprovals(approvalsObj) {
     showAlert("承認データを読み込めていないため保存できません。\n\n通信状態を確認して画面を再読み込みしてください。");
     return;
   }
+  // ★ 管理者の時刻修正と承認の同時保存（saveRecordWithApproval）が進行中は、全体PUTを後回しにする。
+  //   保存が終わった時点の approvals で _apvRelease() が書く（未確定の承認を書かない・確定した承認を消さない）。
+  //   保存結果を確認できていない勤怠（_apvUnknown）がある間は書かない。後回しにもしない（確認まで無期限に
+  //   待つと、その間の他の管理者の変更を古い内容で上書きするため）。画面の承認はサーバの内容へ戻す。
+  if(_apvHasUnknown()){
+    console.warn("[saveApprovals] blocked: unconfirmed admin edit");
+    showAlert(MSG_APV_UNKNOWN);
+    _apvResyncApprovals();
+    return;
+  }
+  if(_apvBusyCount>0){
+    console.log("[saveApprovals] deferred: admin edit save in progress");
+    _apvPutDeferred=true;
+    return;
+  }
   var url = FB_URL + "/tc5_approvals.json";
   console.log("[saveApprovals] called");
   _lsSet("tc5_approvals", JSON.stringify(approvalsObj));
   savingCount++;
+  _apvGen++;
+  _apvPutInFlight++; // ★ 送信中は管理者の同時保存を始めさせない（サーバで PUT が後に着くと自動承認を消すため）
   authFetch(url, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(approvalsObj)
   }).then(function(res) {
     savingCount--;
+    _apvPutInFlight--;
+    _apvGen++;
     if (!res.ok) {
-      res.text().then(function(t) {
+      res.text().catch(function(){return "";}).then(function(t) {
         console.error("[saveApprovals] HTTP", res.status, t);
         showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
       });
@@ -1978,6 +2139,8 @@ function saveApprovals(approvalsObj) {
     }
   }).catch(function(e) {
     savingCount--;
+    _apvPutInFlight--;
+    _apvGen++;
     console.error("[saveApprovals] network error:", e);
     showAlert("保存に失敗しました。通信状態を確認して再度実行してください。");
   });
@@ -2553,7 +2716,9 @@ function ensureAdminData(){
   //    「timecard が発行した役割トークンを持つ人」しか読めない（RTDBルール）。
   //    待たずに走らせると匿名トークンのまま 401 になり、承認・有給・賄いが
   //    再試行まで空のままになる。失敗しても進む（従来どおり再試行に任せる）。
+  var _apvG;
   _adminDataPromise=afterElevation().then(function(){
+  _apvG=_apvGen; // 承認書込みの世代（応答までに書込みがあれば承認データは使わず、再試行に任せる）
   return Promise.all([
     fetchJson(FB_URL+"/tc5_approvals.json"),
     fetchJson(FB_URL+"/tc5_monthly_days_import.json"),
@@ -2569,7 +2734,8 @@ function ensureAdminData(){
     // ★ tc5_approvals は saveApprovals が「全体PUT」で保存する。
     //   取得できていない状態で承認操作をすると既存の承認が全消えするため、
     //   approvalsLoaded が真になるまで書き込みを止める（saveApprovals 側で判定）。
-    if(r[0]&&typeof r[0]==="object"){approvals=r[0];_lsSet("tc5_approvals",JSON.stringify(approvals));approvalsLoaded=true;changed=true;}
+    var _apvFresh=(_apvG===_apvGen&&!_apvPutDeferred&&_apvPutInFlight===0); // 取得中に承認の書込みがあった応答は使わない
+    if(_apvFresh&&r[0]&&typeof r[0]==="object"){approvals=r[0];Object.keys(_apvBusy).forEach(function(k){approvals[k]=true;});_lsSet("tc5_approvals",JSON.stringify(approvals));approvalsLoaded=true;changed=true;} // 同時保存中の日は保存どおり承認済みで表示する
     if(r[1]&&typeof r[1]==="object"){monthlyDaysImport=r[1];monthlyDaysLoaded=true;changed=true;}
     if(r[2]&&typeof r[2]==="object"){reviewStatus=r[2];reviewStatusLoaded=true;changed=true;}
     if(r[3]&&typeof r[3]==="object"){mealsData=r[3];changed=true;}
@@ -2577,7 +2743,7 @@ function ensureAdminData(){
     if(r[5]){var _pl=(typeof r[5]==="object"&&!Array.isArray(r[5]))?Object.values(r[5]):r[5];paidLeaveRequests=(_pl||[]).filter(Boolean);changed=true;}
     if(r[6]){applyAdminTokenState(r[6]);changed=true;}
     // 「取得成功してノードが空」も正常。取得自体が成功したかどうかで既読フラグを立てる。
-    if(r[0]!==null)approvalsLoaded=true;
+    if(_apvFresh&&r[0]!==null)approvalsLoaded=true;
     if(r[1]!==null)monthlyDaysLoaded=true;
     if(r[2]!==null)reviewStatusLoaded=true;
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
@@ -2719,11 +2885,18 @@ function listenFirebase() {
         if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
       }).catch(function(){});
     })();
+    // ★ 送った時点の承認書込みの世代を控え、応答までに書込みがあれば応答を捨てる（書込み前の古い内容で戻さない）
+    var _apvG=_apvGen;
     authFetch(FB_URL + "/tc5_approvals.json")
-      .then(function(r){return r.json();})
+      // ★ エラー応答（401 等の {"error":...}）を承認データとして取り込まない（全体PUTで承認を消すため）
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(function(val){
-        if(val && typeof val==="object")approvalsLoaded=true;
-        if(val && savingCount===0 && JSON.stringify(val)!==JSON.stringify(approvals)){
+        if(!val || typeof val!=="object")return;
+        // ★ 管理者の同時保存中（_apvBusyCount>0）・承認の全体PUTを後回し中（_apvPutDeferred）・取得後に書込みがあった（世代違い）ときは
+        //   差し替えない。approvalsLoaded も「実際に差し替えた／既に一致していた」ときだけ立てる（使わなかった応答では立てない）。
+        if(savingCount!==0 || _apvG!==_apvGen || _apvBusyCount!==0 || _apvPutDeferred)return;
+        approvalsLoaded=true;
+        if(JSON.stringify(val)!==JSON.stringify(approvals)){
           approvals=val;
           _lsSet("tc5_approvals",JSON.stringify(approvals));
           if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -3978,9 +4151,11 @@ function attachTimeCellHandlers(){
   document.querySelectorAll(".time-cell").forEach(function(el){
     el.onclick=function(){
       var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
+      if(el.querySelector("input"))return;
+      // ★ 同じ日・同じ職員の同時保存が進行中は編集を始めさせない（ADMIN-APPROVE-SAVE を参照）
+      if(apvSaveBusy(snm,date))return;
       var cur=el.textContent.trim();
       if(cur==="--:--"||cur==="−")cur="";
-      if(el.querySelector("input"))return;
       var origText=el.textContent,origStyle=el.getAttribute("style")||"";
       var typeName=TYPE_LABEL[type]||type;
       // saveAllowed=true にした直後の save() 呼び出しだけが保存を実行する
@@ -4011,6 +4186,7 @@ function attachTimeCellHandlers(){
         var oldTime=cur||"（未打刻）";
         if(newTime===""&&id){
           showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
+            if(apvSaveBusy(snm,date)){cancel();return;}
             var rec=records.find(function(r){return r.id===id;});
             if(rec){console.log("[管理者修正] 削除:",snm,date,typeName,"元時刻:",rec.time);rec.deleted=true;softDeleteRecord(rec.id);}
             render();
@@ -4018,6 +4194,8 @@ function attachTimeCellHandlers(){
         } else if(newTime){
           var _newTime2=newTime,_hh2=hh,_mm2=mm;
           showAdjustReasonModal(function(adj){
+            // 入力欄を開いた後に同じ日の同時保存が始まっていたら、確定させない（控えが古くなるため）
+            if(apvSaveBusy(snm,date)){cancel();return;}
             var d2=parseJstDateTime(date,pad(_hh2)+":"+pad(_mm2));
             var nowIso=new Date().toISOString();
             // ★ 出勤・退勤を管理者が修正・入力して確定したら、その日（日付＋職員）を同時に承認済みにする。
@@ -5711,6 +5889,7 @@ function _renderInner(){
       b.onclick=function(){
         if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
+        if(apvApprovalBlocked(_dk+"__"+_nm))return;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
@@ -5721,6 +5900,7 @@ function _renderInner(){
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){
         if(b.disabled)return;
+        if(apvApprovalBlocked(b.dataset.dk+"__"+b.dataset.nm))return;
         b.disabled=true;
         delete approvals[b.dataset.dk+"__"+b.dataset.nm];saveApprovals(approvals);render();
       };
@@ -5728,6 +5908,7 @@ function _renderInner(){
     var bulkBtn=document.getElementById("btn-bulk-approve-detail");
     if(bulkBtn)bulkBtn.onclick=function(){
       showConfirm("この月の未承認データをすべて承認します。よろしいですか？",function(){
+        if(apvApprovalBlocked())return;
         var unapprovedDates=[...new Set(mRecsStaff.filter(function(r){return !r.deleted&&!approvals[r.date+"__"+nm];}).map(function(r){return r.date;}))];
         if(!unapprovedDates.length){showAlert("承認済みでないデータはありません");return;}
         var _approved=[],_skipped=[];
@@ -7987,8 +8168,10 @@ function _renderInner(){
       var newTime=hv+":"+mv;
       var parts=[parseInt(hv),parseInt(mv)];
       var d=parseJstDateTime(date,hv+":"+mv);
+      if(apvSaveBusy(nm,date)){render();return;}
       if(id){
         var rec=records.find(function(r){return r.id===id;});
+        if(rec&&apvSaveBusy(rec.staff,rec.date)){render();return;}
         if(rec){if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=newTime;rec.timestamp=d.toISOString();saveRecord(rec);}
       } else {
         // 既存の同日同スタッフ同種別を確認
@@ -8006,6 +8189,7 @@ function _renderInner(){
       b.onclick=function(){
         if(b.disabled)return;
         var _nm=b.dataset.nm,_dk=b.dataset.dk;
+        if(apvApprovalBlocked(_dk+"__"+_nm))return;
         var _sr=records.filter(function(r){return r.staff===_nm&&r.date===_dk&&!r.deleted;});
         var _v=validateAttendanceRecord(_nm,_dk,_sr);
         if(!_v.valid){showAlert("承認できません\n\n理由：\n・"+_nm+"："+_v.reason);return;}
@@ -8022,6 +8206,7 @@ function _renderInner(){
         showConfirm(recordsHistoryReady()
           ?"未承認データをすべて承認します。よろしいですか？"
           :"過去分の集計がまだ完了していません。いま表示されている "+unapvList.length+" 件だけを承認します（あとから未承認が追加で出る場合があります）。よろしいですか？",function(){
+          if(apvApprovalBlocked())return;
           if(!unapvList.length){showAlert("承認済みでないデータはありません");return;}
           var _approved=[],_skipped=[];
           unapvList.forEach(function(p){
@@ -8041,6 +8226,7 @@ function _renderInner(){
             var sr=dRecs.filter(function(r){return r.staff===s.name&&!r.deleted;});
             return sr.length>0&&!approvals[selDate+"__"+s.name];
           });
+          if(apvApprovalBlocked())return;
           if(!targets.length){showAlert("承認済みでないデータはありません");return;}
           var _approved=[],_skipped=[];
           targets.forEach(function(s){
@@ -8064,6 +8250,7 @@ function _renderInner(){
         var id=b.dataset.id;
         var req=correctionRequests.find(function(r){return r.id===id;});
         if(!req)return;
+        if(apvSaveBusy(req.staff,req.date))return;
         b.disabled=true;
         var nowIso=new Date().toISOString();
         var d=parseJstDateTime(req.date,req.requestedTime);
@@ -8117,6 +8304,7 @@ function _renderInner(){
     document.querySelectorAll(".btn-withdraw").forEach(function(b){
       b.onclick=function(){
         if(b.disabled)return;
+        if(apvApprovalBlocked(b.dataset.dk+"__"+b.dataset.nm))return;
         b.disabled=true;
         delete approvals[b.dataset.dk+"__"+b.dataset.nm];
         saveApprovals(approvals);render();
@@ -8457,6 +8645,7 @@ function _renderInner(){
       var type=document.getElementById("add-type")?.value;
       var time=document.getElementById("add-time")?.value;
       if(!staff||!date||!type||!time){showAlert("全て入力してください");return;}
+      if(apvSaveBusy(staff,date))return;
       var parts=time.split(":");
       var ts=parseJstDateTime(date,time);
       var nr={id:generateRecordId(),staff:staff,type:type,date:date,time:time,timestamp:ts.toISOString(),manualAdd:true};
@@ -8471,6 +8660,7 @@ function _renderInner(){
         if(!inp)return;
         var rec=records.find(function(r){return r.id===id;});
         if(!rec)return;
+        if(apvSaveBusy(rec.staff,rec.date))return;
         if(!rec.editedFrom)rec.editedFrom=rec.time;
         var d=parseJstDateTime(rec.date,inp.value);
         rec.time=inp.value;rec.timestamp=d.toISOString();
@@ -8483,6 +8673,7 @@ function _renderInner(){
       b.onclick=function(){
         showConfirm("削除しますか？\n元データは勤怠一覧で確認できます",function(){
           var rec=records.find(function(r){return r.id===b.dataset.id;});
+          if(rec&&apvSaveBusy(rec.staff,rec.date))return;
           if(rec){rec.deleted=true;softDeleteRecord(rec.id);render();}
         });
       };
@@ -8572,6 +8763,9 @@ function _renderInner(){
         if(!s)return;
         if(newN!==orig){
           if(staffList.find(function(x){return x.name===newN&&x!==s;})){showAlert("同名のスタッフが既に存在します");return;}
+          // ★ 管理者の同時保存中・未確認の勤怠がある間は改名しない（控えの氏名・承認キーが食い違うため）
+          if(_apvBusyCount>0){showAlert("勤怠の保存が完了していません。\n少し待ってから保存してください。");return;}
+          if(apvApprovalBlocked())return;
           // ★ 改名は全期間の打刻（r.id）を書き換える。取得できていない期間があると
           //   その期間の打刻が旧氏名のまま残り、集計から黙って外れる。必ず全期間を取得してから実行する。
           if(!recordsHistoryReady()){

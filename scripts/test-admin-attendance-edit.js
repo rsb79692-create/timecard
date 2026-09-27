@@ -277,6 +277,7 @@ function runCell(opts) {
     },
     approvals: approvals,
     _lsSet: function (k, v) { state.ls[k] = v; },
+    apvSaveBusy: function () { return false; },   // 保存中の競合は [9] で実装そのものを使って確認する
     softDeleteRecord: function (id) { state.deleted.push(id); },
     showAlert: function (m) { state.alerts.push(m); },
     showConfirm: function (m, onYes, onNo) { state.confirms.push(m); if (opts.confirmDelete) onYes(); else if (onNo) onNo(); },
@@ -596,7 +597,7 @@ console.log("\n[8] 管理者の出勤・退勤修正と同時承認");
 
 // ── saveRecordWithApproval 本体：1回の PATCH で時刻と承認キー1件だけを書く ──
 {
-  const FN = slice("function saveRecordWithApproval(rec, approvalKey, onFail) {", "\n// ===== PUNCH-OUTBOX-BEGIN =====");
+  const FN = slice("// ===== ADMIN-APPROVE-SAVE-BEGIN =====", "// ===== ADMIN-APPROVE-SAVE-END =====");
   function runSave(ok) {
     const st = { calls: [], alerts: [], failed: 0, saving: 0 };
     const ctx = {
@@ -645,8 +646,341 @@ console.log("\n[8] 管理者の出勤・退勤修正と同時承認");
   setTimeout(function () {
     check("同時保存の失敗：失敗コールバックと警告が1回ずつ", ngRun.failed === 1 && ngRun.alerts.length === 1, JSON.stringify(ngRun));
     check("同時保存：保存中カウンタが戻る（成功・失敗とも）", okRun.ctx.savingCount === 0 && ngRun.ctx.savingCount === 0);
-    finish();
+    check("同時保存：完了後は同じ日の保存中ロックが外れる（成功・失敗とも）",
+      okRun.ctx._apvBusyCount === 0 && ngRun.ctx._apvBusyCount === 0 && Object.keys(okRun.ctx._apvBusy).length === 0);
+    runRaceTests().then(finish, function (e) { check("競合テストが例外なく完了する", false, e && e.stack); finish(); });
   }, 20);
+}
+
+// ============================================================================
+// 9. 保存中の多重操作（競合）：画面の表示とサーバの保存結果が必ず一致すること
+//    実装の同時保存・承認保存・時刻セル処理をそのまま評価し、サーバを模した状態と突き合わせる
+// ============================================================================
+function runRaceTests() {
+  console.log("\n[9] 保存中の多重操作：画面とサーバの一致");
+  const SAVE_REGION = slice("// ===== ADMIN-APPROVE-SAVE-BEGIN =====", "// ===== ADMIN-APPROVE-SAVE-END =====");
+  const SAVE_APPROVALS = slice("function saveApprovals(approvalsObj) {", "\n// ===== tc5_correction_requests 書込ヘルパー =====");
+  const clone = function (o) { return JSON.parse(JSON.stringify(o)); };
+  const TSX = function (d, t) { return new Date(d + "T" + t + ":00+09:00").toISOString(); };
+  const flush = async function () { for (let i = 0; i < 30; i++) await new Promise(function (r) { setImmediate(r); }); };
+  const D = "2026-09-01", A = "山田 太郎", B = "佐藤 花子", KA = D + "__" + A;
+
+  function makeWorld() {
+    let seq = 0;
+    const server = { records: {}, approvals: {} };
+    const pending = [];
+    const w = { server: server, alerts: [], puts: [], reconcileFail: 0, ls: {} };
+    const ctx = {
+      console: { log: function () { }, error: function () { }, warn: function () { } },
+      FB_URL: "https://example.invalid/honomi", records: [], approvals: {}, approvalsLoaded: true, savingCount: 0,
+      demoWriteBlocked: function () { return false; },
+      _lsSet: function (k, v) { w.ls[k] = v; },
+      showAlert: function (m) { w.alerts.push(m); },
+      render: function () { },
+      setTimeout: function (fn) { Promise.resolve().then(fn); },
+      TYPE_LABEL: { clockIn: "出勤", clockOut: "退勤", breakStart: "休憩開始", breakEnd: "休憩終了" },
+      pad: function (n) { return (n < 10 ? "0" : "") + n; },
+      parseJstDateTime: function (date, time) { return new Date(date + "T" + time + ":00+09:00"); },
+      generateRecordId: function () { return "n" + (++seq); },
+      showAdjustReasonModal: function (onConfirm) { onConfirm({ reason: "miss", label: "打刻漏れ", comment: "" }); },
+      showConfirm: function (m, yes) { yes(); },
+      saveRecord: function (rec) { server.records[rec.id] = clone(rec); },
+      softDeleteRecord: function (id) { if (server.records[id]) server.records[id].deleted = true; },
+      punchOutboxMergeInto: function () { w.outboxMerges = (w.outboxMerges || 0) + 1; },
+      fetchRecordsRange: function (from, to) {
+        if (w.reconcileFail > 0) { w.reconcileFail--; return Promise.resolve(null); }
+        const o = {};
+        Object.keys(server.records).forEach(function (k) { const r = server.records[k]; if (r.date >= from && r.date <= to) o[k] = clone(r); });
+        return Promise.resolve(o);
+      },
+      authFetch: function (url, o) {
+        o = o || {};
+        if (o.method === "PATCH") return new Promise(function (res, rej) { pending.push({ body: JSON.parse(o.body), res: res, rej: rej }); });
+        if (o.method === "PUT" && /\/tc5_approvals\.json$/.test(url)) {
+          const b = JSON.parse(o.body); server.approvals = clone(b); w.puts.push(b); return Promise.resolve({ ok: true });
+        }
+        if (!o.method && /\/tc5_approvals\.json$/.test(url)) {
+          const snap = clone(server.approvals);             // 送った時点のサーバの内容
+          const resp = { ok: true, json: function () { return Promise.resolve(snap); } };
+          if (w.holdGets) return new Promise(function (res) { (w.heldGets = w.heldGets || []).push(function () { res(resp); }); });
+          return Promise.resolve(resp);
+        }
+        const m = url.match(/\/tc5_approvals\/(.+)\.json$/);
+        if (m) {
+          const k = decodeURIComponent(m[1]);
+          return Promise.resolve({ ok: true, json: function () { return Promise.resolve(server.approvals[k] === undefined ? null : server.approvals[k]); } });
+        }
+        return Promise.reject(new Error("unexpected " + url));
+      },
+      document: { createElement: function (tag) { return makeNode(tag); }, querySelectorAll: function () { return []; } }
+    };
+    vm.createContext(ctx);
+    vm.runInContext(VALIDATE_CODE + SAVE_REGION + SAVE_APPROVALS + HANDLER_CODE, ctx);
+    function apply(body) {
+      Object.keys(body).forEach(function (p) {
+        const i = p.indexOf("/"), top = p.slice(0, i), k = p.slice(i + 1);
+        if (top === "tc5_records") server.records[k] = clone(body[p]);
+        else if (top === "tc5_approvals") server.approvals[k] = body[p];
+      });
+    }
+    w.ctx = ctx;
+    w.pendingCount = function () { return pending.length; };
+    w.ok = function () { const p = pending.shift(); apply(p.body); p.res({ ok: true }); };
+    w.httpFail = function () { const p = pending.shift(); p.res({ ok: false, status: 500, text: function () { return Promise.resolve(""); } }); };
+    w.netFail = function (applied) { const p = pending.shift(); if (applied) apply(p.body); p.rej(new Error("network")); };
+    w.seed = function (recs, apv) {
+      recs.forEach(function (r) { server.records[r.id] = clone(r); ctx.records.push(clone(r)); });
+      Object.keys(apv || {}).forEach(function (k) { server.approvals[k] = apv[k]; ctx.approvals[k] = apv[k]; });
+    };
+    // 時刻セルを開く（開けたら入力欄を返す。保存中で開けなければ null）
+    w.open = function (data, text) {
+      const cell = makeCell(data, text);
+      ctx.document.querySelectorAll = function () { return [cell]; };
+      ctx.attachTimeCellHandlers();
+      cell.onclick();
+      return cell.children[0] ? cell.children[0].children[0] : null;
+    };
+    w.enter = function (inp, v) { inp.value = v; inp.fire("keydown", { key: "Enter", preventDefault: function () { } }); };
+    w.edit = function (data, text, v) { const inp = w.open(data, text); if (!inp) return false; w.enter(inp, v); return true; };
+    // その職員・その日について、画面（メモリ）とサーバの打刻・承認が一致しているか
+    w.consistent = function (staff, date) {
+      const pick = function (arr) {
+        return arr.filter(function (r) { return r.staff === staff && r.date === date && !r.deleted; })
+          .map(function (r) { return r.id + ":" + r.type + ":" + r.time; }).sort().join("|");
+      };
+      const local = pick(ctx.records), srv = pick(Object.keys(server.records).map(function (k) { return server.records[k]; }));
+      const key = date + "__" + staff;
+      const la = ctx.approvals[key] === true, sa = server.approvals[key] === true;
+      return { ok: local === srv && la === sa, local: local, server: srv, localApproved: la, serverApproved: sa };
+    };
+    return w;
+  }
+  const baseDay = function (staff, idp) {
+    return [
+      { id: idp + "in", staff: staff, type: "clockIn", date: D, time: "06:05", timestamp: TSX(D, "06:05") },
+      { id: idp + "out", staff: staff, type: "clockOut", date: D, time: "15:00", timestamp: TSX(D, "15:00") }
+    ];
+  };
+
+  return (async function () {
+    // (a) 1回目保存中は同じ日の次の編集を始めさせない → 1回目失敗 → 画面は元へ戻りサーバと一致
+    //     → 2回目を編集できるようになり、成功すればサーバと一致
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a").concat(baseDay(B, "b")));
+      check("競合(a)：1回目（出勤 06:05→06:00）の保存が始まる", w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00") && w.pendingCount() === 1);
+      const blocked = !w.edit({ id: "aout", nm: A, type: "clockOut", date: D }, "15:00", "14:30");
+      check("競合(a)：保存中は同じ日・同じ職員の次の編集を開けない", blocked && w.pendingCount() === 1 && /保存が完了していません/.test(w.alerts[w.alerts.length - 1] || ""), JSON.stringify(w.alerts));
+      check("競合(a)：別の職員の同じ日は編集できる（ロックは職員単位）", w.edit({ id: "bin", nm: B, type: "clockIn", date: D }, "06:05", "06:10") && w.pendingCount() === 2);
+      w.httpFail(); await flush();
+      const c1 = w.consistent(A, D);
+      check("競合(a)：1回目失敗後、画面とサーバが一致（出勤 06:05・未承認）", c1.ok && /ain:clockIn:06:05/.test(c1.local) && !c1.localApproved, JSON.stringify(c1));
+      check("競合(a)：失敗後は同じ日の編集ロックが外れる", !w.ctx._apvBusy[KA]);
+      check("競合(a)：2回目（退勤 15:00→14:30）を編集できる", w.edit({ id: "aout", nm: A, type: "clockOut", date: D }, "15:00", "14:30") && w.pendingCount() === 2);
+      w.ok(); w.ok(); await flush();
+      const c2 = w.consistent(A, D), cb = w.consistent(B, D);
+      check("競合(a)：2回目成功後、画面とサーバが一致（出勤 06:05・退勤 14:30・承認済み）",
+        c2.ok && /aout:clockOut:14:30/.test(c2.local) && /ain:clockIn:06:05/.test(c2.local) && c2.localApproved, JSON.stringify(c2));
+      check("競合(a)：別職員の保存結果も画面とサーバが一致", cb.ok && cb.localApproved && /bin:clockIn:06:10/.test(cb.local), JSON.stringify(cb));
+      check("競合(a)：保存中カウンタ・ロックがすべて戻る", w.ctx.savingCount === 0 && w.ctx._apvBusyCount === 0);
+    }
+    // (b) 入力欄を開いた後に同じ日の保存が始まった場合、その入力欄は確定させない
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      const early = w.open({ id: "aout", nm: A, type: "clockOut", date: D }, "15:00");
+      check("競合(b)：先に退勤の入力欄を開ける", !!early);
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.enter(early, "14:00");
+      check("競合(b)：保存中に確定しても保存しない（控えが古くなるため）", w.pendingCount() === 1 && w.ctx.records.find(function (r) { return r.id === "aout"; }).time === "15:00");
+      w.httpFail(); await flush();
+      check("競合(b)：1回目失敗後、画面とサーバが一致", w.consistent(A, D).ok, JSON.stringify(w.consistent(A, D)));
+    }
+    // (c) 通信エラー（応答なし）でサーバには保存されていた → サーバから読み直して一致
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.netFail(true); await flush();
+      const c = w.consistent(A, D);
+      check("競合(c)：通信エラーでもサーバに届いていれば、画面は 06:00・承認済みに合わせる", c.ok && /ain:clockIn:06:00/.test(c.local) && c.localApproved, JSON.stringify(c));
+      check("競合(c)：読み直した旨を伝え、ロックを外す", /読み直しました/.test(w.alerts.join("")) && !w.ctx._apvBusy[KA], JSON.stringify(w.alerts));
+    }
+    // (d) 通信エラーでサーバに届いていなかった → 読み直して元の状態で一致
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.netFail(false); await flush();
+      const c = w.consistent(A, D);
+      check("競合(d)：通信エラーで未保存なら、画面は 06:05・未承認のまま一致", c.ok && /ain:clockIn:06:05/.test(c.local) && !c.localApproved, JSON.stringify(c));
+    }
+    // (e) 通信エラー後にサーバを読み直せない → 操作を止めたまま再読み込みを案内（推測で表示を確定しない）
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.reconcileFail = 4;                                  // 初回＋再試行3回がすべて失敗する
+      w.netFail(true); await flush();
+      check("競合(e)：読み直せなければ再読み込みを案内する", /確認できませんでした/.test(w.alerts.join("")), JSON.stringify(w.alerts));
+      check("競合(e)：その日は「未確認」になり、保存中の件数は残さない（他の職員・他の日の承認保存を黙って止めない）",
+        !!w.ctx._apvUnknown[KA] && w.ctx._apvBusyCount === 0 && !w.ctx._apvBusy[KA]);
+      w.reconcileFail = 100;                                // 操作のたびに走る再試行も失敗させ、止めたままにする
+      const nAlert = w.alerts.length;
+      check("競合(e)：未確認の間は同じ日の編集を止め、再読み込みを案内する",
+        !w.edit({ id: "aout", nm: A, type: "clockOut", date: D }, "15:00", "14:00") && /再読み込み/.test(w.alerts[nAlert] || ""), JSON.stringify(w.alerts.slice(nAlert)));
+      await flush();
+      check("競合(e)：未確認の間は別の日の承認ボタンも止める（全体PUTで未確認のキーを書かない）",
+        w.ctx.apvApprovalBlocked("2026-09-02__" + A) === true && w.ctx.apvApprovalBlocked() === true);
+      w.ctx.approvals["2026-09-03__" + B] = true;
+      const nPut = w.puts.length, nA2 = w.alerts.length;
+      w.ctx.saveApprovals(w.ctx.approvals);
+      check("競合(e)：未確認の間は承認の全体PUTを書かず、後回しにもせず、その旨を表示する（黙って止めない）",
+        w.puts.length === nPut && w.ctx._apvPutDeferred === false && /再読み込み/.test(w.alerts[nA2] || ""), JSON.stringify(w.alerts.slice(nA2)));
+      await flush();
+      check("競合(e)：保存しなかった承認は画面からも戻す（画面の承認＝サーバ）",
+        w.ctx.approvals["2026-09-03__" + B] === undefined && JSON.stringify(w.ctx.approvals) === JSON.stringify(w.server.approvals), JSON.stringify(w.ctx.approvals));
+      check("競合(e)：別の職員の同じ日は編集できる", w.edit({ id: "", nm: B, type: "breakStart", date: D }, "−", "12:00") === true);
+      await flush();
+      // 通信が戻って読み直せた → 未確認を解除し、画面をサーバへ合わせ、後回しにした全体PUTを1回書く
+      w.reconcileFail = 0;
+      w.ctx._apvRetryUnknown(); await flush();
+      const c = w.consistent(A, D);
+      check("競合(e)：通信が戻って読み直せたら未確認を解除し、画面とサーバが一致", !w.ctx._apvUnknown[KA] && c.ok && /ain:clockIn:06:00/.test(c.local) && c.localApproved, JSON.stringify(c));
+      check("競合(e)：確認後も古い内容で全体PUTを書かない／画面とサーバの承認が一致",
+        w.puts.length === nPut && JSON.stringify(w.ctx.approvals) === JSON.stringify(w.server.approvals), JSON.stringify([w.ctx.approvals, w.server.approvals]));
+      check("競合(e)：読み直しでも未送信打刻のマージ（punchOutboxMergeInto）を通す", (w.outboxMerges || 0) >= 1);
+      check("競合(e)：解除後は同じ日を編集できる", !!w.open({ id: "aout", nm: A, type: "clockOut", date: D }, "15:00"));
+    }
+    // (e4) 保存中に別の日を承認（全体PUTを後回し）→ 通信エラーで読み直せない
+    //      → 後回しの全体PUTは書かずに取り消し、保存されていないと伝え、画面の承認をサーバへ戻す（無期限に待たない）
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"), { ["2026-08-31__" + A]: true });
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.ctx.approvals["2026-09-02__" + B] = true;
+      w.ctx.saveApprovals(w.ctx.approvals);
+      check("競合(e4)：保存中は別の日の承認を後回しにする", w.ctx._apvPutDeferred === true && w.puts.length === 0);
+      w.reconcileFail = 100;
+      w.netFail(true); await flush();
+      check("競合(e4)：読み直せなければ後回しの全体PUTを取り消し、書かない", w.ctx._apvPutDeferred === false && w.puts.length === 0);
+      check("競合(e4)：この間の承認が保存されていないことをはっきり伝える", /保存されていません/.test(w.alerts.join("")), JSON.stringify(w.alerts));
+      check("競合(e4)：画面の承認をサーバへ戻す（保存していない承認を表示し続けない）",
+        w.ctx.approvals["2026-09-02__" + B] === undefined && JSON.stringify(w.ctx.approvals) === JSON.stringify(w.server.approvals), JSON.stringify([w.ctx.approvals, w.server.approvals]));
+      w.ctx._apvRetryUnknown(); await flush();
+      check("競合(e4)：その後の再試行でも全体PUTを書かない", w.puts.length === 0);
+    }
+    // (e5) 承認の全体PUTが送信中の間は、同時保存を始めさせない（サーバで PUT が後に着いて自動承認を消さないため）
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.ctx.approvals["2026-09-02__" + A] = true;
+      w.ctx.saveApprovals(w.ctx.approvals);
+      check("全体PUT送信中：時刻セルの編集を始めさせない", !w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00") && w.pendingCount() === 0);
+      await flush();
+      check("全体PUT完了後：編集・同時保存できる", w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00") && w.pendingCount() === 1 && w.ctx._apvPutInFlight === 0);
+      w.ok(); await flush();
+      const c = w.consistent(A, D);
+      check("全体PUT完了後：自動承認が残り、画面とサーバが一致", c.ok && c.localApproved && w.server.approvals["2026-09-02__" + A] === true, JSON.stringify(c));
+    }
+    // (e6) 同時保存の完了前に送った承認データの取得（取り直し）の応答が、完了後に届いても使わない
+    //      （書込み前の古い内容で画面の自動承認を消し、次の全体PUTでサーバからも消すのを防ぐ）
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.holdGets = true;
+      w.ctx._apvResyncApprovals();                          // 取得を送る（保存前のサーバ＝未承認）
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.ok(); await flush();                                 // 同時保存が完了（サーバ・画面とも承認済み）
+      w.heldGets.forEach(function (f) { f(); }); await flush();   // 古い応答が届く
+      const c = w.consistent(A, D);
+      check("古い応答(e6)：保存完了前に送った取得の応答では画面の承認を戻さない", c.ok && c.localApproved && c.serverApproved, JSON.stringify(c));
+      w.holdGets = false;
+      w.ctx.approvals["2026-09-02__" + A] = true;           // 続けて別の日を承認（全体PUT）
+      w.ctx.saveApprovals(w.ctx.approvals); await flush();
+      check("古い応答(e6)：続く全体PUTでも自動承認を消さない", w.server.approvals[KA] === true && w.server.approvals["2026-09-02__" + A] === true, JSON.stringify(w.server.approvals));
+      w.ctx._apvResyncApprovals(); await flush();           // 書込み後に送った取得の応答は使う
+      check("古い応答(e6)：書込み後に送った取得の応答は反映する（画面＝サーバ）", JSON.stringify(w.ctx.approvals) === JSON.stringify(w.server.approvals));
+    }
+    // (e3) 保存中は、同じ日の承認・引き戻しボタンを止める（別の日は止めない）
+    {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"));
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      check("保存中：同じ日の承認・引き戻しは止める", w.ctx.apvApprovalBlocked(KA) === true);
+      check("保存中：別の日の承認・一括承認は止めない（保存後に書く）", w.ctx.apvApprovalBlocked("2026-09-02__" + A) === false && w.ctx.apvApprovalBlocked() === false);
+      w.ok(); await flush();
+      check("保存後：同じ日の承認・引き戻しを再び操作できる", w.ctx.apvApprovalBlocked(KA) === false);
+    }
+    // (f) 保存中に承認・一括承認（全体PUT）が押された → 保存完了後に、確定した状態で書く
+    for (const mode of ["fail", "ok"]) {
+      const w = makeWorld();
+      w.seed(baseDay(A, "a"), { ["2026-08-31__" + A]: true });
+      w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00");
+      w.ctx.approvals["2026-09-02__" + A] = true;         // 別の日を承認ボタンで承認した
+      w.ctx.saveApprovals(w.ctx.approvals);
+      check("競合(f-" + mode + ")：保存中は承認の全体PUTを後回しにする", w.puts.length === 0 && w.ctx._apvPutDeferred === true);
+      if (mode === "fail") w.httpFail(); else w.ok();
+      await flush();
+      const c = w.consistent(A, D);
+      check("競合(f-" + mode + ")：保存完了後に全体PUTを1回だけ書く", w.puts.length === 1 && w.ctx._apvPutDeferred === false);
+      check("競合(f-" + mode + ")：全体PUTの内容は確定後の状態（別の日の承認を含み、この日は保存結果どおり）",
+        w.server.approvals["2026-09-02__" + A] === true && w.server.approvals["2026-08-31__" + A] === true && (w.server.approvals[KA] === true) === (mode === "ok"),
+        JSON.stringify(w.server.approvals));
+      check("競合(f-" + mode + ")：画面とサーバが一致", c.ok && JSON.stringify(w.ctx.approvals) === JSON.stringify(w.server.approvals), JSON.stringify(c));
+    }
+    // (g) 保存中でなければ承認の全体PUTは従来どおりすぐ書く（一括承認・承認ボタンの既存挙動）
+    {
+      const w = makeWorld();
+      w.ctx.approvals["2026-09-02__" + A] = true;
+      w.ctx.saveApprovals(w.ctx.approvals);
+      check("通常時：承認の全体PUTはすぐ書く", w.puts.length === 1 && w.server.approvals["2026-09-02__" + A] === true);
+    }
+    // (h) 同じ日を続けて編集（1回目成功→2回目成功）も一致
+    {
+      const w = makeWorld();
+      w.seed([{ id: "ain", staff: A, type: "clockIn", date: D, time: "06:05", timestamp: TSX(D, "06:05") }]);
+      w.edit({ id: "", nm: A, type: "clockOut", date: D }, "−", "15:00");     // 退勤を新規入力 → 承認付き保存
+      w.ok(); await flush();
+      check("連続(h)：1回目成功後に一致（承認済み）", w.consistent(A, D).ok && w.consistent(A, D).localApproved, JSON.stringify(w.consistent(A, D)));
+      w.ctx.approvals = {}; w.ctx.saveApprovals(w.ctx.approvals); await flush();   // 引き戻し
+      check("連続(h)：引き戻し後に2回目を編集できる", w.edit({ id: "ain", nm: A, type: "clockIn", date: D }, "06:05", "06:00") && w.pendingCount() === 1);
+      w.ok(); await flush();
+      const c = w.consistent(A, D);
+      check("連続(h)：2回目成功後も一致（出勤 06:00・退勤 15:00・承認済み）", c.ok && /ain:clockIn:06:00/.test(c.local) && /clockOut:15:00/.test(c.local) && c.localApproved, JSON.stringify(c));
+    }
+
+    // (i) 他の管理者操作（打刻管理の時刻変更・保存・削除・打刻追加・修正申請の承認）も保存中は止める
+    const guardSites = [
+      ["打刻管理：時・分セレクト", /var d=parseJstDateTime\(date,hv\+":"\+mv\);\n\s*if\(apvSaveBusy\(nm,date\)\)\{render\(\);return;\}/],
+      ["打刻管理：時・分セレクト（既存打刻）", /if\(rec&&apvSaveBusy\(rec\.staff,rec\.date\)\)\{render\(\);return;\}/],
+      ["修正申請の承認", /if\(!req\)return;\n\s*if\(apvSaveBusy\(req\.staff,req\.date\)\)return;\n\s*b\.disabled=true;/],
+      ["打刻を追加", /showAlert\("全て入力してください"\);return;\}\n\s*if\(apvSaveBusy\(staff,date\)\)return;/],
+      ["打刻管理：時刻保存", /if\(!rec\)return;\n\s*if\(apvSaveBusy\(rec\.staff,rec\.date\)\)return;\n\s*if\(!rec\.editedFrom\)/],
+      ["打刻管理：削除", /if\(rec&&apvSaveBusy\(rec\.staff,rec\.date\)\)return;\n\s*if\(rec\)\{rec\.deleted=true;softDeleteRecord/],
+      ["承認データの定期取得（保存中・全体PUTの後回し中・取得後に書込みがあったときは差し替えない）", /if\(savingCount!==0 \|\| _apvG!==_apvGen \|\| _apvBusyCount!==0 \|\| _apvPutDeferred\)return;\n\s*approvalsLoaded=true;/],
+      ["承認データの定期取得（エラー応答を取り込まない）", /authFetch\(FB_URL \+ "\/tc5_approvals\.json"\)\n[^\n]*\n\s*\.then\(function\(r\)\{if\(!r\.ok\)throw new Error\("HTTP "\+r\.status\);return r\.json\(\);\}\)/],
+      ["承認データの定期取得（使わなかった応答では読込済みにしない）", function () {
+        const i = html.indexOf("var _apvG=_apvGen;\n    authFetch(FB_URL + \"/tc5_approvals.json\")");
+        const blk = i < 0 ? "" : html.slice(i, html.indexOf("}).catch(function(){});", i));
+        return !!blk && (blk.match(/approvalsLoaded=true/g) || []).length === 1 && blk.indexOf("approvalsLoaded=true") > blk.indexOf("_apvPutDeferred)return;");
+      }],
+      ["承認ボタン（2画面とも）", function () { return (html.match(/var _nm=b\.dataset\.nm,_dk=b\.dataset\.dk;\n\s*if\(apvApprovalBlocked\(_dk\+"__"\+_nm\)\)return;/g) || []).length === 2; }],
+      ["引き戻し（2画面とも）", function () { return (html.match(/if\(apvApprovalBlocked\(b\.dataset\.dk\+"__"\+b\.dataset\.nm\)\)return;\n\s*(b\.disabled=true;\n\s*)?delete approvals\[b\.dataset\.dk\+"__"\+b\.dataset\.nm\]/g) || []).length === 2; }],
+      ["一括承認（3か所とも）", function () { return (html.match(/if\(apvApprovalBlocked\(\)\)return;\n\s*(var unapprovedDates|if\(!unapvList\.length\)|if\(!targets\.length\))/g) || []).length === 3; }],
+      ["管理画面の初回読込は、取得中に承認の書込みがあった応答を使わない", /var _apvFresh=\(_apvG===_apvGen&&!_apvPutDeferred&&_apvPutInFlight===0\);[^\n]*\n\s*if\(_apvFresh&&r\[0\]&&typeof r\[0\]==="object"\)[\s\S]{0,2000}?if\(_apvFresh&&r\[0\]!==null\)approvalsLoaded=true;/],
+      ["承認データの書込みの開始・完了で世代を進める（同時保存・全体PUT）", function () {
+        return /_apvBusyCount\+\+;\n\s*_apvGen\+\+;/.test(html) && /function _apvRelease\(key\)\{\n\s*_apvGen\+\+;/.test(html) &&
+          /_apvGen\+\+;\n\s*_apvPutInFlight\+\+;/.test(html) && (html.match(/_apvPutInFlight--;\n\s*_apvGen\+\+;/g) || []).length === 2;
+      }],
+      ["管理画面の初回読込で、同時保存中の日の承認を消さない", /approvals=r\[0\];Object\.keys\(_apvBusy\)\.forEach\(function\(k\)\{approvals\[k\]=true;\}\);/],
+      ["通信が戻ったら（online）未確認の日を読み直す", /window\.addEventListener\("online",function\(\)\{_apvRetryUnknown\(\);\}\)/],
+      ["未確認の記録は保存中ロックを外す前に行う（後回しの全体PUTを未確認のまま書かない）", /_apvUnknown\[approvalKey\]=\{[^}]*\};[\s\S]{0,700}?_apvRelease\(approvalKey\);/],
+      ["読み直しは他の保存の完了を待つ（最大約30秒）", /if\(savingCount>0&&st\.wait<60\)/],
+      ["職員の改名", /if\(_apvBusyCount>0\)\{showAlert\("勤怠の保存が完了していません。\\n少し待ってから保存してください。"\);return;\}\n\s*if\(apvApprovalBlocked\(\)\)return;/]
+    ];
+    guardSites.forEach(function (g) { check("保存中の停止：" + g[0], typeof g[1] === "function" ? g[1]() : g[1].test(html)); });
+  })();
 }
 
 function finish() {
