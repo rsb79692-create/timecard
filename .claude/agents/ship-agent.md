@@ -31,7 +31,7 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 | リリースして / リリースお願い | ship-agent を起動 |
 | コミットして / commitして | ship-agent を起動 |
 | 公開して / GitHub Pagesに上げて | ship-agent を起動 |
-| 問題なければ出荷して | qa-agent 確認OK後 → ship-agent を起動 |
+| 問題なければ出荷して | qa-agent 出荷可の後 → ship-agent を起動 |
 
 ## 複数 Agent が該当する場合の実行順序
 
