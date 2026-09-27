@@ -693,7 +693,8 @@ section("8. index.html 側の結線");
     //   （_LAZY_RETRY_MS の初期化など）が丸ごと実行されなくなる。実機で発生させた事故。
     ["期間取得ブロックが評価時に loadData() を呼ばない", /^(?!.*var _recOldestDate=loadData)/s],
     ["最古日の端末保存は参照時に遅延復元する", /function _recOldestFromStorage\(\)\{[\s\S]{0,400}?TLS\.getItem\("tc5_records_oldest"\)/],
-    ["SW が古い版を報告したらバナーを出す", /if\(_swSaysStale\)\{_appVersionLastCheck=now;_appUpdateNotified=true;_showAppUpdateBanner\(\);return;\}/],
+    // 2026-09-27 からバナーではなく自動更新（安全な状態を待って1回だけ）。詳細は scripts/test-app-auto-update.js
+    ["SW が古い版を報告したら自動更新を要求する", /if\(_swSaysStale\)\{_appVersionLastCheck=now;appRequestAutoReload\(_swStaleVersion\);return;\}/],
     // ★ 「後で」を押した直後の画面復帰で即再表示されないこと（間隔ゲートのあとで判定する）
     ["_swSaysStale の判定は5分間隔ゲートのあと", /if\(now-_appVersionLastCheck<APP_VERSION_MIN_GAP_MS\)return;\s*\n\s*if\(_swSaysStale\)/],
     ["recordsReady のガードを外していない", /if\(!recordsReady&&writePolicy==="full"\)\{/]
@@ -713,7 +714,8 @@ section("9. sw.js（app shell キャッシュ）");
     /fetch\(SHELL_URL, \{ method: 'HEAD', cache: 'no-store' \}\)/.test(sw));
   check("版が取れないときは必ず本体を取り直す（古い画面を残さない）",
     /if \(!known\) return doUpdate\(\)/.test(sw));
-  check("版が変わったら画面へ通知する", /notifyClients\(\{ type: 'APP_UPDATE_AVAILABLE' \}\)/.test(sw));
+  check("版が変わったら画面へ通知する（入れ直した版を添える）", /notifyClients\(\{ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf\(res\) \}\)/.test(sw));
+  check("取りこぼした画面への再通知にも版を添える", /notifyClients\(\{ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf\(cached\) \}\)/.test(sw));
   check("ok でない応答をキャッシュしない", /if \(!res \|\| !res\.ok \|\| res\.status !== 200\) return null;/.test(sw));
   check("app shell 以外のページ（manual.html 等）は素通しする",
     /if \(!isShellRequest\(event\.request\.url\)\) return;/.test(sw));

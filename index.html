@@ -25,6 +25,26 @@ window.addEventListener('appinstalled',function(){
   _deferredInstallPrompt=null;
 });
 
+// ===== 書込み通信の実行中件数 =====
+// 配信版の自動更新（APP-AUTO-UPDATE）が、保存・打刻の送信の途中で再読み込みしないために数える。
+// ★ GET / HEAD 以外（PUT・PATCH・POST・DELETE）だけを数える。通信の内容・結果には一切手を加えない。
+// ★ ページの先頭で1回だけ差し込む（以後の保存・打刻・API 送信がすべて通る）。
+var _appWritesInFlight=0;
+(function(){
+  if(typeof window==="undefined"||typeof window.fetch!=="function")return;
+  var _origFetch=window.fetch;
+  window.fetch=function(input,init){
+    var m=String((init&&init.method)||(input&&typeof input==="object"&&input.method)||"GET").toUpperCase();
+    if(m==="GET"||m==="HEAD")return _origFetch.apply(window,arguments);
+    _appWritesInFlight++;
+    var settled=false;
+    var done=function(){if(!settled){settled=true;_appWritesInFlight--;}};
+    var p;
+    try{p=_origFetch.apply(window,arguments);}catch(e){done();throw e;}
+    return p.then(function(r){done();return r;},function(e){done();throw e;});
+  };
+})();
+
 // ===== 会社（テナント）=====
 // ★ 1つのコードを複数の会社で共用する。会社ごとの違いはこの設定表だけで表し、コードを分岐・複製しない。
 //   公開してよい表示設定だけを置く（通知先などの秘密はサーバ側 /srv/{cid}・環境変数にある）。
@@ -14873,8 +14893,10 @@ document.addEventListener("keydown",function(e){
 // ★ このアプリは単一 index.html で、開いたままにすると修正後も古いJSが動き続ける。
 //   2026-08 のサーバ側認証移行では、移行前の画面が公開領域の取得失敗を「未設定」と
 //   誤判定し続け、「管理者PINが未設定です」を出したままになった（リロードすると直る）。
-//   そこで配信中の index.html の版（ETag / Last-Modified）を監視し、変わっていたら
-//   再読み込みを促す。★ 自動リロードはしない（打刻・入力中に画面を奪わない）。
+//   そこで配信中の index.html の版（ETag / Last-Modified）を監視し、変わっていたら最新版へ更新する。
+// ★ 2026-09-27 から自動で更新する（APP-AUTO-UPDATE）。ただし入力中・保存中・打刻中・PIN でログインした画面など、
+//   再読み込みで失われるものがある間は待ち、安全になってから1回だけ再読み込みする。
+//   自動で更新できないとき（同じ版で再読み込み済みなのに古いまま等）だけ、従来のバナーを出す。
 var _appVersionTag="";        // 起動時に確認した配信版
 var _appUpdateNotified=false; // バナーは1回だけ
 var _appUpdateDismissedAt=0;  // 「後で」を押した時刻（先送りの間隔判定に使う）
@@ -14902,7 +14924,9 @@ function _hideAppUpdateBanner(bar){
   document.body.style.paddingBottom=_appBannerPrevPad;
 }
 
-function _showAppUpdateBanner(){
+// 自動で更新できなかったときの予備（従来のバナー）
+// kind="session"：ログイン中の画面（再読み込みでログアウトする）。ホームへ戻れば自動で更新されることを伝える。
+function _showAppUpdateBanner(kind){
   if(document.getElementById("app-update-banner"))return;
   var bar=document.createElement("div");
   bar.id="app-update-banner";
@@ -14911,11 +14935,19 @@ function _showAppUpdateBanner(){
     +"padding:10px 14px;display:flex;align-items:center;gap:10px;font-size:.85rem;box-shadow:0 -2px 8px rgba(0,0,0,.2);";
   var msg=document.createElement("span");
   msg.style.cssText="flex:1;line-height:1.4;";
-  msg.textContent="新しいバージョンがあります。再読み込みしてください。";
+  msg.textContent=kind==="session"?"新しいバージョンがあります。ホームに戻ると自動で更新されます。"
+    :"新しいバージョンがあります。再読み込みしてください。";
   var reload=document.createElement("button");
   reload.textContent="再読み込み";
   reload.style.cssText="background:#fff;color:var(--brand);border:none;padding:7px 14px;border-radius:2px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;";
-  reload.onclick=function(){location.reload();};
+  // ★ 押した時点でも作業中かどうかを確かめる（バナーを出したあとに保存・入力が始まっていることがある）。
+  //   保存中・入力中は再読み込みしない。ログイン中の画面はログアウトすることを確認してから再読み込みする。
+  reload.onclick=function(){
+    var why=appReloadBlockReason();
+    if(why==="session"){showConfirm("再読み込みするとログアウトします。\nよろしいですか？",function(){location.reload();});return;}
+    if(why&&why!=="view"){showAlert("保存中または入力中の内容があります。\n保存・確定・キャンセルのあとで、もう一度押してください。");return;}
+    location.reload();
+  };
   var later=document.createElement("button");
   later.textContent="後で";
   later.style.cssText="background:transparent;color:#fff;border:1px solid rgba(255,255,255,.6);padding:7px 12px;border-radius:2px;font-size:.85rem;cursor:pointer;font-family:inherit;";
@@ -14940,25 +14972,202 @@ window.addEventListener("resize",function(){
   if(b)_syncAppBannerPadding(b);
 });
 
+// ===== APP-AUTO-UPDATE-BEGIN =====
+// 新しい版の準備ができたら、安全な状態になるのを待って1回だけ自動で再読み込みする。
+// ★ 「準備ができた」とは、Service Worker が新しい index.html を Cache Storage へ入れ終えて
+//   APP_UPDATE_AVAILABLE（version 付き）を送ってきたこと。その後の再読み込みは SW がキャッシュ（＝新版）から返す。
+//   SW が無い端末は再読み込みでネットワークから新版を取る（HEAD で版の変化を確認してから）。
+//   一定間隔で location.reload() する方式にしてはならない（入力を奪う・更新ループの原因）。
+// ★ 更新ループを起こさない:
+//   ・再読み込みした版をタブごと（sessionStorage）に記録し、同じ版では二度と自動で再読み込みしない。
+//     それでも古いままなら従来のバナーへ切り替える（利用者の操作に委ねる）。
+//   ・版が分からない通知（旧 SW）では、10分に1回までしか再読み込みしない。
+//   ・記録を読み書きできない（プライベートモード等）ときは自動で再読み込みしない（ループを防げないため）。
+//   ・オフラインの間は再読み込みしない。
+// ★ 作業を失わせない: appReloadBlockReason() が空を返すまで待つ（2秒ごとに再確認。操作の直後5秒も待つ）。
+var APP_AUTO_RELOAD_KEY="tc_app_autoreload";
+var APP_AUTO_IDLE_MS=5000;            // 最後の操作から5秒は再読み込みしない（打刻ボタンを押す瞬間に画面を奪わない）
+var APP_AUTO_POLL_MS=2000;            // 安全になるのを待つ間の確認間隔
+var APP_AUTO_SW_WAIT_MS=20000;        // HEAD で検知したとき、SW のキャッシュ更新の通知を待つ上限
+var APP_AUTO_UNKNOWN_GAP_MS=10*60*1000; // 版の分からない通知での再読み込みは10分に1回まで
+var _appAutoPending=false,_appAutoTarget="",_appAutoTimer=0,_appAutoDone=false,_appLastInputAt=0;
+var _appAutoSwWaitTimer=0,_appAutoSince=0;
+var APP_AUTO_MAX_WAIT_MS=30*60*1000;  // これ以上待たされたら、自動更新を待ちつつバナーでも知らせる
+function _appNormVer(v){return String(v||"").replace(/^W\//,"");}
+["pointerdown","keydown","touchstart","input","wheel"].forEach(function(t){
+  try{window.addEventListener(t,function(){_appLastInputAt=Date.now();},{capture:true,passive:true});}catch(e){}
+});
+// 戻り値: null＝記録なし／undefined＝読めない／{v,at}
+function _appReadAutoLog(){
+  try{var s=window.sessionStorage.getItem(APP_AUTO_RELOAD_KEY);return s?JSON.parse(s):null;}catch(e){return undefined;}
+}
+function _appWriteAutoLog(o){
+  try{window.sessionStorage.setItem(APP_AUTO_RELOAD_KEY,JSON.stringify(o));return true;}catch(e){return false;}
+}
+function _appAlreadyReloadedFor(target){
+  var log=_appReadAutoLog();
+  if(log===undefined)return true;        // 記録を読めない＝ループを防げない → 自動では再読み込みしない
+  if(!log)return false;
+  if(target)return log.v===target;
+  return Date.now()-(Number(log.at)||0)<APP_AUTO_UNKNOWN_GAP_MS;
+}
+// いまの画面で自動の再読み込みをしてよいか。"ok"／"view"（表示中は待つ）／"session"（ホームへ戻るまで待つ）
+// ★ PIN でログインした管理者・職員の画面、打刻の途中は、再読み込みでログインや操作の途中が失われる → "session"。
+// ★ 管理者URL・閲覧用URLはトークンで再認証されるが、開いているタブ・月・職員・スクロールは初期状態へ戻る。
+//   表示中は予告なく画面を変えない（"view"）。タブが裏へ回った（非表示の）ときに更新する。
+function _appReloadScreenState(){
+  if(screen==="home")return "ok";
+  var urlSession=viewerMode||(adminUrlUsed&&adminTokenValid&&!demoMode
+     &&(screen==="admin"||screen==="staffDetail"||screen==="csvPreview"));
+  if(urlSession)return document.visibilityState==="hidden"?"ok":"view";
+  return "session";
+}
+// 開いているモーダル（画面全体を覆う固定表示）があるか
+function _appOverlayOpen(){
+  var els=document.querySelectorAll('body [style*="fixed"]');
+  for(var i=0;i<els.length;i++){
+    var el=els[i],st=el.style;
+    if(el.id==="app-update-banner"||st.position!=="fixed"||st.display==="none")continue;
+    if(st.inset==="0px"||st.inset==="0"||(st.top==="0px"&&st.bottom==="0px"&&st.left==="0px"&&st.right==="0px"))return true;
+  }
+  return false;
+}
+// 入力欄にフォーカスがあるか（入力の途中）
+function _appActiveEditable(){
+  var a=document.activeElement;
+  if(!a||a===document.body)return false;
+  if(a.isContentEditable)return true;
+  var tag=String(a.tagName||"").toUpperCase();
+  if(tag==="TEXTAREA"||tag==="SELECT")return true;
+  if(tag!=="INPUT")return false;
+  return !/^(button|submit|reset|image|checkbox|radio|range|color|hidden)$/i.test(String(a.type||""));
+}
+// 画面上に保存していない入力（初期値から変わった入力欄）があるか
+function _appDirtyInput(){
+  var list=document.querySelectorAll("input,textarea,select");
+  for(var i=0;i<list.length;i++){
+    var el=list[i],tag=String(el.tagName||"").toUpperCase();
+    if(el.closest&&el.closest("#app-update-banner"))continue;
+    // ★ 表示されていない入力欄は数えない。閉じて display:none で残るモーダル（有給付与など）は、
+    //   開いたときに JS で値を入れるため初期値と違ったまま残り、自動更新を永久に止めてしまう。
+    if(el.getClientRects&&!el.getClientRects().length)continue;
+    if(tag==="SELECT"){
+      if(el.multiple){for(var j=0;j<el.options.length;j++){if(el.options[j].selected!==el.options[j].defaultSelected)return true;}continue;}
+      var def=0;for(var k=0;k<el.options.length;k++){if(el.options[k].defaultSelected){def=k;break;}}
+      if(el.options.length&&el.selectedIndex!==def)return true;
+      continue;
+    }
+    var ty=String(el.type||"").toLowerCase();
+    if(/^(button|submit|reset|image|hidden)$/.test(ty))continue;
+    if(ty==="checkbox"||ty==="radio"){if(el.checked!==el.defaultChecked)return true;continue;}
+    if(ty==="file"){if(el.files&&el.files.length)return true;continue;}
+    if(el.value!==el.defaultValue)return true;
+  }
+  return false;
+}
+// 再読み込みすると失われるものがあれば理由を返す（空文字＝安全）。判定できないときは再読み込みしない。
+function appReloadBlockReason(){
+  try{
+    if(_appWritesInFlight>0)return "writing";                  // 書込み通信の途中（保存・打刻の送信）
+    if(savingCount>0)return "saving";
+    if(_apvBusyCount>0||_apvHasUnknown()||_apvPutDeferred||_apvPutInFlight>0)return "attendance-save"; // 管理者の時刻修正＋承認
+    if(_punchSaving)return "punch";                            // 打刻の端末保存中
+    if(pinChecking||pinInput||staffPinInput||staffPinConfirm)return "pin";
+    if(document.querySelector(".time-edit-wrap"))return "time-edit";
+    if(mileageBlocksRerender()||devWatchEditing()||monthlyDaysEditing)return "editing";
+    if(_appOverlayOpen())return "modal";                       // 修正理由の選択・確認・各種モーダル
+    if(_appActiveEditable())return "focus";
+    if(_appDirtyInput())return "unsaved-input";
+    // ★ 画面の状態（ログイン中など）は作業中の判定のあとに見る。作業中にバナーを出して再読み込みを誘わないため。
+    var scr=_appReloadScreenState();
+    if(scr!=="ok")return scr;
+  }catch(e){return "unknown";}
+  return "";
+}
+function _appAutoStop(){
+  _appAutoPending=false;
+  if(_appAutoTimer){clearInterval(_appAutoTimer);_appAutoTimer=0;}
+  if(_appAutoSwWaitTimer){clearTimeout(_appAutoSwWaitTimer);_appAutoSwWaitTimer=0;}
+}
+// 自動で更新できない → 従来のバナー（「後で」から5分は出さない）
+function _appAutoFallback(){
+  _appAutoStop();
+  if(_appUpdateNotified){
+    // ★ ログイン中の画面向けの文言（「ホームに戻ると自動で更新されます」）を出していても、ここから先は自動では
+    //   更新しない。表示と実際を食い違わせないよう、通常の文言へ差し替える。
+    var b=document.getElementById("app-update-banner");
+    if(b&&b.firstChild)b.firstChild.textContent="新しいバージョンがあります。再読み込みしてください。";
+    return;
+  }
+  if(_appUpdateDismissedAt&&Date.now()-_appUpdateDismissedAt<APP_VERSION_MIN_GAP_MS)return;
+  _appUpdateNotified=true;
+  _showAppUpdateBanner();
+}
+// 自動更新を待ちながらバナーでも知らせる（再読み込みは強制しない。「後で」から5分は出さない）
+function _appShowPendingBanner(why){
+  if(_appUpdateNotified)return;
+  if(_appUpdateDismissedAt&&Date.now()-_appUpdateDismissedAt<APP_VERSION_MIN_GAP_MS)return;
+  _appUpdateNotified=true;
+  _showAppUpdateBanner(why==="session"?"session":"");
+}
+function _appAutoTry(){
+  if(!_appAutoPending||_appAutoDone)return;
+  if(navigator.onLine===false)return;                          // オフラインの間は待つ
+  var why=appReloadBlockReason();
+  if(why){                                                     // 作業中は待つ
+    // ★ ログイン中の画面（再読み込みでログアウトする）・表示中の管理者URL画面は、自動では再読み込みしない。
+    //   黙って古い版のまま残さないよう、従来のバナーで知らせる（押せばすぐ更新、ホームへ戻れば自動で更新）。
+    //   作業中でも長く待たされたら同じくバナーで知らせる（保存が返ってこない等で黙って古いまま残さない）。
+    if(why==="session"||why==="view"||Date.now()-_appAutoSince>APP_AUTO_MAX_WAIT_MS)_appShowPendingBanner(why);
+    return;
+  }
+  if(Date.now()-_appLastInputAt<APP_AUTO_IDLE_MS)return;       // 操作の直後は待つ
+  if(_appAlreadyReloadedFor(_appAutoTarget)){_appAutoFallback();return;}
+  if(!_appWriteAutoLog({v:_appAutoTarget,at:Date.now()})){_appAutoFallback();return;}
+  _appAutoDone=true;
+  _appAutoStop();
+  location.reload();
+}
+// 新しい版の準備ができた。target は版（ETag。分からなければ空）。
+function appRequestAutoReload(target){
+  if(_appAutoDone)return;
+  if(_appAutoSwWaitTimer){clearTimeout(_appAutoSwWaitTimer);_appAutoSwWaitTimer=0;}
+  var t=_appNormVer(target);
+  if(t)_appAutoTarget=t;
+  if(!_appAutoPending){_appAutoPending=true;_appAutoSince=Date.now();_appAutoTimer=setInterval(_appAutoTry,APP_AUTO_POLL_MS);}
+  _appAutoTry();
+}
+// HEAD で配信版の変化を見つけた。SW があれば、キャッシュを入れ替えて通知するよう依頼して待つ
+// （待たずに再読み込みすると SW が古いキャッシュを返し、2回再読み込みになる）。
+// 期限までに通知が無ければ（SW 更新直後でキャッシュが空の場合など）、再読み込みでネットワークから取る。
+function _appOnServerVersionChanged(tag){
+  if(_appAutoDone||_appAutoPending||_appAutoSwWaitTimer)return;
+  var ctl=('serviceWorker' in navigator)&&navigator.serviceWorker.controller;
+  if(!ctl){appRequestAutoReload(tag);return;}
+  try{ctl.postMessage({type:'CHECK_APP_UPDATE'});}catch(e){}
+  _appAutoSwWaitTimer=setTimeout(function(){_appAutoSwWaitTimer=0;appRequestAutoReload(tag);},APP_AUTO_SW_WAIT_MS);
+}
+// ===== APP-AUTO-UPDATE-END =====
+
 // ★ Service Worker が app shell を Cache Storage から返すようになったため、
 //   「起動時に HEAD で取った版」は常に最新であり、いま動いている HTML の版とは限らない。
 //   そのため「古い HTML を実行中」を検知できるのは SW だけであり、その報告を受け取るこのフラグが
 //   「速くなったが最新版に更新されない」を防ぐ唯一の経路になる。外してはならない。
-var _swSaysStale=false;
+var _swSaysStale=false,_swStaleVersion="";
 function checkAppVersion(){
-  if(_appUpdateNotified)return;
+  if(_appUpdateNotified||_appAutoPending||_appAutoDone)return;
   var now=Date.now();
   // ★ 「後で」は先送りであって無効化ではない。_swSaysStale は一度立つと降りないため、
   //   この分岐を間隔ゲートの前に置くと、画面復帰のたびにバナーが即再表示されて
   //   「後で」が事実上効かなくなる。必ずゲートのあとで判定する。
   if(now-_appVersionLastCheck<APP_VERSION_MIN_GAP_MS)return;
-  if(_swSaysStale){_appVersionLastCheck=now;_appUpdateNotified=true;_showAppUpdateBanner();return;}
+  if(_swSaysStale){_appVersionLastCheck=now;appRequestAutoReload(_swStaleVersion);return;}
   if(!_appVersionTag)return;
   _appVersionLastCheck=now;
   _fetchAppVersionTag().then(function(tag){
-    if(!tag||tag===_appVersionTag)return; // 取得失敗（空文字）は「更新なし」として扱う（誤検知させない）
-    _appUpdateNotified=true;
-    _showAppUpdateBanner();
+    // 取得失敗（空文字）は「更新なし」として扱う（誤検知させない）。W/ の付き外れは同じ版として扱う
+    if(!tag||_appNormVer(tag)===_appNormVer(_appVersionTag))return;
+    _appOnServerVersionChanged(tag);
   });
 }
 
@@ -14991,20 +15200,15 @@ function startAppVersionWatch(){
 }
 // ===== Service Worker からの更新通知 =====
 // SW は app shell を Cache Storage から即座に返し、裏で HEAD により配信中の版を確かめる。
-// 版が違っていたら新しい HTML をキャッシュへ入れ直してここへ通知する。
-// ★ 自動リロードはしない（打刻・入力中に画面を奪わない）。従来と同じバナーを出す。
+// 版が違っていたら新しい HTML をキャッシュへ入れ直してここへ通知する（version＝入れ直した版）。
+// ★ 通知が来た時点でキャッシュは新版になっているため、安全な状態を待って自動で再読み込みする（APP-AUTO-UPDATE）。
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',function(ev){
     var d=ev&&ev.data;
     if(!d||d.type!=='APP_UPDATE_AVAILABLE')return;
     _swSaysStale=true;
-    if(_appUpdateNotified)return;
-    // ★ 「後で」は先送りであって無効化ではない。ここで間隔を見ないと、
-    //   Service Worker は画面復帰・オンライン復帰のたびに通知するため、
-    //   押した直後にバナーが戻ってきて「後で」が事実上効かなくなる（実機で確認）。
-    if(_appUpdateDismissedAt&&Date.now()-_appUpdateDismissedAt<APP_VERSION_MIN_GAP_MS)return;
-    _appUpdateNotified=true;
-    _showAppUpdateBanner();
+    if(typeof d.version==="string"&&d.version)_swStaleVersion=d.version;
+    appRequestAutoReload(_swStaleVersion); // 同じ版で再読み込み済みなら中でバナーへ切り替える（ループしない）
   });
   // オンライン復帰・タブ復帰時にも SW 側へ版の確認を依頼する
   var _swAskCheck=function(){

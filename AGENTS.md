@@ -52,7 +52,7 @@ Claude Code が**常時**読む指示ファイルである。置いてよいの�
 | 有給取得履歴 | [`paid-leave-history.md`](docs/features/paid-leave-history.md) | `node scripts/test-paid-leave-history.js` |
 | 有給残日数・打刻・月別出勤日数の注意点 | [`business-data-notes.md`](docs/features/business-data-notes.md) | `node scripts/test-paid-leave-grant-edit.js` |
 | `tc5_records` の取得範囲・承認漏れ集計 | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-records-range.js` / `node scripts/test-unapproved-summary.js` |
-| index.html（app shell）のキャッシュ・`sw.js` | [`app-shell-cache.md`](docs/features/app-shell-cache.md) | `node scripts/test-records-range.js` |
+| index.html（app shell）のキャッシュ・`sw.js`・配信版の自動更新 | [`app-shell-cache.md`](docs/features/app-shell-cache.md) | `node scripts/test-records-range.js` / `node scripts/test-app-auto-update.js` |
 | 打刻の端末保存と自動再送 | [`punch-outbox.md`](docs/features/punch-outbox.md) | `node scripts/test-punch-outbox.js` |
 | 管理者による勤怠編集 | [`admin-attendance-edit.md`](docs/features/admin-attendance-edit.md) | `node scripts/test-admin-attendance-edit.js` |
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |

@@ -1,7 +1,7 @@
 // ===== キャッシュ版 =====
 // ★ sw.js を変更したら必ず CACHE_NAME を上げる。activate で旧キャッシュを全削除するため、
 //   これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
-const CACHE_NAME = 'timecard-v14';
+const CACHE_NAME = 'timecard-v15';
 
 // app shell（index.html）のキャッシュキー。
 // ★ クエリ付き（?admin= / ?token= 等）でも必ずこの1つのキーへ正規化する。
@@ -113,7 +113,8 @@ function revalidateShell(cache, cached, servedVersion) {
     return fetchAndStoreShell(cache).then(function(res) {
       if (!res) return null;
       if (known && shellVersionOf(res) === known) return null; // 実質同じ＝通知しない
-      return notifyClients({ type: 'APP_UPDATE_AVAILABLE' });
+      // version＝キャッシュへ入れ直した版。画面は同じ版で二度と自動再読み込みしない（更新ループ防止）
+      return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(res) });
     });
   };
   if (!known) return doUpdate().catch(function() {});
@@ -223,7 +224,7 @@ self.addEventListener('message', function(event) {
         // すでにキャッシュを入れ替えたのに、そのときの通知を画面が取りこぼしている場合がある。
         // 「いま動いている版（＝最後に返した版）」と比べ直し、違っていれば通信せず再通知する。
         if (served && served !== shellVersionOf(cached)) {
-          return notifyClients({ type: 'APP_UPDATE_AVAILABLE' });
+          return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(cached) });
         }
         return revalidateShell(cache, cached, served);
       });
