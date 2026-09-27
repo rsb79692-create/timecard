@@ -1183,6 +1183,48 @@ function patchRecord(id, partial) {
 function softDeleteRecord(id) {
   patchRecord(id, {deleted: true});
 }
+// 管理者の時刻修正（出勤・退勤）を「打刻の保存」と「その日の承認」を1回の多パス更新で書き込む。
+// ★ RTDB の多パス更新は全パス成功か全パス失敗のどちらかになる（時刻だけ・承認だけ、にならない）。
+// ★ tc5_approvals は全体PUTせず、そのキー1件だけを書く（他の承認に触れない）。
+// 失敗時は onFail を呼ぶ（呼び出し側でメモリ上の承認を戻す）。
+function saveRecordWithApproval(rec, approvalKey, onFail) {
+  if(demoWriteBlocked()){if(onFail)onFail();return;}
+  // ★ ルート直下への多パス更新なので、id が空・不正だと tc5_records 全体を置き換えうる。書かずに止める。
+  //   承認キーも RTDB のキーに使えない文字（パス区切りの "/" を含む）があれば書かない。
+  if(!rec||typeof rec.id!=="string"||!/^[A-Za-z0-9_-]{1,128}$/.test(rec.id)||typeof approvalKey!=="string"||!approvalKey||/[.#$\[\]\/\x00-\x1F\x7F]/.test(approvalKey)){
+    console.error("[saveRecordWithApproval] invalid record id or approval key:", rec&&rec.id, approvalKey);
+    if(onFail)onFail();
+    showAlert("この打刻は保存できませんでした（記録IDが不正です）。");
+    return;
+  }
+  var body={};
+  body["tc5_records/"+rec.id]=rec;
+  body["tc5_approvals/"+approvalKey]=true;
+  console.log("[saveRecordWithApproval] called:", rec.id, approvalKey);
+  _lsSet("tc5_records", JSON.stringify(records));
+  _lsSet("tc5_approvals", JSON.stringify(approvals));
+  savingCount++;
+  function failed(){
+    if(onFail)onFail();
+    showAlert("保存に失敗しました（時刻・承認とも保存されていません）。通信状態を確認して再度実行してください。");
+  }
+  authFetch(FB_URL + ".json", {
+    method: "PATCH",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  }).then(function(res){
+    savingCount--;
+    if(!res.ok){
+      res.text().catch(function(){return "";}).then(function(t){console.error("[saveRecordWithApproval] HTTP", res.status, rec.id, t);failed();});
+    } else {
+      console.log("[saveRecordWithApproval] OK:", rec.id, approvalKey);
+    }
+  }).catch(function(e){
+    savingCount--;
+    console.error("[saveRecordWithApproval] network error:", e);
+    failed();
+  });
+}
 
 // ===== PUNCH-OUTBOX-BEGIN =====
 // 打刻の端末永続保存と自動再送（IndexedDB）
@@ -3978,6 +4020,32 @@ function attachTimeCellHandlers(){
           showAdjustReasonModal(function(adj){
             var d2=parseJstDateTime(date,pad(_hh2)+":"+pad(_mm2));
             var nowIso=new Date().toISOString();
+            // ★ 出勤・退勤を管理者が修正・入力して確定したら、その日（日付＋職員）を同時に承認済みにする。
+            //   時刻と承認は saveRecordWithApproval で1回の多パス更新として書く（片方だけ成功させない）。
+            //   休憩・削除・「➕ 打刻を追加」・職員の打刻・修正申請の承認は対象外（従来どおり）。
+            //   承認ボタンと同じ validateAttendanceRecord を通る日だけ承認する（退勤漏れ・出勤漏れ・勤務時間異常は時刻だけ保存）。
+            var _autoApv=(type==="clockIn"||type==="clockOut");
+            var _apvKey=date+"__"+snm;
+            if(_autoApv&&/[.#$\[\]\/\x00-\x1F\x7F]/.test(_apvKey)){showAlert("この職員名では承認を保存できないため、修正を保存できません。");cancel();return;}
+            // 保存失敗時に画面・端末保存を元へ戻すための控え（この職員・この日の打刻）
+            var _snaps=records.filter(function(r){return r.staff===snm&&r.date===date;}).map(function(r){return{ref:r,copy:JSON.parse(JSON.stringify(r))};});
+            function commit(r){
+              if(!_autoApv){saveRecord(r);return;}
+              var _v=validateAttendanceRecord(snm,date,records.filter(function(x){return x.staff===snm&&x.date===date&&!x.deleted;}));
+              if(!_v.valid){saveRecord(r);showAlert("時刻を保存しました。\n"+_v.reason+"のため、この日はまだ承認していません。");return;}
+              var _had=!!approvals[_apvKey];
+              r.adjustApprovedAt=nowIso;
+              approvals[_apvKey]=true;
+              saveRecordWithApproval(r,_apvKey,function(){
+                if(!_had)delete approvals[_apvKey];
+                var _i=records.indexOf(r);
+                if(_i>=0&&!_snaps.some(function(s){return s.ref===r;}))records.splice(_i,1);
+                _snaps.forEach(function(s){Object.keys(s.ref).forEach(function(k){delete s.ref[k];});Object.assign(s.ref,s.copy);});
+                _lsSet("tc5_records",JSON.stringify(records));
+                _lsSet("tc5_approvals",JSON.stringify(approvals));
+                render();
+              });
+            }
             var _origCin="",_origCout="";
             var _cins=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockIn"&&!r.deleted;});
             var _couts=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockOut"&&!r.deleted;});
@@ -3987,11 +4055,11 @@ function attachTimeCellHandlers(){
             var _corrCout=type==="clockOut"?_newTime2:_origCout;
             if(id){
               var rec=records.find(function(r){return r.id===id;});
-              if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=_newTime2;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;rec.adjustReason=adj.reason;rec.adjustReasonLabel=adj.label;rec.adjustComment=adj.comment;rec.adjustedAt=nowIso;rec.adjustedBy="管理者";rec.originalClockIn=_origCin;rec.originalClockOut=_origCout;rec.correctedClockIn=_corrCin;rec.correctedClockOut=_corrCout;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);saveRecord(rec);}
+              if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=_newTime2;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;rec.adjustReason=adj.reason;rec.adjustReasonLabel=adj.label;rec.adjustComment=adj.comment;rec.adjustedAt=nowIso;rec.adjustedBy="管理者";rec.originalClockIn=_origCin;rec.originalClockOut=_origCout;rec.correctedClockIn=_corrCin;rec.correctedClockOut=_corrCout;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);commit(rec);}
             } else {
               var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-              if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=_newTime2;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;exist.adjustReason=adj.reason;exist.adjustReasonLabel=adj.label;exist.adjustComment=adj.comment;exist.adjustedAt=nowIso;exist.adjustedBy="管理者";exist.originalClockIn=_origCin;exist.originalClockOut=_origCout;exist.correctedClockIn=_corrCin;exist.correctedClockOut=_corrCout;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);saveRecord(exist);}
-              else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:_newTime2,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{},adjustReason:adj.reason,adjustReasonLabel:adj.label,adjustComment:adj.comment,adjustedAt:nowIso,adjustedBy:"管理者",originalClockIn:_origCin,originalClockOut:_origCout,correctedClockIn:_corrCin,correctedClockOut:_corrCout};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,_newTime2,"理由:",adj.label);saveRecord(nr);}
+              if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=_newTime2;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;exist.adjustReason=adj.reason;exist.adjustReasonLabel=adj.label;exist.adjustComment=adj.comment;exist.adjustedAt=nowIso;exist.adjustedBy="管理者";exist.originalClockIn=_origCin;exist.originalClockOut=_origCout;exist.correctedClockIn=_corrCin;exist.correctedClockOut=_corrCout;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);commit(exist);}
+              else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:_newTime2,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{},adjustReason:adj.reason,adjustReasonLabel:adj.label,adjustComment:adj.comment,adjustedAt:nowIso,adjustedBy:"管理者",originalClockIn:_origCin,originalClockOut:_origCout,correctedClockIn:_corrCin,correctedClockOut:_corrCout};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,_newTime2,"理由:",adj.label);commit(nr);}
             }
             render();
           },function(){cancel();});

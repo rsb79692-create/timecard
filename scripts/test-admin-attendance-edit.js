@@ -195,6 +195,8 @@ check("承認ボタンの引き戻しは承認済みの日だけ（変えてい�
 // 3. 時刻セルの保存処理（attachTimeCellHandlers）
 //    未打刻セルからの新規作成・既存更新・補完しないこと
 // ============================================================================
+// 承認前の検査は実装の関数をそのまま使う（承認ボタンと同じ判定であることを固定する）
+const VALIDATE_CODE = slice("function validateAttendanceRecord(nm,date,sr){", "function findOpenClockInAcrossFacilities(");
 const HANDLER_CODE = slice(
   "// ===== 時刻セル インライン編集ハンドラー（勤怠一覧・個人別共通） =====",
   "// ===== 朝出勤確認ヘルパー ====="
@@ -255,7 +257,8 @@ function makeCell(data, text) {
  */
 let newIdSeq = 0;   // 実装の generateRecordId は毎回ユニークな id を返す（crypto.randomUUID）
 function runCell(opts) {
-  const state = { saved: [], alerts: [], confirms: [], deleted: [], renders: 0, reasonCancelled: 0 };
+  const state = { saved: [], alerts: [], confirms: [], deleted: [], renders: 0, reasonCancelled: 0, plainSaved: [], approvedWrites: [], onFail: null, ls: {} };
+  const approvals = opts.approvals || {};
   const records = opts.records;
   const cell = opts.cell;
   const ctx = {
@@ -265,7 +268,15 @@ function runCell(opts) {
     pad: function (n) { return (n < 10 ? "0" : "") + n; },
     parseJstDateTime: function (date, time) { return new Date(date + "T" + time + ":00+09:00"); },
     generateRecordId: function () { return "new-" + (++newIdSeq); },
-    saveRecord: function (rec) { state.saved.push(JSON.parse(JSON.stringify(rec))); },
+    saveRecord: function (rec) { state.saved.push(JSON.parse(JSON.stringify(rec))); state.plainSaved.push(rec.id); },
+    // 出勤・退勤の管理者修正は、時刻と承認を1回の多パス更新で書く経路を通る
+    saveRecordWithApproval: function (rec, key, onFail) {
+      state.saved.push(JSON.parse(JSON.stringify(rec)));
+      state.approvedWrites.push({ id: rec.id, key: key, approvedInMemory: approvals[key] === true });
+      state.onFail = onFail;
+    },
+    approvals: approvals,
+    _lsSet: function (k, v) { state.ls[k] = v; },
     softDeleteRecord: function (id) { state.deleted.push(id); },
     showAlert: function (m) { state.alerts.push(m); },
     showConfirm: function (m, onYes, onNo) { state.confirms.push(m); if (opts.confirmDelete) onYes(); else if (onNo) onNo(); },
@@ -280,7 +291,7 @@ function runCell(opts) {
     }
   };
   vm.createContext(ctx);
-  vm.runInContext(HANDLER_CODE + "\nattachTimeCellHandlers();", ctx);
+  vm.runInContext(VALIDATE_CODE + HANDLER_CODE + "\nattachTimeCellHandlers();", ctx);
 
   cell.onclick();                                   // セルをクリック → 入力欄が出る
   const wrap = cell.children[0];
@@ -292,7 +303,7 @@ function runCell(opts) {
   else if (opts.noCommit) { /* 何も押さない */ }
   else inp.fire("keydown", { key: "Enter", preventDefault: function () { } });
 
-  return Object.assign(state, { records: records, cell: cell, input: inp });
+  return Object.assign(state, { records: records, cell: cell, input: inp, approvals: approvals });
 }
 
 console.log("\n[3] 保存処理：未打刻セルからの新規作成");
@@ -476,7 +487,171 @@ check("日別一覧の未打刻セルは data-id 空で描画される（＝新�
   /data-id="'\+esc\(rec\?rec\.id:""\)/.test(dailyBlock), "tCell");
 
 // ============================================================================
+// 8. 管理者が出勤・退勤を修正・入力して確定したら、同時に承認済みにする
+//    （時刻と承認を1回の多パス更新で書く。休憩・削除・キャンセルは従来どおり）
+// ============================================================================
+console.log("\n[8] 管理者の出勤・退勤修正と同時承認");
+{
+  // (a) 既存の出勤打刻を修正 → 同じ更新で承認される／監査情報が残る
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:05", timestamp: "2026-08-31T21:05:00.000Z" },
+    { id: "rec-out", staff: "山田 太郎", type: "clockOut", date: "2026-09-01", time: "15:00", timestamp: "2026-09-01T06:00:00.000Z" }];
+  const other = { "2026-09-02__山田 太郎": true, "2026-09-01__佐藤 花子": true };
+  const r = runCell({ records: recs, approvals: Object.assign({}, other),
+    cell: makeCell({ id: "rec-in", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "06:05"), input: "06:00" });
+  const w = r.approvedWrites[0], sv = r.saved[0];
+  check("既存出勤の修正：承認付きの保存が1回だけ呼ばれる", r.approvedWrites.length === 1 && r.plainSaved.length === 0, JSON.stringify(r.approvedWrites));
+  check("既存出勤の修正：承認キーはその日・その職員（日付__氏名）", !!w && w.key === "2026-09-01__山田 太郎" && w.id === "rec-in", JSON.stringify(w));
+  check("既存出勤の修正：保存時点でメモリ上も承認済み", !!w && w.approvedInMemory === true && r.approvals["2026-09-01__山田 太郎"] === true);
+  check("既存出勤の修正：他の日・他の職員の承認に触れない",
+    r.approvals["2026-09-02__山田 太郎"] === true && r.approvals["2026-09-01__佐藤 花子"] === true && Object.keys(r.approvals).length === 3,
+    JSON.stringify(r.approvals));
+  check("既存出勤の修正：時刻は 06:00 で保存される", !!sv && sv.time === "06:00" && sv.timestamp === new Date("2026-09-01T06:00:00+09:00").toISOString(), JSON.stringify(sv));
+  check("既存出勤の修正：修正理由・修正前の時刻・編集履歴が残る",
+    !!sv && sv.adjustReason === "forgot" && sv.adjustReasonLabel === "打刻忘れ" && sv.editedFrom === "06:05" &&
+    Array.isArray(sv.editHistory) && sv.editHistory[0].time === "06:05" && sv.editedByAdmin === true && sv.adjustedBy === "管理者",
+    JSON.stringify(sv));
+  check("既存出勤の修正：同時承認した時刻を記録する", !!sv && typeof sv.adjustApprovedAt === "string" && sv.adjustApprovedAt === sv.adjustedAt, JSON.stringify(sv));
+  check("既存出勤の修正：id を採り直さない（上書き更新）", recs.length === 2 && sv.id === "rec-in");
+  check("既存出勤の修正：承認できたときは案内を出さない", r.alerts.length === 0, JSON.stringify(r.alerts));
+}
+{
+  // (b) 未打刻の退勤を新規入力 → 新規作成と同時に承認
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:00", timestamp: "2026-08-31T21:00:00.000Z" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "", nm: "山田 太郎", type: "clockOut", date: "2026-09-01" }, "--:--"), input: "15:00" });
+  const sv = r.saved[0];
+  check("未打刻退勤の新規入力：新規レコードを承認付きで保存する",
+    r.approvedWrites.length === 1 && r.plainSaved.length === 0 && recs.length === 2 && !!sv && sv.type === "clockOut" && sv.time === "15:00" && sv.manualAdd === true,
+    JSON.stringify(r.saved));
+  check("未打刻退勤の新規入力：その日が承認済みになる", r.approvals["2026-09-01__山田 太郎"] === true && r.approvedWrites[0].id === sv.id);
+  check("未打刻退勤の新規入力：修正理由が記録される", sv.adjustReason === "forgot" && sv.adjustReasonLabel === "打刻忘れ");
+}
+{
+  // (c) 出勤・退勤とも無い日：出勤だけ入れた時点では承認しない（承認ボタンと同じく退勤漏れは承認不可）
+  //     続けて退勤を入れた時点で、その保存と同時に承認される
+  const recs = [], apv = {};
+  const r = runCell({ records: recs, approvals: apv, cell: makeCell({ id: "", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "−"), input: "06:00" });
+  check("出勤だけ入力：時刻は保存し、承認はしない（退勤漏れ）",
+    r.plainSaved.length === 1 && r.approvedWrites.length === 0 && recs.length === 1 && !apv["2026-09-01__山田 太郎"], JSON.stringify(r.approvedWrites));
+  check("出勤だけ入力：承認していない理由を短く伝える", r.alerts.length === 1 && /退勤漏れ/.test(r.alerts[0]), JSON.stringify(r.alerts));
+  const r2 = runCell({ records: recs, approvals: apv, cell: makeCell({ id: "", nm: "山田 太郎", type: "clockOut", date: "2026-09-01" }, "−"), input: "15:00" });
+  check("続けて退勤を入力：保存と同時に承認される（別途の承認操作は不要）",
+    r2.approvedWrites.length === 1 && r2.plainSaved.length === 0 && recs.length === 2 && apv["2026-09-01__山田 太郎"] === true, JSON.stringify(apv));
+}
+{
+  // (c2) 退勤が出勤以前になる修正は承認しない（勤務時間異常）
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:00", timestamp: "2026-08-31T21:00:00.000Z" },
+    { id: "rec-out", staff: "山田 太郎", type: "clockOut", date: "2026-09-01", time: "15:00", timestamp: "2026-09-01T06:00:00.000Z" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "rec-out", nm: "山田 太郎", type: "clockOut", date: "2026-09-01" }, "15:00"), input: "05:00" });
+  check("勤務時間異常になる修正：時刻だけ保存し承認しない",
+    r.plainSaved.length === 1 && r.approvedWrites.length === 0 && !r.approvals["2026-09-01__山田 太郎"] && /勤務時間異常/.test(r.alerts[0] || ""), JSON.stringify(r.alerts));
+}
+{
+  // (d) 休憩の修正は従来どおり承認しない
+  const recs = [{ id: "rec-bs", staff: "山田 太郎", type: "breakStart", date: "2026-09-01", time: "12:00" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "rec-bs", nm: "山田 太郎", type: "breakStart", date: "2026-09-01" }, "12:00"), input: "12:10" });
+  check("休憩の修正：従来の保存だけで承認しない",
+    r.plainSaved.length === 1 && r.approvedWrites.length === 0 && !r.approvals["2026-09-01__山田 太郎"], JSON.stringify(r.approvals));
+}
+{
+  // (e) 修正理由をキャンセル → 保存も承認もしない
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:05" }];
+  const r = runCell({ records: recs, cancelReason: true, cell: makeCell({ id: "rec-in", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "06:05"), input: "06:00" });
+  check("理由キャンセル：保存も承認もしない", r.saved.length === 0 && Object.keys(r.approvals).length === 0 && recs[0].time === "06:05");
+}
+{
+  // (f) 削除（空欄で確定）は承認しない
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:05" }];
+  const r = runCell({ records: recs, confirmDelete: true, cell: makeCell({ id: "rec-in", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "06:05"), input: "" });
+  check("削除：承認しない", r.deleted.length === 1 && r.approvedWrites.length === 0 && Object.keys(r.approvals).length === 0);
+}
+{
+  // (g) 保存失敗時は承認も時刻も元へ戻す（「時刻・承認とも保存されていません」と画面を一致させる）
+  const inRec = { id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:05", timestamp: "2026-08-31T21:05:00.000Z" };
+  const before = JSON.stringify(inRec);
+  const recs = [inRec, { id: "rec-out", staff: "山田 太郎", type: "clockOut", date: "2026-09-01", time: "15:00", timestamp: "2026-09-01T06:00:00.000Z" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "rec-in", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "06:05"), input: "06:00" });
+  check("保存失敗の前提：承認付き保存が呼ばれている", r.approvedWrites.length === 1 && inRec.time === "06:00");
+  r.onFail();
+  check("保存失敗：メモリ上の承認を取り消す", !r.approvals["2026-09-01__山田 太郎"], JSON.stringify(r.approvals));
+  check("保存失敗：修正した打刻を修正前の内容へ戻す（同じオブジェクトのまま）",
+    recs[0] === inRec && JSON.stringify(inRec) === before && recs.length === 2, JSON.stringify(inRec));
+  check("保存失敗：端末保存（records・approvals）も戻した内容で書き直す",
+    typeof r.ls.tc5_records === "string" && JSON.parse(r.ls.tc5_records)[0].time === "06:05" && JSON.parse(r.ls.tc5_approvals)["2026-09-01__山田 太郎"] === undefined, JSON.stringify(r.ls));
+}
+{
+  // (g2) 新規入力の保存失敗：積んだ新規レコードを取り除く
+  const recs = [{ id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "06:00", timestamp: "2026-08-31T21:00:00.000Z" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "", nm: "山田 太郎", type: "clockOut", date: "2026-09-01" }, "−"), input: "15:00" });
+  check("新規入力の前提：レコードが積まれている", recs.length === 2 && r.approvedWrites.length === 1);
+  r.onFail();
+  check("新規入力の保存失敗：新規レコードを取り除き、既存の出勤は残す",
+    recs.length === 1 && recs[0].id === "rec-in" && recs[0].time === "06:00" && !r.approvals["2026-09-01__山田 太郎"], JSON.stringify(recs));
+}
+{
+  // (h) RTDB のキーに使えない文字を含む氏名は、時刻だけ保存しない（片方だけ成功させない）
+  const recs = [{ id: "rec-in", staff: "J.Smith", type: "clockIn", date: "2026-09-01", time: "06:05" }];
+  const r = runCell({ records: recs, cell: makeCell({ id: "rec-in", nm: "J.Smith", type: "clockIn", date: "2026-09-01" }, "06:05"), input: "06:00" });
+  check("キーに使えない氏名：保存せず警告する", r.saved.length === 0 && r.alerts.length === 1 && recs[0].time === "06:05", JSON.stringify(r.alerts));
+}
+
+// ── saveRecordWithApproval 本体：1回の PATCH で時刻と承認キー1件だけを書く ──
+{
+  const FN = slice("function saveRecordWithApproval(rec, approvalKey, onFail) {", "\n// ===== PUNCH-OUTBOX-BEGIN =====");
+  function runSave(ok) {
+    const st = { calls: [], alerts: [], failed: 0, saving: 0 };
+    const ctx = {
+      console: { log: function () { }, error: function () { } },
+      FB_URL: "https://example.invalid/honomi", records: [], approvals: {},
+      demoWriteBlocked: function () { return false; }, _lsSet: function () { },
+      showAlert: function (m) { st.alerts.push(m); },
+      authFetch: function (url, o) {
+        st.calls.push({ url: url, method: o.method, body: JSON.parse(o.body) });
+        return ok ? Promise.resolve({ ok: true }) : Promise.resolve({ ok: false, status: 500, text: function () { return Promise.resolve(""); } });
+      },
+      savingCount: 0
+    };
+    vm.createContext(ctx);
+    vm.runInContext(FN + "\nsaveRecordWithApproval({id:'r1',time:'06:00'},'2026-09-01__山田 太郎',function(){failedCb();});", Object.assign(ctx, { failedCb: function () { st.failed++; } }));
+    st.ctx = ctx;
+    return st;
+  }
+  const okRun = runSave(true);
+  const c = okRun.calls[0];
+  check("同時保存：通信は1回だけ", okRun.calls.length === 1);
+  check("同時保存：会社のルート（FB_URL）への PATCH（多パス更新）", !!c && c.method === "PATCH" && c.url === "https://example.invalid/honomi.json", c && (c.method + " " + c.url));
+  check("同時保存：本文は打刻1件と承認キー1件だけ（承認ノード全体を上書きしない）",
+    !!c && Object.keys(c.body).length === 2 && c.body["tc5_records/r1"].time === "06:00" && c.body["tc5_approvals/2026-09-01__山田 太郎"] === true && !("tc5_approvals" in c.body),
+    c && JSON.stringify(c.body));
+  const badCtx = { calls: 0, failed: 0, alerts: 0 };
+  {
+    const ctx = { console: { log: function () { }, error: function () { } }, FB_URL: "https://example.invalid/honomi", records: [], approvals: {},
+      demoWriteBlocked: function () { return false; }, _lsSet: function () { }, showAlert: function () { badCtx.alerts++; },
+      authFetch: function () { badCtx.calls++; return Promise.resolve({ ok: true }); }, savingCount: 0, fcb: function () { badCtx.failed++; } };
+    vm.createContext(ctx);
+    vm.runInContext(FN + "\n['', null, undefined, 'a/b', 'x.y'].forEach(function(id){saveRecordWithApproval({id:id},'2026-09-01__山田 太郎',fcb);});", ctx);
+  }
+  check("同時保存：id が空・不正なら通信せず失敗扱い（tc5_records 全体を置き換えない）",
+    badCtx.calls === 0 && badCtx.failed === 5 && badCtx.alerts === 5, JSON.stringify(badCtx));
+  const badKey = { calls: 0, failed: 0 };
+  {
+    const ctx = { console: { log: function () { }, error: function () { } }, FB_URL: "https://example.invalid/honomi", records: [], approvals: {},
+      demoWriteBlocked: function () { return false; }, _lsSet: function () { }, showAlert: function () { },
+      authFetch: function () { badKey.calls++; return Promise.resolve({ ok: true }); }, savingCount: 0, fcb: function () { badKey.failed++; } };
+    vm.createContext(ctx);
+    vm.runInContext(FN + "\n['', null, '2026-09-01__a/b', '2026-09-01__a.b'].forEach(function(k){saveRecordWithApproval({id:'r1'},k,fcb);});", ctx);
+  }
+  check("同時保存：承認キーが空・不正（/ . など）なら通信せず失敗扱い", badKey.calls === 0 && badKey.failed === 4, JSON.stringify(badKey));
+  const ngRun = runSave(false);
+  setTimeout(function () {
+    check("同時保存の失敗：失敗コールバックと警告が1回ずつ", ngRun.failed === 1 && ngRun.alerts.length === 1, JSON.stringify(ngRun));
+    check("同時保存：保存中カウンタが戻る（成功・失敗とも）", okRun.ctx.savingCount === 0 && ngRun.ctx.savingCount === 0);
+    finish();
+  }, 20);
+}
+
+function finish() {
 console.log("\n================================");
 console.log("PASS " + pass + " / FAIL " + fail);
 console.log("================================");
 process.exit(fail ? 1 : 0);
+}
