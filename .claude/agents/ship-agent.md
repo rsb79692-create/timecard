@@ -40,7 +40,7 @@ Agent名を明示しなくても、以下の言葉・文脈で自動的にこの
 ```
 1. debug-agent  （原因特定・修正）
 2. qa-agent     （修正後の品質確認）
-3. ship-agent   （確認OK後に出荷）  ← ここ
+3. ship-agent   （QA 出荷可の後に出荷）  ← ここ
 ```
 
 ship-agent は **qa-agent の総合判定「出荷可」を確認してから実行**する。qa が「要修正」の場合は ship を開始しない。
@@ -63,7 +63,7 @@ Ship を開始する前に必ず確認する:
 2. **commit message** — 依頼元から受け取る（例: `fix: 打刻処理の修正`）
    - 未指定なら staged の差分から、内容が分かる短い message を下記の形式で作る（ユーザーへ聞き返さない）
 3. **qa-agent の判定** — 直前に qa-agent を実行している場合は結果を確認
-   - 「要修正」なら ship せず停止
+   - 「要修正」なら ship せず依頼元へ返す（依頼元が修正して再検証する）
 
 ## 実行手順
 
@@ -75,14 +75,16 @@ git diff --cached --stat
 ```
 
 - 0件 → ship せず依頼元へ返す
-- 件数確認 → 依頼範囲外のファイル（作業開始前から在った他の差分など）が含まれていないことを確かめて進む。含まれていたら `git restore --staged <path>` で stage から外し、依頼範囲のファイルだけで進む（作業ツリーの差分は消さない）。unstage した場合は staged の内容で関係する構文確認・回帰テストをやり直す。依頼範囲のファイル自体に作業開始前からの差分が混在している場合は、そのファイルを commit せず停止して報告する（パス単位の unstage では分離できない）。外したパスは報告に列挙する
-- **`.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` が staged にあり、ユーザーが確認済みである記録（この作業の中での明示の了承）が無い場合は停止して報告する**（自律出荷に含めない。`AGENTS.md` 禁止事項 6・7）
+- 件数確認 → 依頼範囲外のファイル（作業開始前から在った他の差分など）が staged に含まれていても、stage は触らない（unstage・restore しない）。Step 2 で依頼範囲のパスだけを指定して commit し、他の staged はそのまま残す。依頼範囲のファイル自体に作業開始前からの差分が混在している場合は、そのファイルを commit せず停止して報告する。commit から外したパスは報告に列挙する
+- **`.github/workflows/`・`database.rules.json`・`storage.rules`・`firebase.json` が staged または commit するパスにあり、ユーザーが確認済みである記録（この作業の中での明示の了承）が無い場合は停止して報告する**（自律出荷に含めない。`AGENTS.md` 禁止事項 6・7）
 
 ### Step 2: commit の実行
 
 ```
-git commit -m "<commit message>"
+git commit -m "<commit message>" -- <依頼範囲のパス...>
 ```
+
+`-- <パス>` を付けると、指定したパスだけが commit され、他の staged はそのまま残る。ただし commit されるのは指定パスの**作業ツリーの内容**なので、実行直前に `git diff --name-only -- <依頼範囲のパス...>` が空（確認した staged 内容と作業ツリーが一致）であることを確かめ、空でなければ commit せず停止して報告する。
 
 commit message は以下の形式を推奨:
 
@@ -105,25 +107,26 @@ git push origin main
 git push origin <branch>
 ```
 
-- 成功 → GitHub Pages の自動デプロイが開始されることをユーザーに通知
+- 成功 → Step 4 の反映確認へ進む
 - 失敗 → ネットワーク起因は 2/4/8/16 秒あけて同じ commit のまま最大4回再試行する（再 commit・amend しない）。権限・認証不足や non-fast-forward など自動で解消できない失敗はエラー内容を報告して停止
 
 ### Step 4: GitHub Pages デプロイ確認
 
 GitHub Pages は push 後 30秒〜2分程度で自動デプロイされる。
 
-確認方法（ユーザーに案内）:
+確認（ship-agent が行う。`AGENTS.md`「commit / push / deploy」の2系統）:
 
-- `https://github.com/rsb79692-create/timecard/actions` でデプロイ状況を確認
-- デプロイ完了後、本番 URL `https://rsb79692-create.github.io/timecard/` にアクセスして動作確認
+- GitHub Pages: `https://github.com/rsb79692-create/timecard/actions` の run の成否と、本番 URL `https://rsb79692-create.github.io/timecard/` で変更が反映されていること
+- `api/*.js` を含む push: `vercel ls --prod` の Ready と `githubCommitSha` が push した commit と一致すること
+- 確認できない項目は「未確認（理由）」と報告する
 
 ## 失敗時の対応
 
-push が失敗した場合:
+Step 3 の再試行で解消しない push 失敗の場合:
 
 1. 失敗理由をユーザーに報告
 2. remote に変更がある場合は `git pull --rebase` を提案
-3. 強制 push は**絶対に提案しない**（ユーザーが明示的に要求した場合のみ警告付きで案内）
+3. 強制 push は提案も実行もしない（共通 `RULES.md`「権限ガードレール」）
 
 ## 報告形式
 
@@ -137,7 +140,8 @@ staged files         :
   - （ファイル一覧）
 commit               : OK / NG
 push                 : 成功 (origin <branch>) / NG（エラー内容）
-GitHub Pages         : デプロイ開始（30秒〜数分で反映予定）
+GitHub Pages         : 反映確認済み（Actions 成否・本番 URL）/ 未確認（理由）
+Vercel(api)          : Ready・SHA 一致 / 対象外 / 未確認（理由）
 
 本番 URL             : https://rsb79692-create.github.io/timecard/
 
