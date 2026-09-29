@@ -1934,10 +1934,19 @@ async function faceCamCaptureOnce(deps){
         canvas.width=0;canvas.height=0;
       }
     }catch(e){}
-    try{if(video){video.srcObject=null;if(video.remove)video.remove();}}catch(e){}
-    try{
-      if(stream&&stream.getTracks)stream.getTracks().forEach(function(t){if(t&&t.stop)t.stop();});
-    }catch(e){}
+    // カメラ（映像要素・トラック）の解放。★ 画像データ（キャンバス）は上で必ず即時に消している。
+    //   打刻画面のプレビューから撮った場合だけ、見た目の終了を少し遅らせるため deps.deferRelease に委ねる
+    //   （遅らせるのはリアルタイムの映像の表示だけで、撮った画像は残らない）。
+    var _rv=video,_rs=stream;
+    var release=function(){
+      try{if(_rv){_rv.srcObject=null;if(_rv.remove)_rv.remove();}}catch(e){}
+      try{
+        if(_rs&&_rs.getTracks)_rs.getTracks().forEach(function(t){if(t&&t.stop)t.stop();});
+      }catch(e){}
+      _rv=null;_rs=null;
+    };
+    if(typeof d.deferRelease==="function"){try{d.deferRelease(release);}catch(e){release();}}
+    else release();
     canvas=null;video=null;stream=null;
   }
 }
@@ -2159,6 +2168,10 @@ function faceCamBrowserDeps(ui){
 // ★ 4つの打刻ボタンが最初の画面に入らない端末だけ高さを詰めるが、幅×0.56 より低くはしない（小さなサムネイルにしない）。
 //   本日の打刻履歴が画面の下へ出るのは正常（最初の画面に入れるのは時刻・カメラ・4つの打刻ボタン）。
 var FACECAM_PV_RATIO=0.75,FACECAM_PV_MIN_RATIO=0.56;
+// ★ 撮影した後、プレビューをそのまま残す時間（「パシャッと撮れた」と分かるように）。
+//   打刻・端末保存・撮影は遅らせない。遅らせるのは映像の表示の終了だけ。
+//   画面を離れた・裏へ回った・ホームへ戻った等では待たずにすぐ止める（faceCamHoldEnd）。
+var FACECAM_HOLD_MS=800;
 // ★ 打刻画面を開いたまま操作が無ければカメラを一時停止する（共有端末で前を通る人を映し続けない・発熱を避ける）。
 //   画面に触れると再開する。一時停止中も打刻はでき、そのときは従来どおりその場でカメラを起動して撮る。
 var FACECAM_PV_IDLE_MS=90000;
@@ -2248,7 +2261,25 @@ function faceCamPreviewStart(){
   }catch(e){fail();}
   return pv;
 }
-function faceCamPreviewStop(){
+/** 撮影後に残しているプレビューを終わらせる（カメラを止めて映像を外す）。タイマーも必ず解除する。 */
+function faceCamHoldEnd(){
+  var h=_faceCam.hold;
+  _faceCam.hold=null;
+  if(!h)return;
+  h.ended=true;
+  try{if(h.timer)clearTimeout(h.timer);}catch(e){}
+  if(h.release){try{h.release();}catch(e){}}
+  else{
+    // ★ 撮影がまだ終わっていない（解放の依頼が来ていない）うちに止める場合も、カメラを止めて映像を外す。
+    //   後から来た解放の依頼は、待たずにその場で実行される（deferRelease）。
+    try{if(h.pv&&h.pv.stream&&h.pv.stream.getTracks)h.pv.stream.getTracks().forEach(function(t){if(t&&t.stop)t.stop();});}catch(e){}
+    try{if(h.pv&&h.pv.video)h.pv.video.srcObject=null;}catch(e){}
+  }
+  try{if(h.el&&h.el.parentNode)h.el.parentNode.removeChild(h.el);}catch(e){}
+}
+// keepHold=true: 打刻完了の表示の間の再描画。撮影後に残しているプレビューは止めない（期限で止まる）。
+function faceCamPreviewStop(keepHold){
+  if(keepHold!==true)faceCamHoldEnd();
   try{if(_faceCam.pvIdleTimer)clearTimeout(_faceCam.pvIdleTimer);}catch(e){}
   _faceCam.pvIdleTimer=null;
   var pv=_faceCam.pv;
@@ -2287,6 +2318,15 @@ function faceCamPreviewIdleEl(){
   _faceCam.idleEl=el;
   return el;
 }
+/** プレビューの枠の位置を覚える（撮影後に映像を同じ位置へ重ねるため）。描画のたびと画面の回転で記録し直す。 */
+function faceCamRecordRect(){
+  try{
+    var slot=document.getElementById("facecam-slot");
+    if(!slot){_faceCam.pvRect=null;return;}
+    var rr=slot.getBoundingClientRect();
+    _faceCam.pvRect={top:rr.top+(window.scrollY||0),left:rr.left,width:rr.width,height:rr.height};
+  }catch(e){_faceCam.pvRect=null;}
+}
 /** render() のたびに呼ぶ。打刻画面ならプレビューを枠へ差し戻し、それ以外ならカメラを止める。 */
 function faceCamSyncPreview(){
   try{
@@ -2299,12 +2339,15 @@ function faceCamSyncPreview(){
       if(!_faceCam.pvIdleTimer)_faceCam.pvIdleTimer=setTimeout(faceCamPreviewIdleCheck,5000);
       if(pv.el.parentNode!==slot)slot.appendChild(pv.el);
       faceCamFitPreview();
+      faceCamRecordRect();
       if(pv.state==="live"&&pv.video.paused){try{var p=pv.video.play();if(p&&p.catch)p.catch(function(){});}catch(e){}}
       return;
     }
     // 打刻した直後（打刻完了の表示）は、このあと呼ばれる faceCamAfterPunch がプレビューの映像で撮って止める
-    if(_faceCam.pv&&screen==="punch"&&punchMsg&&document.visibilityState!=="hidden")return;
-    faceCamPreviewStop();
+    var _done=screen==="punch"&&punchMsg&&document.visibilityState!=="hidden";
+    if(_faceCam.pv&&_done)return;
+    // ★ 打刻完了の表示の間は、撮影後に残しているプレビューを止めない（それ以外の画面では即止める）
+    faceCamPreviewStop(!!_done);
     if(document.visibilityState!=="hidden")_faceCam.pvIdle=false;   // 打刻画面を離れたら一時停止も解く
   }catch(e){try{faceCamPreviewStop();}catch(e2){}}
 }
@@ -2326,18 +2369,71 @@ try{
   });
   window.addEventListener("pagehide",function(){faceCamPreviewStop();});
   // 画面の回転・幅の変更でプレビューの高さを測り直す（高さは幅から決めているため）
-  window.addEventListener("resize",function(){faceCamFitPreview();});
+  window.addEventListener("resize",function(){faceCamFitPreview();if(_faceCam.pv)faceCamRecordRect();});
 }catch(e){}
 
+/**
+ * 打刻完了の描画で消えたプレビューを、覚えておいた位置へ重ねて表示する（撮影後 FACECAM_HOLD_MS だけ残す）。
+ * ★ 画面の操作をふさがない（pointer-events:none）。打刻ボタンは打刻完了の表示に無いので二重打刻はできない。
+ */
+function faceCamHoldShow(pv){
+  try{
+    var r=_faceCam.pvRect;
+    if(!r||!r.width||!r.height||!pv.el)return null;
+    faceCamHoldEnd();
+    var el=pv.el;
+    el.style.position="fixed";
+    el.style.top=Math.round(r.top-(window.scrollY||0))+"px";
+    el.style.left=Math.round(r.left)+"px";
+    el.style.width=Math.round(r.width)+"px";
+    el.style.height=Math.round(r.height)+"px";
+    el.style.zIndex="850";
+    el.style.pointerEvents="none";
+    // ★ 重ねている間は打刻完了の表示（✅・打刻時刻）が隠れるため、打刻の結果を映像の上に必ず出す
+    //   （打刻時刻は打刻が成立したことの唯一の確認。撮影の演出で見えなくしてはならない）。
+    var badge=document.createElement("div");
+    badge.id="facecam-hold-badge";
+    badge.style.cssText="position:absolute;left:8px;right:8px;bottom:10px;text-align:center;";
+    var b1=document.createElement("div");
+    b1.id="facecam-hold-result";
+    b1.style.cssText="display:inline-block;background:rgba(15,23,42,.88);color:#fff;font-size:1.1rem;font-weight:900;"
+      +"padding:6px 16px;border-radius:999px;line-height:1.4;";
+    b1.textContent="✅ "+((typeof punchMsg!=="undefined"&&punchMsg)?punchMsg:"打刻完了");
+    var b2=document.createElement("div");
+    b2.id="facecam-hold-shot";
+    // 明るい映像（顔・服・壁）の上でも読めるよう、打刻結果と同じ濃い背景のラベルにする
+    b2.style.cssText="margin:6px auto 0;width:fit-content;background:rgba(15,23,42,.88);color:#fff;font-size:1rem;font-weight:900;"
+      +"padding:4px 14px;border-radius:999px;display:none;";
+    b2.textContent="✓ 撮影しました";
+    badge.appendChild(b1);badge.appendChild(b2);
+    el.appendChild(badge);
+    document.body.appendChild(el);
+    // ★ 重ねた時点で管理対象にする（撮影が終わる前にホームへ戻る・裏へ回る等でも、即座に外して止められるように）
+    _faceCam.hold={el:el,pv:pv,release:null,timer:null,ended:false};
+    return {el:el,badge:badge,shot:b2};
+  }catch(e){return null;}
+}
 /** 打刻画面のプレビューの映像で撮るための deps（新たにカメラを起動しない）。 */
-function faceCamPreviewDeps(pv,ui){
+function faceCamPreviewDeps(pv,ui,held){
   return {
     getUserMedia:function(){return Promise.resolve(pv.stream);},
     makeVideo:function(){return pv.video;},
     makeCanvas:function(){return document.createElement("canvas");},
     onStream:function(st){_faceCam.stream=st;},
-    onShot:function(){faceCamShutterFx(ui);},
-    waitFrame:faceCamWaitFrame
+    onShot:function(){
+      faceCamShutterFx(ui);
+      if(held&&held.shot)try{held.shot.style.display="block";}catch(e){}
+    },
+    waitFrame:faceCamWaitFrame,
+    // ★ 撮影後 FACECAM_HOLD_MS だけ映像を残してからカメラを止める（画像は撮影の finally で消去済み）。
+    //   重ねて表示していないとき（位置不明）は待たずにすぐ止める。
+    deferRelease:function(release){
+      var h=_faceCam.hold;
+      // 重ねていない・すでに終わっている（ホームへ戻った・裏へ回った等）→ 待たずにすぐ止める
+      if(!held||!h||h.el!==held.el||h.ended){release();return;}
+      h.release=release;
+      h.timer=setTimeout(function(){if(_faceCam.hold===h)faceCamHoldEnd();},FACECAM_HOLD_MS);
+    }
   };
 }
 
@@ -2371,11 +2467,14 @@ function faceCamAfterPunch(type){
     var ui=faceCamOpenOverlay(!!pv);
     // ★ プレビューの映像要素は打刻完了の描画で画面から外れている。外れたままだと一時停止し、
     //   端末によっては黒い画像になる。同じタスクのうちに非表示の枠へ移して再生を続けさせる。
-    if(pv&&ui&&ui.vwrap){try{ui.vwrap.appendChild(pv.video);}catch(e){}}
+    // ★ 打刻完了の描画で枠は消えている。覚えておいた位置に同じ映像を重ねて残す（撮影に使うので画面上に置く。
+    //   同じタスクのうちに置くので再生も途切れない）。位置が分からなければ従来どおり非表示の枠へ移す。
+    var held=pv?faceCamHoldShow(pv):null;
+    if(pv&&!held&&ui&&ui.vwrap){try{ui.vwrap.appendChild(pv.video);}catch(e){}}
     _faceCam.running=true;_faceCam.busy=true;_faceCam.busyAt=Date.now();
     var t0=Date.now();
     // ★ どちらの経路でも、撮影の finally でカメラのトラックを止め、映像要素を外す（打刻後にカメラを残さない）
-    faceCamCaptureOnce(pv?faceCamPreviewDeps(pv,ui):faceCamBrowserDeps(ui)).then(function(r){
+    faceCamCaptureOnce(pv?faceCamPreviewDeps(pv,ui,held):faceCamBrowserDeps(ui)).then(function(r){
       _faceCam.busy=false;
       // ★ いま表示されているのが自分のオーバーレイでなければ何も書かない
       //   （遅れて着地した前回の撮影結果を、新しい表示へ書き込まないため）。
@@ -5751,7 +5850,8 @@ function _renderInner(){
         ?'<div style="text-align:center;padding:36px 20px;">'
           +'<div style="font-size:3.5rem;margin-bottom:12px;">✅</div>'
           +'<div style="font-size:1.2rem;font-weight:900;color:var(--brand);">打刻完了</div>'
-          // ★ id は顔撮影のプレビューの位置決めの基準にも使う（この行を覆ってはならない）
+          // ★ id は顔撮影の撮影表示の位置決めの基準にも使う（この行を覆ってはならない）。
+          //   撮影後に映像を約0.8秒重ねる間だけはこの行が隠れるため、映像の上に同じ打刻結果を出している（faceCamHoldShow）
           +'<div id="punch-time-line" style="font-size:.95rem;color:#0f172a;margin-top:8px;font-weight:700;">'+punchMsg+'</div>'
           +'<div style="font-size:.78rem;color:#8496a7;margin-top:18px;">まもなく画面が戻ります…</div>'
           +'</div>'

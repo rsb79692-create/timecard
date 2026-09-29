@@ -493,6 +493,8 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
     const rec = { drawn: 0, cleared: 0, forbidden: [], videoRemoved: false, gum: 0, tracks: [] };
     const body = mkElement();
     const slot = mkElement(); slot.id = "facecam-slot";
+    // opts.rect: 枠の位置が分かる（実際の画面と同じ）。撮影後に映像を同じ位置へ残す経路を通る
+    if (opts.rect) slot.getBoundingClientRect = () => ({ top: 214, left: 14, width: 317, height: 238 });
     const docL = {}, winL = {};
     const doc = {
       body: body, visibilityState: "visible",
@@ -509,7 +511,7 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
     };
     const c = makeCtx({ globals: {
       document: doc,
-      window: { addEventListener: (t, f) => { winL[t] = f; } },
+      window: { addEventListener: (t, f) => { winL[t] = f; }, scrollY: 0 },
       navigator: { mediaDevices: { getUserMedia: gum } },
       staffList: [{ name: "a", facePhoto: true }, { name: "b" }], staffName: "a",
       screen: "punch", punchMsg: null,
@@ -676,6 +678,115 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
     c.faceCamAfterPunch("clockIn"); await flush(); await flush(); await flush();
     check("撮影するとき映像要素を画面から外したままにしない（非表示の枠へ移す）", attached === true && rec.drawn === 1);
     c.faceCamClose();
+  }
+
+  // ===== 11. 撮影後にプレビューを約0.8秒残す（2026-09-30） =====
+  section("11. 撮影後にプレビューを残す（画像は即時消去・映像だけ残す・安全時は即停止）");
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  // 打刻画面を表示 → 打刻（撮影）まで進める
+  async function punchWithHold(c) {
+    c.faceCamSyncPreview(); await flush();
+    let canvas = null;
+    c.document.createElement = ((orig) => (t) => { const el = orig(t); if (t === "canvas") canvas = el; return el; })(c.document.createElement);
+    c.punchMsg = "出勤 07:00:00"; c.__slotOn = false; c.faceCamSyncPreview();
+    const t0 = Date.now();
+    c.faceCamAfterPunch("clockIn"); await flush(); await flush(); await flush();
+    return { canvas: canvas, t0: t0 };
+  }
+  check("撮影後に残す時間の基準は 800ms", /var FACECAM_HOLD_MS=800;/.test(CODE_NC));
+  {
+    const c = makePv({ rect: true }); const rec = c.__rec2;
+    const r = await punchWithHold(c);
+    const held = c.document.body.children.find((x) => x.id === "facecam-preview");
+    check("撮影は1回・画像（キャンバス）は撮影直後に消去する（残すのは映像の表示だけ）",
+      rec.drawn === 1 && rec.cleared >= 1 && r.canvas && r.canvas.width === 0 && r.canvas.height === 0);
+    check("撮影直後はカメラを止めず、映像を元の位置に重ねて残す",
+      rec.tracks[0].stopped === false && !!held && held.style.position === "fixed" && held.style.top === "214px" && held.style.height === "238px");
+    check("残している映像は画面の操作をふさがない", !!held && held.style.pointerEvents === "none");
+    const badge = held && held.children.find((x) => x.id === "facecam-hold-badge");
+    const res = badge && badge.children.find((x) => x.id === "facecam-hold-result");
+    const shot = badge && badge.children.find((x) => x.id === "facecam-hold-shot");
+    check("映像を重ねている間も打刻結果（✅ 出勤 時刻）を映像の上に出す（打刻完了の表示が隠れても打刻時刻が見える）",
+      !!res && res.textContent === "✅ 出勤 07:00:00");
+    check("撮影の瞬間に「✓ 撮影しました」を出す", !!shot && shot.style.display === "block");
+    check("残している間も禁止APIへ触れていない（保存・送信なし）", rec.forbidden.length === 0);
+    // 残している間に次の打刻が来ても二度撮らない（撮影中の再入ガード）
+    c.faceCamAfterPunch("clockOut"); await flush();
+    check("残している間に打刻しても二度撮らない", rec.drawn === 1);
+    // 打刻完了の表示の間に再描画が走っても止めない
+    c.faceCamSyncPreview();
+    check("打刻完了の表示の間の再描画では止めない", rec.tracks[0].stopped === false && !!c._faceCam.hold);
+    // 打刻（撮影）から、カメラが止まるまでを 5ms ごとに見て実測する
+    const tShot = r.t0;   // 打刻（faceCamAfterPunch の呼び出し）の直前。撮影はその数 ms 後
+    let dt = -1;
+    while (Date.now() - tShot < 2000) { if (rec.tracks[0].stopped) { dt = Date.now() - tShot; break; } await wait(5); }
+    check("撮影から約 800ms でカメラを止める（実測 " + dt + "ms。許容 780〜1200ms）", dt >= 780 && dt <= 1200);
+    check("止めたら映像を外し、タイマーも残さない",
+      !c.document.body.children.some((x) => x.id === "facecam-preview") && c._faceCam.hold === null);
+    c.faceCamClose();
+  }
+  // 安全上すぐ止めるべき場合は待たない
+  const stopCases = [
+    ["画面を離れた（打刻画面以外の描画）", (c) => { c.screen = "home"; c.punchMsg = null; c.faceCamSyncPreview(); }],
+    ["タブが裏へ回った", (c) => { c.document.visibilityState = "hidden"; c.__docL.visibilitychange(); }],
+    ["ページを離れた", (c) => { c.__winL.pagehide(); }],
+    ["ホームへ戻った（faceCamClose）", (c) => { c.faceCamClose(); }]
+  ];
+  for (const [label, act] of stopCases) {
+    const c = makePv({ rect: true }); const rec = c.__rec2;
+    await punchWithHold(c);
+    act(c);
+    check(label + "ときは 800ms を待たずにすぐ止める",
+      rec.tracks[0].stopped === true && c._faceCam.hold === null && !c.document.body.children.some((x) => x.id === "facecam-preview"));
+  }
+  // 撮影が終わる前（解放の依頼が来る前）に止めた場合も、映像を外してカメラを止め、後から残し直さない
+  for (const [label, act] of [
+    ["撮影の途中でホームへ戻った", (c) => c.faceCamClose()],
+    ["撮影の途中でタブが裏へ回った", (c) => { c.document.visibilityState = "hidden"; c.__docL.visibilitychange(); }]
+  ]) {
+    const c = makePv({ rect: true }); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c.punchMsg = "出勤 07:00:00"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("clockIn");     // 同じタスクのうち（撮影はまだ）
+    act(c);
+    const goneNow = !c.document.body.children.some((x) => x.id === "facecam-preview") && rec.tracks[0].stopped === true;
+    await flush(); await flush(); await flush(); await wait(20);
+    check(label + "ときも即座に映像を外してカメラを止め、撮影後に残し直さない",
+      goneNow && c._faceCam.hold === null && !c.document.body.children.some((x) => x.id === "facecam-preview"));
+    c.faceCamClose();
+  }
+  {
+    // 早めに止めたあと、残っていたタイマーが後から別の状態を変えない
+    const c = makePv({ rect: true }); const rec = c.__rec2;
+    await punchWithHold(c);
+    c.faceCamClose();
+    c.screen = "punch"; c.punchMsg = null; c.__slotOn = true; c.faceCamSyncPreview(); await flush();
+    const pv2 = c._faceCam.pv;
+    await wait(900);
+    check("止めたあとにタイマーが残らず、次の打刻画面のカメラを止めない",
+      !!pv2 && c._faceCam.pv === pv2 && pv2.state === "live" && rec.tracks[1].stopped === false);
+    c.faceCamClose();
+  }
+  {
+    // 位置が分からない（枠の位置を測れない）ときは従来どおりすぐ止める
+    const c = makePv(); const rec = c.__rec2;
+    await punchWithHold(c);
+    check("映像を残せないときは従来どおり撮影後すぐ止める", rec.tracks[0].stopped === true && c._faceCam.hold == null);
+    c.faceCamClose();
+  }
+  {
+    // 打刻の保存を遅らせない: 撮影は打刻を保存して画面を打刻済みにした後に、待たずに呼ぶ（既存の結線のまま）
+    const execIdx = html.indexOf("async function _execPunch");
+    const exec = html.slice(execIdx, html.indexOf("function doPunch(", execIdx));
+    check("撮影（と映像を残す演出）は打刻の保存より後で、待たずに呼ぶ（打刻は遅れない）",
+      exec.indexOf("records.push(nr)") > 0 && exec.indexOf("faceCamAfterPunch(type)") > exec.indexOf("records.push(nr)")
+      && !/await\s+faceCamAfterPunch/.test(exec) && !/FACECAM_HOLD_MS/.test(exec));
+    // 打刻完了の分岐（punchMsg ? … : _done ? …）の中身を取り出し、打刻ボタンが無いことを確かめる
+    const iPm = html.search(/\+\(punchMsg\s*\n\s*\?'<div style="text-align:center;padding:36px 20px;">'/);
+    const iDone = html.indexOf(":_done", iPm);
+    const pmBranch = iPm > 0 && iDone > iPm ? html.slice(iPm, iDone) : "";
+    check("打刻完了の表示には打刻ボタンが無い（残している間に二重打刻できない）",
+      pmBranch.length > 0 && pmBranch.indexOf("punch-time-line") > 0 && !/btn-punch|doPunch\(/.test(pmBranch));
   }
   {
     const iRender = html.indexOf("function render(){");
