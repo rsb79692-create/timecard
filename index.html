@@ -1830,7 +1830,7 @@ var FACECAM_MAX_MS=2600;
 //   busy が立ったままになり、その端末では以後一切撮影されなくなる（気づけない）。
 //   一定時間が過ぎた busy は無効として扱う。
 var FACECAM_BUSY_MAX_MS=15000;
-var _faceCam={running:false,busy:false,busyAt:0,box:null,strip:null,hardTimer:null,closeTimer:null,stream:null};
+var _faceCam={running:false,busy:false,busyAt:0,box:null,strip:null,hardTimer:null,closeTimer:null,stream:null,flash:null,actx:null};
 /**
  * 開示文（画面**上端**の固定ストリップへ出す）。
  *
@@ -1918,6 +1918,8 @@ async function faceCamCaptureOnce(deps){
     if(!ctx)return {ok:false,reason:"no_context"};
     // ★ ここが「1枚の撮影」。この後どこへも渡さず、finally で破棄する。
     ctx.drawImage(video,0,0,w,h);
+    // 撮影の瞬間の演出（音・フラッシュ）。★ 画像は渡さない。演出の失敗で撮影結果を変えない。
+    if(typeof d.onShot==="function"){try{d.onShot();}catch(e){}}
     return {ok:true,w:w,h:h};
   }catch(e){
     // 権限拒否・カメラ占有・非対応。打刻には影響させない。
@@ -2040,7 +2042,8 @@ function faceCamClose(){
   _faceCam.hardTimer=null;_faceCam.closeTimer=null;
   try{if(_faceCam.box&&_faceCam.box.parentNode)_faceCam.box.parentNode.removeChild(_faceCam.box);}catch(e){}
   try{if(_faceCam.strip&&_faceCam.strip.parentNode)_faceCam.strip.parentNode.removeChild(_faceCam.strip);}catch(e){}
-  _faceCam.box=null;_faceCam.strip=null;
+  try{if(_faceCam.flash&&_faceCam.flash.parentNode)_faceCam.flash.parentNode.removeChild(_faceCam.flash);}catch(e){}
+  _faceCam.box=null;_faceCam.strip=null;_faceCam.flash=null;
   // ★ 表示を閉じる時点で、飛行中のカメラも止める（撮影側の finally と二重の保険）。
   try{
     var _st=_faceCam.stream;
@@ -2048,6 +2051,78 @@ function faceCamClose(){
   }catch(e){}
   _faceCam.stream=null;
   _faceCam.running=false;
+}
+
+/**
+ * シャッター音の準備。★ 打刻のタップ直後（faceCamAfterPunch の先頭）で呼び、
+ *   自動再生の制限で音が鳴らない状態を避ける。使えない端末では何もしない。
+ */
+function faceCamAudioPrime(){
+  try{
+    if(!_faceCam.actx){
+      var AC=(typeof window!=="undefined")&&(window.AudioContext||window.webkitAudioContext);
+      if(!AC)return null;
+      _faceCam.actx=new AC();
+    }
+    if(_faceCam.actx.state==="suspended"&&_faceCam.actx.resume)_faceCam.actx.resume().catch(function(){});
+    return _faceCam.actx;
+  }catch(e){return null;}
+}
+
+/**
+ * シャッター音（「カシャッ」）を合成して鳴らす。
+ * ★ ブラウザから Android 標準のカメラ音は呼べないため、ノイズ2発で近い音を作る（音声ファイル不要）。
+ */
+function faceCamShutterSound(){
+  try{
+    var ac=faceCamAudioPrime();
+    if(!ac)return;
+    var t=ac.currentTime;
+    var n=Math.floor(ac.sampleRate*0.06);
+    var buf=ac.createBuffer(1,n,ac.sampleRate);
+    var ch=buf.getChannelData(0);
+    for(var i=0;i<n;i++)ch[i]=(Math.random()*2-1)*Math.pow(1-i/n,3);
+    [[0,1.0,3200],[0.075,0.7,2200]].forEach(function(p){
+      var src=ac.createBufferSource();src.buffer=buf;
+      var f=ac.createBiquadFilter();f.type="bandpass";f.frequency.value=p[2];f.Q.value=0.8;
+      var g=ac.createGain();g.gain.value=p[1];
+      src.connect(f);f.connect(g);g.connect(ac.destination);
+      src.start(t+p[0]);
+    });
+    // 鳴らし終えたら休止する（常時起動の打刻端末で音声出力を開いたままにしない）。次の打刻で再開する。
+    setTimeout(function(){try{if(ac.state==="running"&&ac.suspend)ac.suspend().catch(function(){});}catch(e){}},400);
+  }catch(e){}
+}
+
+/**
+ * 画面全体を一瞬白くする（フラッシュ）。★ pointer-events:none で操作をふさがない。約0.2秒で消える。
+ * ★ 打刻完了の表示は1.5秒しかないため、打刻時刻が透けて読める強さ（0.7）に抑える。
+ *   視差効果を減らす設定の端末ではさらに弱くする。
+ */
+function faceCamFlash(){
+  try{
+    if(_faceCam.flash&&_faceCam.flash.parentNode)_faceCam.flash.parentNode.removeChild(_faceCam.flash);
+    var fl=document.createElement("div");
+    fl.id="facecam-flash";
+    var reduce=false;
+    try{reduce=!!(window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches);}catch(e){}
+    fl.style.cssText="position:fixed;left:0;top:0;right:0;bottom:0;background:#fff;opacity:"+(reduce?"0.3":"0.7")+";"
+      +"z-index:10000;pointer-events:none;transition:opacity 150ms ease-out;";
+    document.body.appendChild(fl);
+    _faceCam.flash=fl;
+    requestAnimationFrame(function(){requestAnimationFrame(function(){fl.style.opacity="0";});});
+    setTimeout(function(){
+      try{if(fl.parentNode)fl.parentNode.removeChild(fl);}catch(e){}
+      if(_faceCam.flash===fl)_faceCam.flash=null;
+    },220);
+  }catch(e){}
+}
+
+/** 撮影の瞬間の演出。★ いま表示中の自分のオーバーレイがあるときだけ（画面が戻った後に鳴らさない）。 */
+function faceCamShutterFx(ui){
+  if(!ui||!_faceCam.box||_faceCam.box!==ui.box)return;
+  faceCamShutterSound();
+  faceCamFlash();
 }
 
 /** 本番用の deps。プレビュー用の video はオーバーレイへ入れる（本人に見えるようにする）。 */
@@ -2062,6 +2137,7 @@ function faceCamBrowserDeps(ui){
     },
     makeCanvas:function(){return document.createElement("canvas");},
     onStream:function(st){_faceCam.stream=st;},
+    onShot:function(){faceCamShutterFx(ui);},
     waitFrame:faceCamWaitFrame
   };
 }
@@ -2084,6 +2160,7 @@ function faceCamAfterPunch(type){
     //   faceCamOpenOverlay() は先頭で faceCamClose() を呼び、その faceCamClose() が
     //   running=false へ戻すため、先に立てるとこの再入ガードが無効になる
     //   （出勤→退勤を続けて押すとカメラを二重に起動する）。
+    faceCamAudioPrime();
     var ui=faceCamOpenOverlay();
     _faceCam.running=true;_faceCam.busy=true;_faceCam.busyAt=Date.now();
     var t0=Date.now();
@@ -2096,7 +2173,7 @@ function faceCamAfterPunch(type){
       if(_faceCam.strip){
         _faceCam.strip.textContent=(r&&r.ok)?FACECAM_STRIP_OK:FACECAM_STRIP_NG;
       }
-      if(ui.msg)ui.msg.textContent=(r&&r.ok)?"撮影しました":"カメラを使用できませんでした";
+      if(ui.msg)ui.msg.textContent=(r&&r.ok)?"✓ 撮影しました":"カメラを使用できませんでした";
       var rest=Math.max(400,FACECAM_SHOW_MS-(Date.now()-t0));
       _faceCam.closeTimer=setTimeout(faceCamClose,rest);
     }).catch(function(){_faceCam.busy=false;faceCamClose();});

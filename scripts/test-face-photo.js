@@ -419,6 +419,72 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
   check("新規スタッフのオブジェクト初期値に facePhoto を入れていない",
     !/var newStaff=\{[^}]*facePhoto/.test(html));
 
+  // ===== 9. 撮影の瞬間の演出（シャッター音・フラッシュ） =====
+  section("9. 撮影の瞬間の演出（音・フラッシュ）");
+  {
+    // onShot は描画の直後に1回だけ呼ばれる（撮影の実タイミングと演出を一致させる）
+    const c = makeCtx();
+    const rec = c.__rec;
+    let drawnAtShot = -1, shots = 0;
+    const r = await c.faceCamCaptureOnce({
+      getUserMedia: () => Promise.resolve({ getTracks: () => [mkTrack()] }),
+      makeVideo: () => mkVideo(rec),
+      makeCanvas: () => mkCanvas(rec),
+      waitFrame: () => Promise.resolve(),
+      onShot: (...a) => { shots++; drawnAtShot = rec.drawn; check("onShot へ何も渡さない（画像を渡さない）", a.length === 0); },
+    });
+    check("onShot は1回だけ呼ばれる", shots === 1);
+    check("onShot は描画の直後に呼ばれる", drawnAtShot === 1);
+    check("演出ありでも撮影は成功する", r && r.ok === true);
+  }
+  {
+    // 演出が例外を投げても撮影結果と破棄は変わらない
+    const c = makeCtx();
+    const rec = c.__rec;
+    const track = mkTrack();
+    let canvas = null;
+    const r = await c.faceCamCaptureOnce({
+      getUserMedia: () => Promise.resolve({ getTracks: () => [track] }),
+      makeVideo: () => mkVideo(rec),
+      makeCanvas: () => (canvas = mkCanvas(rec)),
+      waitFrame: () => Promise.resolve(),
+      onShot: () => { throw new Error("fx failed"); },
+    });
+    check("演出の失敗で撮影結果を変えない", r && r.ok === true);
+    check("演出の失敗でも破棄は行う", canvas.width === 0 && track.stopped === true);
+  }
+  {
+    // 撮影に失敗したら演出しない（撮っていないのに音を鳴らさない）
+    const c = makeCtx();
+    let shots = 0;
+    const r = await c.faceCamCaptureOnce({
+      getUserMedia: () => Promise.reject(new Error("NotAllowedError")),
+      makeVideo: () => mkVideo(c.__rec),
+      makeCanvas: () => mkCanvas(c.__rec),
+      onShot: () => { shots++; },
+    });
+    check("撮影失敗時は演出しない", r && r.ok === false && shots === 0);
+  }
+  {
+    // 画面が戻った後（自分の表示が無い）には鳴らさない・光らせない
+    const c = makeCtx({ globals: { window: {}, requestAnimationFrame: () => 0 } });
+    c.faceCamShutterFx({ box: {} });
+    check("表示中でないときは演出しない", c.__body.children.length === 0);
+    // 表示中なら全画面フラッシュを出し、操作をふさがない。閉じるときに消す
+    const ui = c.faceCamOpenOverlay();
+    c.faceCamShutterFx(ui);
+    const fl = c.__body.children.find((x) => x.id === "facecam-flash");
+    check("表示中は全画面フラッシュを出す", !!fl);
+    check("フラッシュは操作をふさがない", !!fl && /pointer-events:none/.test(fl.style.cssText));
+    let threw = false;
+    try { check("AudioContext が無い端末では音の準備を行わない", c.faceCamAudioPrime() === null); c.faceCamShutterSound(); }
+    catch (e) { threw = true; }
+    check("AudioContext が無い端末でも例外にならない", threw === false);
+    c.faceCamClose();
+    check("閉じるときにフラッシュも消す", !c.__body.children.some((x) => x.id === "facecam-flash"));
+  }
+  check("マイクは使わない（audio:false）", /audio:false/.test(CODE_NC) && !/audio:true/.test(CODE_NC));
+
   // ===== 結果 =====
   console.log("\n====================================");
   console.log("  PASS " + pass + " / FAIL " + fail);
