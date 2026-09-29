@@ -3370,13 +3370,14 @@ var pinErrorMsg="";      // 認証失敗と通信障害を区別して表示す�
 // 初回ロード時は RTDB 読込完了後に initFirebase 内で VALID_TOKENS / tokenValid が再計算され、
 // 続けて render() が呼ばれるため、打刻画面は正しく復帰する。
 var DEFAULT_FACILITIES=[];
-var masterFacilities=loadData("tc_master_facilities",[]);
+// ★ 端末保存の控えに空いた添字（null）が混ざっていても落ちないよう、オブジェクトの行だけにする（mstToList は巻き上げで使える）
+var masterFacilities=mstToList(loadData("tc_master_facilities",[]));
 // RTDB の master/locations の「取得に成功したか」。saveFacilities の上書き可否判定に使う。
 // 内容が空（ノード不在）でも取得が成功していれば true。新規環境での初回登録を妨げないため。
 // localStorage 由来のキャッシュだけでは true にしない（取得失敗と区別できないため）。
 var facilitiesLoaded=false;
 if(!masterFacilities.length){masterFacilities=DEFAULT_FACILITIES.slice();}
-function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f.token)t[f.token]=f.name;});return t;}
+function buildValidTokens(){var t={};masterFacilities.forEach(function(f){if(f&&f.token)t[f.token]=f.name;});return t;}
 var VALID_TOKENS=buildValidTokens();
 var urlToken=(new URLSearchParams(location.search).get("token"))||"";
 // Hash fallback: #token=all, #token=xxx, bare #all / #xxx
@@ -3982,7 +3983,7 @@ function zipEntryName(n){var v=String(n==null?"":n).replace(/[\\/]/g,"_").replac
 // ===== 状態 =====
 var screen="home",staffName=null;
 var records=loadData("tc5_records",[]);
-var staffList=loadData("tc5_staff",DEF_STAFF);
+var staffList=mstToList(loadData("tc5_staff",DEF_STAFF));
 // ===== スタッフ管理一覧の並び順（社員番号の数値昇順）=====
 // 数字だけの社員番号は数値として比較する（桁数→文字列。桁数が多くても精度を失わない）。
 // 数字以外を含む番号はその後ろ、社員番号なしは最後。同順位はよみがな順。
@@ -8719,8 +8720,7 @@ function _renderInner(){
       b.onclick=function(e){
         e.stopPropagation();
         showConfirm(b.dataset.nm+"さんを削除してもよいですか？この操作は元に戻せません。",function(){
-          staffList=staffList.filter(function(s){return s.name!==b.dataset.nm;});
-          saveData("tc5_staff",staffList);render();
+          staffDeleteOne(b.dataset.nm); // ★ 全体 PUT にしない（古い一覧で他端末の追加・編集を消さない）
         });
       };
     });
@@ -8754,7 +8754,24 @@ function _renderInner(){
     ["srch-loc","srch-type"].forEach(function(id){var el=document.getElementById(id);if(el)el.onchange=filterHrmRows;});
     // モーダル保存
     var modalSaveBtn=document.getElementById("btn-modal-save");
+    // ★ 保存の直前に最新のスタッフ一覧を取り直し、その一覧で同名・改名の判定をしてから、
+    //   編集・追加した1名の添字だけに書く（古い一覧での全体 PUT で他端末・CSV一括登録の分を消さない）。
     if(modalSaveBtn)modalSaveBtn.onclick=function(){
+      if(writePolicy!=="full"){staffModalSave(null);return;} // デモ・テスト画面は従来どおり
+      if(_mstBusy)return;
+      // データに依存しない必須項目は、最新の取得より前に確かめる（無駄な全件取得をしない）
+      if(!(document.getElementById("modal-lname")?.value||"").trim()||!(document.getElementById("modal-lname-yomi")?.value||"").trim()){showAlert("姓と姓よみは必須です");return;}
+      _mstBusy=true;modalSaveBtn.disabled=true;
+      mstFetch("tc5_staff").then(function(cur){
+        if(!cur){showAlert("最新のスタッフ一覧を取得できないため保存できません。通信状態を確認してもう一度お試しください。");return;}
+        staffPersistLocal(cur.list);
+        return staffModalSave(cur);
+      }).catch(function(e){console.error("[staffModalSave]",e);showAlert(mstFailMsg(0));})
+        .then(function(){_mstBusy=false;var mb=document.getElementById("btn-modal-save");if(mb)mb.disabled=false;});
+    };
+    // cur: 取り直した最新の一覧（{keys,list,next}。staffList はこの list）。null はデモ・テスト画面（従来の全体保存）
+    function staffModalSave(cur){
+      var _renameAfterSave=null; // 改名の付け替え（保存成功後に実行する）
       var orig=document.getElementById("hrm-modal-orig")?.value||"";
       var ln=(document.getElementById("modal-lname")?.value||"").trim();
       var fn=(document.getElementById("modal-fname")?.value||"").trim();
@@ -8787,7 +8804,11 @@ function _renderInner(){
       }
       if(orig){
         var s=staffList.find(function(s){return s.name===orig;});
-        if(!s)return;
+        if(!s){
+          if(cur){showAlert("このスタッフは他の端末で削除されたか、氏名が変更されています。一覧を確認してください。");closeHrmModal();render();}
+          return;
+        }
+        var _sBackup=cur?JSON.stringify(s):null; // 保存に失敗し、取り直しもできなかったときに画面の一覧を元へ戻す
         if(newN!==orig){
           if(staffList.find(function(x){return x.name===newN&&x!==s;})){showAlert("同名のスタッフが既に存在します");return;}
           // ★ 管理者の同時保存中・未確認の勤怠がある間は改名しない（控えの氏名・承認キーが食い違うため）
@@ -8800,6 +8821,9 @@ function _renderInner(){
             showAlert("打刻データを読み込んでいます。数秒後にもう一度保存してください。");
             return;
           }
+          // ★ 打刻・承認・PIN の氏名の付け替えは、スタッフ行の保存が成功してから行う（先に付け替えて保存に
+          //   失敗すると、打刻・PINは新氏名・スタッフは旧氏名のまま食い違う）。デモ・テスト画面は従来どおりここで行う。
+          var _doRename=function(){
           var renamedIds=records.filter(function(r){return r.staff===orig;}).map(function(r){return r.id;});
           records.forEach(function(r){if(r.staff===orig)r.staff=newN;});
           // ★ localStorage を直呼びしない。クォータ超過で例外が投げられると、
@@ -8840,6 +8864,8 @@ function _renderInner(){
             // 改名時は新認証側の登録名も付け替える（現行の tc5_pins 付け替えと同じ扱い）
             renamePinInAuthz(orig,newN);
           }
+          };
+          if(cur)_renameAfterSave=_doRename; else _doRename();
         }
         s.lastName=ln;s.firstName=fn;s.name=newN;s.yomiLast=ly;s.yomiFirst=fy;s.yomi=newY;
         s.employeeId=empId;s.hireDate=hd;s.location=loc;s.dept=dept;s.employmentType=et;s.role=role;s.status=stat;
@@ -8868,10 +8894,46 @@ function _renderInner(){
       // 移動距離申請の利用可否だけはサーバ（/mileage/enabled）へ反映する。
       // ★ tc5_staff には保存しない。既存スタッフ項目の保存とは独立で、失敗しても既存保存は成立する。
       // ★ 既存項目の保存を先に確定させる（移動距離側だけ新氏名へ移って食い違うのを避ける）。
-      saveData("tc5_staff",staffList);
-      mileageSaveStaffModal(newN);
-      closeHrmModal();render();
-    };
+      if(!cur){
+        saveData("tc5_staff",staffList);
+        mileageSaveStaffModal(newN);
+        closeHrmModal();render();
+        return;
+      }
+      var wr;
+      if(orig){
+        // 編集: その人の添字だけを書き換える（他の行には触れない）
+        // ★ 書く直前に、その添字がまだこの人（元の氏名）かを確かめる。違えば書かない（別人の行を上書きしない）
+        var _k=mstKeyOf(cur,s);
+        wr=mstSame("tc5_staff",_k,orig).then(function(same){
+          if(same!==true)return {ok:false,status:mstSameFail(same)};
+          return mstWrite("tc5_staff",_k,"PUT",s).then(function(st){return {ok:mstOk(st),status:st,cur:cur};});
+        });
+      } else {
+        // 追加: 末尾の次の添字へ「無ければ書く」。同時に他端末が足していたら取り直して同名を再確認する
+        var _ix=cur.list.indexOf(newStaff);if(_ix>=0)cur.list.splice(_ix,1);
+        wr=mstAppend("tc5_staff",newStaff,cur,function(c){
+          return c.list.some(function(x){return x.name===newN;})?"同名のスタッフが既に存在します":"";
+        });
+      }
+      return wr.then(function(res){
+        if(res.ok){
+          staffPersistLocal(res.cur.list);
+          if(_renameAfterSave)_renameAfterSave();
+          // ★ 既存項目の保存を先に確定させる（移動距離側だけ新氏名へ移って食い違うのを避ける）。
+          mileageSaveStaffModal(newN);
+          closeHrmModal();render();
+          return;
+        }
+        // 失敗: 画面の一覧を最新へ戻し、モーダルは開いたまま（もう一度保存できる）
+        return (res.cur&&!orig?Promise.resolve(res.cur):mstFetch("tc5_staff")).then(function(latest){
+          if(latest)staffPersistLocal(latest.list);
+          else if(orig&&_sBackup){var _ix2=staffList.indexOf(s);if(_ix2>=0)staffList[_ix2]=JSON.parse(_sBackup);}
+          else if(!orig){var _ix3=staffList.indexOf(newStaff);if(_ix3>=0)staffList.splice(_ix3,1);}
+          showAlert(res.conflict||mstFailMsg(res.status));
+        });
+      });
+    }
     // モーダル内IME
     function attachModalIME(nEl,yEl){
       if(!nEl||!yEl)return;var buf="";
@@ -8905,18 +8967,17 @@ function _renderInner(){
       var token=(document.getElementById("new-loc-token")?.value||"").trim();
       if(!name){showAlert("拠点名を入力してください");return;}
       if(masterFacilities.find(function(f){return f.name===name;})){showAlert("既に存在します");return;}
-      masterFacilities.push({name:name,token:token});
-      saveFacilities();render();
+      facilityAddOne(name,token); // ★ 全体 PUT にしない（古い一覧で他端末・CSV一括登録の追加を消さない）
     };
     document.querySelectorAll(".btn-del-loc").forEach(function(b){
       b.onclick=function(){
         var f=masterFacilities[parseInt(b.dataset.idx)];
         showConfirm((f?f.name:"拠点")+"を削除しますか？",function(){
           var _dn=f?f.name:"";
-          masterFacilities.splice(parseInt(b.dataset.idx),1);
-          saveFacilities();render();
-          // ★ その施設の端末持ち出し監視も止める（設定だけ残すと存在しない施設名で通知が続く）
-          if(_dn)devWatchOnFacilityDeleted(_dn);
+          if(!_dn)return;
+          // ★ 全体 PUT にしない。削除が成功したら、その施設の端末持ち出し監視も止める
+          //   （設定だけ残すと存在しない施設名で通知が続く）
+          facilityDeleteOne(_dn,function(){devWatchOnFacilityDeleted(_dn);});
         });
       };
     });
@@ -9552,7 +9613,7 @@ function selStaff(s){
   }
   render();
 }
-function delStaff(n){staffList=staffList.filter(function(s){return s.name!==n;});saveData("tc5_staff",staffList);render();}
+function delStaff(n){staffDeleteOne(n);}
 
 // 打刻の実行。呼び出し側は戻り値（Promise）を待たない（従来どおり即座に制御を返す）。
 // ★ 端末保存（IndexedDB）の成功を確認してから画面を打刻済みにする。
@@ -10440,6 +10501,145 @@ function applyFacilitiesLocal(){
   facilityName=VALID_TOKENS[effectiveToken]||"";
 }
 
+// ===== 従業員・施設マスタの1件単位の保存 =====
+// ★ 端末の staffList / masterFacilities は起動時に1回読むだけで、定期更新では取り直さない。
+//   その古い一覧で配列全体を PUT すると、他の端末（CSV一括登録を含む）が後から足した行や、
+//   他の人への編集を黙って消す。そこで保存のたびに最新を取り直し、変える1件の添字だけに書く。
+//   配列という構造は変えない（添字をキーにしたノードのまま）。
+//   ・編集: その行の添字へ PUT（他の行には触れない）
+//   ・追加: 末尾の次の添字へ「無ければ書く」条件付き PUT（if-match: null_etag）。先に使われていたら取り直して次へ
+//   ・削除: 末尾の1件を消した行の添字へ移し、末尾を消す（1回の PATCH＝全部成功か全部失敗）。
+//     配列に空き（null）を作らない。空きがあると RTDB は null 入りの配列を返し、更新前の版の画面が読み込みで止まる。
+//     添字が変わるのは末尾の1件だけ（全体を詰め直さないので、他の端末が編集中の他の行の添字はずれない）
+// RTDB から読んだ値を「オブジェクトの行だけの一覧」にする（削除で空いた添字＝null を読み飛ばす）
+function mstToList(raw){
+  return (Array.isArray(raw)?raw:(raw&&typeof raw==="object"?Object.values(raw):[]))
+    .filter(function(x){return !!x&&typeof x==="object"&&!Array.isArray(x);});
+}
+// 最新を取得して {keys,list,next}。取得失敗・形式不正は null（呼び出し側は書かずに中止する）
+async function mstFetch(node){
+  var r=await authFetch(FB_URL+"/"+node+".json").catch(function(){return null;});
+  if(!r||!r.ok)return null;
+  var v;try{v=await r.json();}catch(e){return null;}
+  var n=CSVIMP.normalizeList(v);
+  return n.ok?n:null;
+}
+function mstKeyOf(cur,obj){var i=cur.list.indexOf(obj);return i<0?null:cur.keys[i];}
+// 1件の書き込み。HTTP ステータスを返す（通信失敗は 0）
+async function mstWrite(node,key,method,obj,ifAbsent){
+  var h={"Content-Type":"application/json"};
+  if(ifAbsent)h["if-match"]="null_etag";
+  var o={method:method,headers:h};
+  if(method!=="DELETE")o.body=JSON.stringify(obj);
+  var r=await authFetch(FB_URL+"/"+node+"/"+encodeURIComponent(key)+".json",o).catch(function(){return null;});
+  return r?r.status:0;
+}
+function mstOk(st){return st>=200&&st<300;}
+// 末尾へ1件追加。conflict(cur) が文字列を返したら（取り直した一覧に同名がある等）書かずにその理由で失敗
+async function mstAppend(node,obj,cur,conflict){
+  for(var t=0;t<5;t++){
+    if(!cur)return {ok:false,status:0};
+    var why=conflict&&conflict(cur);
+    if(why)return {ok:false,conflict:why,cur:cur}; // 取り直した一覧を返す（呼び出し側で取り直さない）
+    var key=String(cur.next),st=await mstWrite(node,key,"PUT",obj,true);
+    if(mstOk(st)){cur.keys.push(key);cur.list.push(obj);cur.next++;return {ok:true,key:key,cur:cur};}
+    if(st!==412)return {ok:false,status:st};
+    if(t===4)return {ok:false,status:412,cur:cur}; // 最後の回は取り直さない（呼び出し側が一覧の更新に使う）
+    cur=await mstFetch(node); // 同じ添字へ先に書かれた → 取り直して次の添字で再試行
+  }
+  return {ok:false,status:412};
+}
+// 書き込む直前に、その添字の行がまだ同じ人・施設か（name が一致するか）を1件だけ取り直して確かめる。
+// ★ 削除で末尾の行が移った直後などに、別の人の行へ書いてしまうのを防ぐ（違えば書かずに中止する）
+// 戻り値: true=同じ / false=違う（他の端末が変えた）/ null=確かめられなかった（通信失敗など。書かない）
+async function mstSame(node,key,name){
+  var r=await authFetch(FB_URL+"/"+node+"/"+encodeURIComponent(key)+".json").catch(function(){return null;});
+  if(!r||!r.ok)return null;
+  var v;try{v=await r.json();}catch(e){return null;}
+  return !!v&&typeof v==="object"&&v.name===name;
+}
+function mstSameFail(same){return same===null?0:MST_CHANGED;} // 確かめられなかったときは通信失敗の文言にする
+var MST_CHANGED=-1; // 取り直した内容と書き込み直前の内容が違った（他の端末が同時に変えた）
+// 1件の削除（末尾の1件を移して空きを作らない）。HTTP ステータス（食い違いは MST_CHANGED）を返す
+async function mstRemove(node,cur,obj){
+  var i=cur.list.indexOf(obj);if(i<0)return 200;
+  var key=cur.keys[i],last=cur.list.length-1,lastKey=cur.keys[last];
+  var s1=await mstSame(node,key,obj.name);if(s1!==true)return mstSameFail(s1);
+  if(i!==last){var s2=await mstSame(node,lastKey,cur.list[last].name);if(s2!==true)return mstSameFail(s2);}
+  var patch={};
+  if(i===last)patch[key]=null;
+  else{patch[key]=cur.list[last];patch[lastKey]=null;}
+  var r=await authFetch(FB_URL+"/"+node+".json",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)}).catch(function(){return null;});
+  if(r&&r.ok){
+    // 手元の cur も同じ形へ（続けて削除する場合に使う）
+    if(i!==last){cur.list[i]=cur.list[last];}
+    cur.list.pop();cur.keys.pop();
+  }
+  return r?r.status:0;
+}
+function mstFailMsg(st){
+  if(st===MST_CHANGED)return "他の端末で同時に変更されたため、保存を中止しました。一覧を最新にしたので、もう一度操作してください。";
+  return st===401||st===403?"権限が無いため保存できませんでした。管理者PINで入り直してください。"
+    :"保存に失敗しました。通信状態を確認して再度実行してください。";
+}
+var _mstBusy=false; // 保存中の二重実行を防ぐ（10秒ごとの再描画でボタンが作り直されても効くようにフラグで持つ）
+function staffPersistLocal(list){staffList=list;_lsSet("tc5_staff",JSON.stringify(staffList));}
+// スタッフ1名の削除
+function staffDeleteOne(nm){
+  if(writePolicy!=="full"){ // デモ・テスト画面は従来どおり（書き込みは saveData / authFetch 側で遮断・模擬）
+    staffList=staffList.filter(function(s){return s.name!==nm;});saveData("tc5_staff",staffList);render();return;
+  }
+  if(_mstBusy)return;_mstBusy=true;
+  (async function(){
+    var cur=await mstFetch("tc5_staff");
+    if(!cur){showAlert("最新のスタッフ一覧を取得できないため削除できません。通信状態を確認してもう一度お試しください。");return;}
+    var target=cur.list.filter(function(x){return x.name===nm;});
+    for(var i=0;i<target.length;i++){
+      var st=await mstRemove("tc5_staff",cur,target[i]);
+      if(!mstOk(st)){showAlert(mstFailMsg(st));var lt=await mstFetch("tc5_staff");staffPersistLocal(lt?lt.list:cur.list);return;}
+    }
+    staffPersistLocal(cur.list);
+  })().catch(function(e){console.error("[staffDeleteOne]",e);showAlert(mstFailMsg(0));})
+    .then(function(){_mstBusy=false;render();});
+}
+// 施設1件の追加・削除（saveFacilities の全体 PUT は使わない）
+function facilityAddOne(name,token){
+  if(writePolicy!=="full"){masterFacilities.push({name:name,token:token});saveFacilities();render();return;}
+  if(!facilitiesLoaded){showAlert("施設マスタを取得できていないため保存できません。再読み込みしてからお試しください。");return;}
+  if(_mstBusy)return;_mstBusy=true;
+  (async function(){
+    var cur=await mstFetch("master/locations");
+    if(!cur){showAlert("最新の施設マスタを取得できないため保存できません。通信状態を確認してもう一度お試しください。");return;}
+    var res=await mstAppend("master/locations",{name:name,token:token},cur,function(c){
+      return c.list.some(function(f){return f.name===name;})?"既に存在します":"";
+    });
+    if(res.ok){masterFacilities=res.cur.list;applyFacilitiesLocal();return;}
+    var latest=res.cur||await mstFetch("master/locations");
+    if(latest){masterFacilities=latest.list;applyFacilitiesLocal();}
+    showAlert(res.conflict||mstFailMsg(res.status));
+  })().catch(function(e){console.error("[facilityAddOne]",e);showAlert(mstFailMsg(0));})
+    .then(function(){_mstBusy=false;render();});
+}
+function facilityDeleteOne(name,after){
+  if(writePolicy!=="full"){
+    masterFacilities=masterFacilities.filter(function(f){return f.name!==name;});saveFacilities();render();if(after)after();return;
+  }
+  if(!facilitiesLoaded){showAlert("施設マスタを取得できていないため保存できません。再読み込みしてからお試しください。");return;}
+  if(_mstBusy)return;_mstBusy=true;
+  (async function(){
+    var cur=await mstFetch("master/locations");
+    if(!cur){showAlert("最新の施設マスタを取得できないため削除できません。通信状態を確認してもう一度お試しください。");return;}
+    var target=cur.list.filter(function(f){return f.name===name;});
+    for(var i=0;i<target.length;i++){
+      var st=await mstRemove("master/locations",cur,target[i]);
+      if(!mstOk(st)){var lt=await mstFetch("master/locations");masterFacilities=lt?lt.list:cur.list;applyFacilitiesLocal();showAlert(mstFailMsg(st));return;}
+    }
+    masterFacilities=cur.list;applyFacilitiesLocal();
+    if(after)after();
+  })().catch(function(e){console.error("[facilityDeleteOne]",e);showAlert(mstFailMsg(0));})
+    .then(function(){_mstBusy=false;render();});
+}
+
 // ===== CSV一括登録（施設・従業員）: 純粋関数 BEGIN =====
 // ★ scripts/test-csv-import.js がこの BEGIN〜END を抜き出して検査する。DOM・通信・グローバル状態に触れない。
 // ★ 本人の識別子は氏名（打刻・承認・PINが氏名で紐付く）。社員番号は自由項目で、空欄・重複を許す。
@@ -10901,7 +11101,7 @@ function csvImpCardHtml(kind,title){
       +tiles([["新規登録",d.add,"#f0fdf4"],["更新",d.update],["スキップ",d.skip],["失敗（エラーで未登録）",d.error,d.error?"#fff1f2":""]])
       +(d.error?'<div style="font-size:.9rem;font-weight:700;color:#b91c1c;">登録しなかった行（エラー。CSVを直して選び直すと、この行だけが登録されます）</div>'+msgLines(res.items,"error","#b91c1c"):"")
       +(d.lost.length?'<div style="background:#fff1f2;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;color:#b91c1c;margin-bottom:10px;">登録前にあった次の'+(kind==="fac"?'施設':'スタッフ')+'が見当たりません（別の端末で同時に保存された可能性があります）：'+esc(d.lost.join("、"))+'。一覧を確認し、必要なら登録し直してください。</div>':"")
-      +'<div style="font-size:.9rem;color:#475569;margin-bottom:10px;">他の端末で管理画面を開いている場合は、再読み込みしてから編集してください（古い一覧のまま保存すると、今回の登録分が消えることがあります）。</div>'
+      +'<div style="font-size:.9rem;color:#475569;margin-bottom:10px;">他の端末で開いたままの管理画面は、念のため再読み込みしてから編集してください（更新前の版の画面から保存すると、今回の登録分が消えることがあります）。</div>'
       +(d.pinUnset.length?'<div style="background:#fffbeb;border:1px solid #fcd34d;padding:10px 12px;font-size:.92rem;color:#92400e;margin-bottom:10px;">PIN未設定：'+d.pinUnset.length+'名。スタッフ管理の各行から PIN を設定してください（本人が初回打刻時に設定することもできます）。</div>':"")
       +(d.pinLeft.length?'<div style="background:#fffbeb;border:1px solid #fcd34d;padding:10px 12px;font-size:.92rem;color:#92400e;margin-bottom:10px;">以前の同じ氏名のPINが残っている人がいます：'+esc(d.pinLeft.join("、"))+'。スタッフ管理から PIN を設定し直してください。</div>':"")
       +'<button onclick="csvImpClear(\''+kind+'\')" '+sub+'>閉じる</button>';
@@ -14542,9 +14742,9 @@ async function initFirebase() {
           fetchJson(FB_URL+"/tc5_staff.json"),
           fetchJson(FB_URL+"/master/locations.json")
         ]);
-        if(sdRes[0]){staffList=Array.isArray(sdRes[0])?sdRes[0]:Object.values(sdRes[0]);}
+        if(sdRes[0]){staffList=mstToList(sdRes[0]);}
         if(sdRes[1]){
-          masterFacilities=Array.isArray(sdRes[1])?sdRes[1]:Object.values(sdRes[1]);
+          masterFacilities=mstToList(sdRes[1]);
           VALID_TOKENS=buildValidTokens();
           masterLocs=masterFacilities.map(function(f){return f.name;});
         }
@@ -14635,11 +14835,11 @@ async function initFirebase() {
       applyPunchRecords(fbRecords);
       render();
     }).catch(function(){render();});
-    if(fbStaff){staffList=Array.isArray(fbStaff)?fbStaff:Object.values(fbStaff);TLS.setItem("tc5_staff",JSON.stringify(staffList));}
+    if(fbStaff){staffList=mstToList(fbStaff);TLS.setItem("tc5_staff",JSON.stringify(staffList));}
     if(fbPins){staffPins=fbPins;}
     if(fbDepts){masterDepts=Array.isArray(fbDepts)?fbDepts:Object.values(fbDepts);TLS.setItem("tc_master_depts",JSON.stringify(masterDepts));}
     if(fbLocations){
-      var locs=Array.isArray(fbLocations)?fbLocations:Object.values(fbLocations);
+      var locs=mstToList(fbLocations);
       masterFacilities=locs;
       TLS.setItem("tc_master_facilities",JSON.stringify(masterFacilities));
       masterLocs=masterFacilities.map(function(f){return f.name;});

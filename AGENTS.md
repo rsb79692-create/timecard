@@ -58,6 +58,7 @@ Claude Code が**常時**読む指示ファイルである。置いてよいの�
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |
 | 施設端末の持ち出し検知 | [`device-watch.md`](docs/features/device-watch.md) | `node scripts/test-device-watch.js` |
 | マルチテナント（会社間分離） | [`multitenant.md`](docs/features/multitenant.md) | `node scripts/test-multitenant.js`（Rules 変更時は `tests/rules`、画面変更時は `tests/visual/*`） |
+| 従業員・施設マスタの保存（1件単位） | [`master-save.md`](docs/features/master-save.md) | `node scripts/test-staff-save.js` |
 | CSV一括登録（施設・従業員） | [`csv-import.md`](docs/features/csv-import.md) | `node scripts/test-csv-import.js` |
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
 
@@ -103,6 +104,9 @@ Claude Code が**常時**読む指示ファイルである。置いてよいの�
 - 施設ごとの判定時刻の正本は `scripts/morning-check.js` の `LATE_CHECK_FACILITIES`（コード側）。**施設マスタ側に持たせない。** `morning-check.js` と `index.html` の同名 `DEFAULT_FACILITIES` を同期しない。
 - `CHECK_HOURS` に時刻を足すときは `morning-check.yml` の cron も足す。`CHECK_HOUR` 不正時は既定へ倒さず `exit 1`。判定時刻を実行時の現在時刻から決めない。
 - 通知の重複抑止記録は `FIREBASE_DATABASE_URL` のオリジン直下 `/morningNotify`（`/honomi` 配下にしない）。未確定の送信を本文と retry key を作り直して送らない。ワークフローへ `concurrency:` を足さない。cron と外部スケジューラのどちらも外さない。
+
+**従業員・施設マスタの保存（`master-save.md`）**
+- `tc5_staff` / `master/locations` を手元の一覧で全体 PUT しない。保存のたびに最新を取り直し、変える1件の添字だけに書く（追加は `if-match: null_etag`、削除は末尾の1件を移す1回の PATCH で配列に空きを作らない）。
 
 **CSV一括登録（`csv-import.md`）**
 - 従業員の本人の識別子は氏名。登録済みと同じ氏名は上書きせずスキップし、表記ゆれ（施設名・氏名）を推測で紐付けない。書き込みは登録直前の再取得・再検証のうえ1回の PATCH（既存行を丸ごと上書きしない）。
