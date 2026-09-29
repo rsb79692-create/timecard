@@ -485,6 +485,211 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
   }
   check("マイクは使わない（audio:false）", /audio:false/.test(CODE_NC) && !/audio:true/.test(CODE_NC));
 
+  // ===== 10. 打刻画面のインカメラプレビュー（2026-09-30） =====
+  section("10. 打刻画面のプレビュー（表示時に起動・打刻/離脱で停止・失敗でも打刻可）");
+  // 打刻画面の枠（#facecam-slot）を持つ document の模擬。getUserMedia は呼ばれた回数とトラックを記録する。
+  function makePv(opts) {
+    opts = opts || {};
+    const rec = { drawn: 0, cleared: 0, forbidden: [], videoRemoved: false, gum: 0, tracks: [] };
+    const body = mkElement();
+    const slot = mkElement(); slot.id = "facecam-slot";
+    const docL = {}, winL = {};
+    const doc = {
+      body: body, visibilityState: "visible",
+      createElement: (t) => t === "video" ? Object.assign(mkVideo(rec), mkElement(), { videoWidth: 640, videoHeight: 480, readyState: 4, srcObject: "unset", remove() { rec.videoRemoved = true; } })
+        : t === "canvas" ? mkCanvas(rec) : mkElement(),
+      getElementById: (id) => (id === "facecam-slot" && c.__slotOn) ? slot : null,
+      addEventListener: (t, f) => { docL[t] = f; }
+    };
+    const gum = () => {
+      rec.gum++;
+      if (opts.deny) return Promise.reject(new Error("NotAllowedError"));
+      const t = mkTrack(); rec.tracks.push(t);
+      return Promise.resolve({ getTracks: () => [t] });
+    };
+    const c = makeCtx({ globals: {
+      document: doc,
+      window: { addEventListener: (t, f) => { winL[t] = f; } },
+      navigator: { mediaDevices: { getUserMedia: gum } },
+      staffList: [{ name: "a", facePhoto: true }, { name: "b" }], staffName: "a",
+      screen: "punch", punchMsg: null,
+      writePolicy: "full", viewerMode: false, demoMode: false, staffDemoMode: false
+    } });
+    c.__rec2 = rec; c.__slot = slot; c.__slotOn = true; c.__docL = docL; c.__winL = winL;
+    return c;
+  }
+  const flush = () => new Promise((r) => setTimeout(r, 0));
+  {
+    const c = makePv();
+    check("顔撮影ONのスタッフの打刻画面にだけ枠を出す", /id="facecam-slot"/.test(c.faceCamPreviewSlotHtml(true)));
+    check("出勤・退勤を押せないときは枠を出さない", c.faceCamPreviewSlotHtml(false) === "");
+    c.staffName = "b";
+    check("顔撮影OFFのスタッフには枠を出さない", c.faceCamPreviewSlotHtml(true) === "");
+    c.staffName = "a"; c.writePolicy = "sandbox";
+    check("スタッフテスト画面では枠を出さない", c.faceCamPreviewSlotHtml(true) === "");
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    check("打刻画面を表示した時点でカメラを起動する", rec.gum === 1 && c._faceCam.pv && c._faceCam.pv.state === "live");
+    check("プレビューを打刻ボタンの上の枠へ入れる", c.__slot.children.length === 1 && c.__slot.children[0].id === "facecam-preview");
+    c.faceCamSyncPreview(); c.faceCamSyncPreview(); await flush();
+    check("再描画してもカメラを起動し直さない", rec.gum === 1);
+    // 打刻（出勤）→ プレビューの映像で撮り、カメラを止める
+    c.punchMsg = "出勤 07:00:00"; c.__slotOn = false;
+    c.faceCamSyncPreview();
+    check("打刻完了の表示へ移った瞬間はまだ止めない（この直後に撮影する）", rec.tracks[0].stopped === false);
+    c.faceCamAfterPunch("clockIn");
+    await flush(); await flush(); await flush();
+    check("打刻したらプレビューの映像で1枚撮る（カメラを起動し直さない）", rec.gum === 1 && rec.drawn === 1);
+    check("撮影後にキャンバスを消している", rec.cleared >= 1);
+    check("打刻完了時にカメラのトラックを停止する", rec.tracks[0].stopped === true);
+    check("撮影後に映像の要素を外す", rec.videoRemoved === true && c._faceCam.pv === null);
+    check("プレビュー経由でも禁止APIへ触れていない（保存・送信なし）", rec.forbidden.length === 0);
+    c.faceCamClose();
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c.screen = "home"; c.__slotOn = false; c.faceCamSyncPreview();
+    check("打刻画面を離れたらカメラを停止する", rec.tracks[0].stopped === true && c._faceCam.pv === null);
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c.faceCamClose();
+    check("ホームへ戻る（faceCamClose）でカメラを停止する", rec.tracks[0].stopped === true && c._faceCam.pv === null);
+    c.faceCamSyncPreview(); await flush();
+    c.faceCamClose(true);
+    check("撮影直前の表示の作り直し（faceCamClose(true)）ではプレビューを残す", rec.tracks[1].stopped === false && !!c._faceCam.pv);
+    c.faceCamClose();
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c.document.visibilityState = "hidden"; c.__docL.visibilitychange();
+    check("タブが裏へ回ったらカメラを停止する", rec.tracks[0].stopped === true && c._faceCam.pv === null);
+    c.document.visibilityState = "visible"; c.__docL.visibilitychange(); await flush();
+    check("表示に戻ったらプレビューを再開する", rec.gum === 2 && c._faceCam.pv && c._faceCam.pv.state === "live");
+    c.__winL.pagehide();
+    check("ページを離れたらカメラを停止する", rec.tracks[1].stopped === true && c._faceCam.pv === null);
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c.punchMsg = "休憩開始"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("breakStart");
+    check("撮影しない打刻（休憩）でもカメラを停止する", rec.tracks[0].stopped === true && rec.drawn === 0 && c._faceCam.pv === null);
+  }
+  {
+    const c = makePv({ deny: true }); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    check("カメラを拒否されたらプレビューは失敗表示にする", c._faceCam.pv && c._faceCam.pv.state === "failed");
+    let threw = false;
+    try { c.punchMsg = "出勤"; c.__slotOn = false; c.faceCamSyncPreview(); c.faceCamAfterPunch("clockIn"); } catch (e) { threw = true; }
+    await flush(); await flush();
+    check("カメラ取得に失敗しても打刻処理へ例外を返さない（打刻は成立する）", threw === false && rec.drawn === 0);
+    c.faceCamClose();
+  }
+  // ── 指摘で足したもの（遅れて届いたカメラ・再入ガード・起動中の打刻・放置・映像の途切れ・撮影時の DOM）──
+  {
+    // 許可ダイアログを待つ間に画面を離れた → 後から届いたカメラはその場で止める
+    let resolveGum = null; const t = mkTrack();
+    const c = makePv(); c.navigator.mediaDevices.getUserMedia = () => new Promise((r) => { resolveGum = r; });
+    c.faceCamSyncPreview();
+    c.screen = "home"; c.__slotOn = false; c.faceCamSyncPreview();
+    resolveGum({ getTracks: () => [t] }); await flush(); await flush();
+    check("許可を待つ間に画面を離れたら、後から届いたカメラをその場で止める", t.stopped === true && c._faceCam.pv === null);
+  }
+  {
+    // 撮影中（running）に次の打刻 → 撮らずに抜けるときもプレビューのカメラを止める
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c._faceCam.running = true;
+    c.punchMsg = "退勤"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("clockOut");
+    check("撮影中の再入で撮らないときもプレビューのカメラを止める", rec.tracks[0].stopped === true && rec.drawn === 0);
+    c._faceCam.running = false; c.faceCamClose();
+  }
+  {
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c._faceCam.busy = true; c._faceCam.busyAt = Date.now();
+    c.punchMsg = "退勤"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("clockOut");
+    check("撮影が飛行中（busy）で撮らないときもプレビューのカメラを止める", rec.tracks[0].stopped === true && rec.drawn === 0);
+    c._faceCam.busy = false; c.faceCamClose();
+  }
+  {
+    // プレビューの起動中に打刻 → プレビューを止め、従来どおりその場でカメラを起動して1回だけ撮る
+    let resolveGum = null; const t = mkTrack();
+    const c = makePv(); const rec = c.__rec2; const gum0 = c.navigator.mediaDevices.getUserMedia;
+    c.navigator.mediaDevices.getUserMedia = () => new Promise((r) => { resolveGum = r; });
+    c.faceCamSyncPreview();
+    c.navigator.mediaDevices.getUserMedia = gum0;
+    c.punchMsg = "出勤"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("clockIn");
+    resolveGum({ getTracks: () => [t] });
+    await flush(); await flush(); await flush();
+    check("プレビュー起動中の打刻は従来どおりその場で1回撮り、遅れて届いたプレビューのカメラは止める",
+      rec.drawn === 1 && rec.gum === 1 && rec.tracks[0].stopped === true && t.stopped === true);
+    c.faceCamClose();
+  }
+  {
+    // 放置したら一時停止し、画面に触れたら再開する
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    c._faceCamLastInput = Date.now() - c.FACECAM_PV_IDLE_MS - 1;
+    c.faceCamPreviewIdleCheck();
+    check("操作が無いまま一定時間たったらカメラを一時停止する", rec.tracks[0].stopped === true && c._faceCam.pv === null && c._faceCam.pvIdle === true);
+    check("一時停止中は枠に一時停止の表示を出す", c.__slot.children.some((x) => x.id === "facecam-idle"));
+    // ボタン（打刻・もどる）を押したときは再開しない（その操作で画面が変わる。カメラを二重に取りにいかない）
+    c.__docL.pointerdown({ target: { closest: (sel) => /button/.test(sel) ? {} : null } }); await flush();
+    check("一時停止中に打刻ボタン等を押しても、その操作ではカメラを再開しない", rec.gum === 1 && c._faceCam.pvIdle === true);
+    c.__docL.pointerdown({ target: { closest: () => null } }); await flush();
+    check("画面に触れたらカメラを再開する", rec.gum === 2 && c._faceCam.pv && c._faceCam.pv.state === "live" && c._faceCam.pvIdle === false);
+    check("再開したら一時停止の表示を取り除く（枠が伸びて打刻ボタンがずれない）",
+      c.__slot.children.length === 1 && c.__slot.children[0].id === "facecam-preview");
+    c.faceCamClose();
+  }
+  {
+    // 映像が途中で止まった（他のアプリに取られた等）→ 「使用できません」にする
+    const c = makePv(); const rec = c.__rec2;
+    let endedCb = null;
+    c.navigator.mediaDevices.getUserMedia = () => { rec.gum++; const t = mkTrack(); t.addEventListener = (ev, f) => { if (ev === "ended") endedCb = f; }; rec.tracks.push(t); return Promise.resolve({ getTracks: () => [t] }); };
+    c.faceCamSyncPreview(); await flush();
+    endedCb && endedCb();
+    check("映像が途中で止まったら「使用できません」に切り替える（撮れたことにしない）", c._faceCam.pv && c._faceCam.pv.state === "failed");
+    c.faceCamClose();
+  }
+  {
+    // 撮影するときは映像要素が画面上（非表示の枠）にある
+    const c = makePv(); const rec = c.__rec2;
+    c.faceCamSyncPreview(); await flush();
+    const v = c._faceCam.pv.video;
+    let attached = null;
+    c.document.createElement = ((orig) => (t) => { const el = orig(t); if (t === "canvas") { const g = el.getContext(); const d0 = g.drawImage; g.drawImage = function (x) { attached = !!(x && x.parentNode); return d0.apply(this, arguments); }; } return el; })(c.document.createElement);
+    c.punchMsg = "出勤"; c.__slotOn = false; c.faceCamSyncPreview();
+    c.faceCamAfterPunch("clockIn"); await flush(); await flush(); await flush();
+    check("撮影するとき映像要素を画面から外したままにしない（非表示の枠へ移す）", attached === true && rec.drawn === 1);
+    c.faceCamClose();
+  }
+  {
+    const iRender = html.indexOf("function render(){");
+    const rsrc = html.slice(iRender, html.indexOf("}", iRender));
+    check("render() のたびにプレビューを同期する（画面を離れたら止める）", /faceCamSyncPreview\(\)/.test(rsrc));
+    const iSlot = html.indexOf("+faceCamPreviewSlotHtml(ci||co)");
+    const iGrid = html.indexOf("+'<div class=\"grid2\">'", iSlot);
+    check("プレビューの枠は打刻ボタン（grid2）の直前＝上に置く（ボタンへ重ねない）", iSlot > 0 && iGrid > iSlot && iGrid - iSlot < 200);
+    check("画面が短いときはプレビューを小さくして打刻ボタンを画面内に収める（通常→小→1行の3段階・描画のたびに測り直す）",
+      /faceCamFitPreview\(\);/.test(CODE_NC) && /size\(FACECAM_PV_H,96,72,false\)/.test(CODE_NC)
+      && /size\(60,64,48,false\)/.test(CODE_NC) && /size\(40,48,36,true\)/.test(CODE_NC));
+    check("プレビューの枠は最低の高さを確保する（中身が増えたら枠が伸び、ボタンへ重ならない）",
+      /id="facecam-slot" style="min-height:'\+FACECAM_PV_H\+'px;/.test(html) && !/id="facecam-slot" style="height:/.test(html));
+    check("プレビューにも「管理者設定により撮影しています」と保存・送信しない旨を出す",
+      /\["📷 管理者設定により","撮影しています"\]/.test(CODE_NC) && /保存・送信はしません/.test(CODE_NC));
+  }
+
   // ===== 結果 =====
   console.log("\n====================================");
   console.log("  PASS " + pass + " / FAIL " + fail);
