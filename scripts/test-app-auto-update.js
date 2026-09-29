@@ -107,7 +107,7 @@ function makeEnv(opts) {
     // 画面・作業の状態（index.html の他の場所で定義されるグローバル）
     screen: "home", viewerMode: false, adminUrlUsed: false, adminTokenValid: false, demoMode: false,
     savingCount: 0, _apvBusyCount: 0, _apvPutDeferred: false, _apvPutInFlight: 0, _apvHasUnknown: function () { return !!ctx._unknown; },
-    _punchSaving: false, pinChecking: false, pinInput: "", staffPinInput: "", staffPinConfirm: "",
+    _punchSaving: false, pinChecking: false, staffPinChecking: false, pinInput: "", staffPinInput: "", staffPinConfirm: "",
     mileageBlocksRerender: function () { return !!ctx._mileageEditing; }, devWatchEditing: function () { return false; }, monthlyDaysEditing: false,
     _appWritesInFlight: 0,
     showAlert: function (m) { (E.alerts = E.alerts || []).push(m); },
@@ -421,7 +421,170 @@ function part7() {
   check("sw.js を変えたので CACHE_NAME を上げてある（v15 以上）", /const CACHE_NAME = 'timecard-v(1[5-9]|[2-9]\d)'/.test(sw));
   check("書込み件数の差し込みはページ先頭の script（他の通信より前）にある",
     html.indexOf("// ===== 書込み通信の実行中件数 =====") < html.indexOf("async function authFetch("));
+  part8().catch(function (e) { fail++; console.log("  FAIL  [8] が例外で停止: " + (e && e.message)); }).then(finish);
+}
 
+// ── [8] 同じ版では更新通知・自動再読み込みを繰り返さない（2026-09-30）──────────
+// ★ 本物の sw.js を動かす。GitHub Pages の ETag は push のたびに変わる（index.html が同じ内容でも）。
+//   版＝内容のハッシュで判定し、内容が同じなら通知しないこと・同じ版を二度通知しないことを固定する。
+const ORIGIN = "https://example.test";
+function loadSw(server) {
+  const store = new Map();
+  const keyOf = function (k) { return typeof k === "string" ? new URL(k, ORIGIN).href : k.url; };
+  const cache = {
+    match: function (k) { const r = store.get(keyOf(k)); return Promise.resolve(r ? r.clone() : undefined); },
+    put: function (k, r) { store.set(keyOf(k), r); return Promise.resolve(); },
+    addAll: function () { return Promise.resolve(); }
+  };
+  const L = {}, broadcast = [];
+  const client = { url: ORIGIN + "/timecard/", replies: [], postMessage: function (m) { this.replies.push(m); } };
+  server.gets = 0; server.heads = 0;
+  const ctx = {
+    console: { log: function () {}, warn: function () {}, error: function () {} },
+    URL: URL, Response: Response, Headers: Headers, Promise: Promise, Array: Array, Uint8Array: Uint8Array,
+    caches: { open: function () { return Promise.resolve(cache); }, keys: function () { return Promise.resolve([]); }, delete: function () { return Promise.resolve(true); } },
+    fetch: function (url, opt) {
+      const head = opt && opt.method === "HEAD";
+      if (head) server.heads++; else server.gets++;
+      if (server.fail === "reject") return Promise.reject(new TypeError("network"));
+      if (server.fail === "503") return Promise.resolve(new Response("", { status: 503 }));
+      const h = new Headers({ "ETag": 'W/"' + server.etag + '"', "Content-Type": "text/html; charset=utf-8", "Content-Encoding": "gzip" });
+      return Promise.resolve(new Response(head ? null : server.body, { status: 200, headers: h }));
+    }
+  };
+  ctx.self = {
+    location: { origin: ORIGIN }, crypto: globalThis.crypto, navigator: {}, registration: {},
+    addEventListener: function (t, f) { L[t] = f; },
+    skipWaiting: function () {},
+    clients: { claim: function () {}, matchAll: function () { return Promise.resolve([{ url: client.url, postMessage: function (m) { broadcast.push(m); } }]); } }
+  };
+  vm.createContext(ctx);
+  vm.runInContext(sw, ctx);
+  const W = { store: store, broadcast: broadcast, client: client, server: server };
+  W.navigate = async function () {
+    const waits = []; let resp = null;
+    L.fetch({ request: { method: "GET", mode: "navigate", url: ORIGIN + "/timecard/?token=all" },
+      respondWith: function (p) { resp = p; }, waitUntil: function (p) { waits.push(p); } });
+    const r = await resp; const body = await r.text();
+    for (let i = 0; i < waits.length; i++) await waits[i];
+    return body;
+  };
+  W.message = async function (type) {
+    const waits = [];
+    L.message({ source: client, data: { type: type }, waitUntil: function (p) { waits.push(p); } });
+    for (let i = 0; i < waits.length; i++) await waits[i];
+  };
+  W.notified = function () { return broadcast.filter(function (m) { return m.type === "APP_UPDATE_AVAILABLE"; }); };
+  return W;
+}
+
+async function part8() {
+  console.log("\n[8] 同じ版では更新通知・自動再読み込みを繰り返さない（sw.js を実際に動かす）");
+  const server = { etag: "6abc0001-100", body: "<html>v1</html>" };
+  const W = loadSw(server);
+  await W.message("CACHE_APP_SHELL");
+  const shell = W.store.get(ORIGIN + "/timecard/");
+  check("キャッシュした app shell に内容のハッシュを残す", !!shell && /^sha256:[0-9a-f]{64}$/.test(shell.headers.get("X-TC-Shell-Hash") || ""));
+  check("展開済みの本体に Content-Encoding を写さない", !!shell && !shell.headers.get("Content-Encoding"));
+  check("最新版を開いたときは通知しない", (await W.navigate()) === "<html>v1</html>" && W.notified().length === 0);
+  for (let i = 0; i < 3; i++) await W.navigate();
+  check("何度再読み込みしても通知しない", W.notified().length === 0);
+
+  // index.html を変えない push（ETag だけ変わる）
+  server.etag = "6abc0002-100"; server.gets = 0;
+  await W.navigate();
+  check("index.html が同じ内容の配信では通知しない（ETag だけの変化）", W.notified().length === 0);
+  check("そのとき本体の取得は1回だけ", server.gets === 1, "gets=" + server.gets);
+  server.gets = 0; await W.navigate(); await W.navigate();
+  check("以後は HEAD だけで最新と判定する（本体を取り直さない）", server.gets === 0, "gets=" + server.gets);
+  server.etag = "6abc0003-100"; W.client.replies.length = 0;
+  await W.message("CHECK_APP_UPDATE");
+  check("画面からの確認にも、同じ内容なら「最新です」と答える",
+    W.notified().length === 0 && W.client.replies.some(function (m) { return m.type === "APP_UP_TO_DATE"; }));
+
+  // 内容の変わる push
+  server.etag = "6abc0004-120"; server.body = "<html>v2</html>";
+  await W.navigate();
+  const n1 = W.notified();
+  check("内容が変わったら1回だけ通知する（版＝内容のハッシュ）", n1.length === 1 && /^sha256:/.test(n1[0].version || ""));
+  check("再読み込みで新しい版が返る", (await W.navigate()) === "<html>v2</html>");
+  await W.navigate(); await W.navigate();
+  W.client.replies.length = 0; await W.message("CHECK_APP_UPDATE");
+  check("更新後は同じ版を二度と通知しない（再読み込み・画面からの確認のどちらでも）",
+    W.notified().length === 1 && W.client.replies.some(function (m) { return m.type === "APP_UP_TO_DATE"; }));
+
+  // 判定できないとき（通信失敗・非200）は「最新です」と答えない（画面の予備の再読み込みを消さない）
+  {
+    const W3 = loadSw({ etag: "6abc0010-100", body: "<html>v1</html>" });
+    await W3.message("CACHE_APP_SHELL");
+    W3.server.etag = "6abc0011-100";
+    W3.server.fail = "reject";
+    W3.client.replies.length = 0; await W3.message("CHECK_APP_UPDATE");
+    check("通信に失敗したときは「最新です」と答えず、通知もしない",
+      W3.client.replies.length === 0 && W3.notified().length === 0);
+    W3.server.fail = "503";
+    await W3.message("CHECK_APP_UPDATE");
+    check("本体が 503 のときも「最新です」と答えない", W3.client.replies.length === 0 && W3.notified().length === 0);
+    W3.server.fail = "";
+    await W3.message("CHECK_APP_UPDATE");
+    check("回復したら最新と判定して答える", W3.client.replies.some(function (m) { return m.type === "APP_UP_TO_DATE"; }));
+  }
+  // 同時に来た確認は1本にまとめる（本体を二重に取らない）
+  {
+    const W4 = loadSw({ etag: "6abc0020-100", body: "<html>v1</html>" });
+    await W4.message("CACHE_APP_SHELL");
+    W4.server.etag = "6abc0021-100"; W4.server.gets = 0;
+    await Promise.all([W4.message("CHECK_APP_UPDATE"), W4.message("CHECK_APP_UPDATE")]);
+    check("同時に来た確認で本体を二重に取らない", W4.server.gets === 1, "gets=" + W4.server.gets);
+    check("まとめても、どちらの依頼にも「最新です」と答える",
+      W4.client.replies.filter(function (m) { return m.type === "APP_UP_TO_DATE"; }).length === 2);
+  }
+
+  // 新しい SW（CACHE_NAME を上げた直後など）でも、最新版を開いたときは通知しない
+  const W2 = loadSw({ etag: "6abc0005-130", body: "<html>v3</html>" });
+  await W2.message("CACHE_APP_SHELL"); await W2.navigate(); await W2.navigate();
+  check("新しい SW でも、最新版では通知しない", W2.notified().length === 0);
+
+  // ── 画面側 ──
+  console.log("\n[8b] 画面側: PIN の残り・「最新です」の応答");
+  {
+    const E = makeEnv(); E.idle();
+    E.ctx.staffPinInput = "1234";                  // 職員が PIN で打刻画面へ進んだあと、値が残ったままホームへ戻った
+    E.sw('"sha256:aa"'); E.tick("interval");
+    check("ホーム画面では、前の職員の PIN の値が残っていても自動で更新する", E.reloads === 1 && E.banners === 0);
+  }
+  {
+    const E = makeEnv(); E.idle();
+    E.ctx.screen = "staffPin"; E.ctx.staffPinInput = "12";
+    check("PIN 入力画面で入力の途中なら「PIN 入力中」として待つ", E.ctx.appReloadBlockReason() === "pin");
+    E.ctx.screen = "pin"; E.ctx.staffPinInput = ""; E.ctx.pinInput = "9";
+    check("管理者 PIN 画面で入力の途中なら待つ", E.ctx.appReloadBlockReason() === "pin");
+    E.ctx.screen = "home"; E.ctx.pinInput = "9";
+    check("ホーム画面では PIN の残りを入力中と数えない", E.ctx.appReloadBlockReason() === "");
+  }
+  {
+    const E = makeEnv(); E.idle();
+    E.ctx._appVersionTag = 'W/"6abc0001-100"'; E.headTag = 'W/"6abc0002-100"'; E.ctx._appVersionLastCheck = 0;
+    E.ctx.checkAppVersion(); await new Promise(function (r) { setImmediate(r); });
+    const asked = E.posted.some(function (m) { return m && m.type === "CHECK_APP_UPDATE"; });
+    E.swHandler({ data: { type: "APP_UP_TO_DATE" } });
+    E.tick("timeout"); E.tick("interval");
+    check("配信の目印だけが変わり SW が「最新です」と答えたら、再読み込みしない",
+      asked && E.reloads === 0 && E.banners === 0, "reloads=" + E.reloads);
+    check("以後はその目印を基準にする（同じ目印で確認を繰り返さない）", E.ctx._appVersionTag === 'W/"6abc0002-100"');
+  }
+  {
+    const E = makeEnv(); E.idle();
+    E.ctx._appVersionTag = 'W/"6abc0001-100"'; E.headTag = 'W/"6abc0002-100"'; E.ctx._appVersionLastCheck = 0;
+    E.ctx.checkAppVersion(); await new Promise(function (r) { setImmediate(r); });
+    E.tick("timeout"); E.tick("interval");
+    check("SW が答えないとき（キャッシュが空）は、従来どおり期限後に1回だけ再読み込みする", E.reloads === 1);
+  }
+  check("sw.js は画面からの確認に「最新です」を返す", /src\.postMessage\(\{ type: 'APP_UP_TO_DATE' \}\)/.test(sw));
+  check("sw.js を変えたので CACHE_NAME を v16 以上へ上げてある", /const CACHE_NAME = 'timecard-v(1[6-9]|[2-9]\d)'/.test(sw));
+}
+
+function finish() {
   console.log("\n================================");
   console.log("PASS " + pass + " / FAIL " + fail);
   console.log("================================");

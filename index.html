@@ -15774,7 +15774,7 @@ var APP_AUTO_POLL_MS=2000;            // 安全になるのを待つ間の確認
 var APP_AUTO_SW_WAIT_MS=20000;        // HEAD で検知したとき、SW のキャッシュ更新の通知を待つ上限
 var APP_AUTO_UNKNOWN_GAP_MS=10*60*1000; // 版の分からない通知での再読み込みは10分に1回まで
 var _appAutoPending=false,_appAutoTarget="",_appAutoTimer=0,_appAutoDone=false,_appLastInputAt=0;
-var _appAutoSwWaitTimer=0,_appAutoSince=0;
+var _appAutoSwWaitTimer=0,_appAutoSince=0,_appServerTagPending="";
 var APP_AUTO_MAX_WAIT_MS=30*60*1000;  // これ以上待たされたら、自動更新を待ちつつバナーでも知らせる
 function _appNormVer(v){return String(v||"").replace(/^W\//,"");}
 ["pointerdown","keydown","touchstart","input","wheel"].forEach(function(t){
@@ -15855,7 +15855,11 @@ function appReloadBlockReason(){
     if(savingCount>0)return "saving";
     if(_apvBusyCount>0||_apvHasUnknown()||_apvPutDeferred||_apvPutInFlight>0)return "attendance-save"; // 管理者の時刻修正＋承認
     if(_punchSaving)return "punch";                            // 打刻の端末保存中
-    if(pinChecking||pinInput||staffPinInput||staffPinConfirm)return "pin";
+    // ★ PIN の入力値は PIN 入力画面にいるときだけ数える。職員が PIN で打刻画面へ進んだあとも
+    //   staffPinInput は消えずに残るため、画面を問わず数えると打刻端末のホーム画面が
+    //   「PIN 入力中」のまま自動更新されず、バナーの［再読み込み］も押せなくなる（2026-09-30 再現）。
+    if(pinChecking||staffPinChecking||(screen==="pin"&&pinInput)
+       ||((screen==="staffPin"||screen==="staffPinNew")&&(staffPinInput||staffPinConfirm)))return "pin";
     if(document.querySelector(".time-edit-wrap"))return "time-edit";
     if(mileageBlocksRerender()||devWatchEditing()||monthlyDaysEditing)return "editing";
     if(_appOverlayOpen())return "modal";                       // 修正理由の選択・確認・各種モーダル
@@ -15927,8 +15931,17 @@ function _appOnServerVersionChanged(tag){
   if(_appAutoDone||_appAutoPending||_appAutoSwWaitTimer)return;
   var ctl=('serviceWorker' in navigator)&&navigator.serviceWorker.controller;
   if(!ctl){appRequestAutoReload(tag);return;}
+  _appServerTagPending=tag;
   try{ctl.postMessage({type:'CHECK_APP_UPDATE'});}catch(e){}
-  _appAutoSwWaitTimer=setTimeout(function(){_appAutoSwWaitTimer=0;appRequestAutoReload(tag);},APP_AUTO_SW_WAIT_MS);
+  _appAutoSwWaitTimer=setTimeout(function(){_appAutoSwWaitTimer=0;_appServerTagPending="";appRequestAutoReload(tag);},APP_AUTO_SW_WAIT_MS);
+}
+// SW が「内容は最新です」と答えた（index.html を変えない push で ETag だけが変わった）。
+// ★ 期限後の再読み込みを取り消し、以後はこの目印を基準にする（同じ目印で確認と再読み込みを繰り返さない）。
+function _appOnSwUpToDate(){
+  if(!_appAutoSwWaitTimer)return;
+  clearTimeout(_appAutoSwWaitTimer);_appAutoSwWaitTimer=0;
+  if(_appServerTagPending)_appVersionTag=_appServerTagPending;
+  _appServerTagPending="";
 }
 // ===== APP-AUTO-UPDATE-END =====
 
@@ -15988,6 +16001,7 @@ function startAppVersionWatch(){
 if('serviceWorker' in navigator){
   navigator.serviceWorker.addEventListener('message',function(ev){
     var d=ev&&ev.data;
+    if(d&&d.type==='APP_UP_TO_DATE'){_appOnSwUpToDate();return;}
     if(!d||d.type!=='APP_UPDATE_AVAILABLE')return;
     _swSaysStale=true;
     if(typeof d.version==="string"&&d.version)_swStaleVersion=d.version;

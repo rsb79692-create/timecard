@@ -725,7 +725,7 @@ section("9. sw.js（app shell キャッシュ）");
   const puts = sw.match(/cache\.put\(\s*([A-Za-z_$][\w$]*)/g) || [];
   check("cache.put の対象は app shell と版マーカーだけ（勤怠データ・認証・API を保存しない）",
     puts.length === 2 && puts.some((x) => /SHELL_URL$/.test(x)) && puts.some((x) => /SERVED_KEY$/.test(x)));
-  check("版マーカーに入れるのは ETag だけ",
+  check("版マーカーに入れるのは版の文字列（内容のハッシュ／ETag）だけ",
     /markServed\(cache, shellVersionOf\(cached\)\)/.test(sw));
   check("通知を取りこぼしたタブへ再通知する（最後に返した版と比べる）",
     /if \(served && served !== shellVersionOf\(cached\)\) \{[\s\S]{0,140}?notifyClients/.test(sw));

@@ -1,7 +1,7 @@
 // ===== キャッシュ版 =====
 // ★ sw.js を変更したら必ず CACHE_NAME を上げる。activate で旧キャッシュを全削除するため、
 //   これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
-const CACHE_NAME = 'timecard-v15';
+const CACHE_NAME = 'timecard-v16';
 
 // app shell（index.html）のキャッシュキー。
 // ★ クエリ付き（?admin= / ?token= 等）でも必ずこの1つのキーへ正規化する。
@@ -63,9 +63,27 @@ function isShellRequest(url) {
 //   （2026-08-28 実測: gzip なら W/"…"、identity なら "…"）。印の有無で「更新された」と
 //   誤検知しないよう、比較の前に必ず取り除く。
 function normVersion(v) { return String(v || '').replace(/^W\//, ''); }
-function shellVersionOf(res) {
+// 配信側の目印（ETag / Last-Modified）。★ 本体を取り直すかどうかの目安にだけ使う。
+function etagOf(res) {
   if (!res) return '';
   return normVersion(res.headers.get('ETag') || res.headers.get('Last-Modified') || '');
+}
+// ★★ アプリの版＝index.html の**内容**のハッシュ（キャッシュへ入れるときに計算してヘッダへ残す）。
+//   GitHub Pages の ETag は「配信時刻-サイズ」で、index.html を変えない push（文書だけの変更等）でも
+//   毎回変わる（2026-09-30 実測）。ETag を版として扱うと、push のたびに「新しい版」になってしまう。
+//   ハッシュを計算できない環境だけ、従来どおり ETag を版として使う。
+const HASH_HEADER = 'X-TC-Shell-Hash';
+function shellVersionOf(res) {
+  if (!res) return '';
+  return res.headers.get(HASH_HEADER) || etagOf(res);
+}
+function sha256Hex(buf) {
+  try {
+    if (!self.crypto || !self.crypto.subtle) return Promise.resolve('');
+    return self.crypto.subtle.digest('SHA-256', buf).then(function(h) {
+      return Array.from(new Uint8Array(h)).map(function(b) { return (b < 16 ? '0' : '') + b.toString(16); }).join('');
+    }).catch(function() { return ''; });
+  } catch (e) { return Promise.resolve(''); }
 }
 // 「最後に画面へ返した版」。★ 通知を取りこぼしたタブが二度と更新に気づけなくなるのを防ぐ。
 //   キャッシュを入れ替えたあとに再確認しても、比較相手がキャッシュ（＝すでに新版）だと
@@ -95,37 +113,61 @@ function notifyClients(msg) {
 //   2回訪問した時点で合計転送量はプリフェッチしない場合と同じになり、初回直後からオフライン起動できる。
 //   プリフェッチでも 'no-cache'（＝必ず再検証）を使う。'default' や 'force-cache' だと、HTTP キャッシュに
 //   残っている古いエントリをそのまま焼き付ける余地がある。
+// ★ 保存するのは本体と Content-Type・ETag・Last-Modified・内容のハッシュだけ
+//   （本体は展開済みなので Content-Encoding / Content-Length を写してはならない）。
 function fetchAndStoreShell(cache, allowHttpCache) {
   return fetch(SHELL_URL, { cache: allowHttpCache ? 'no-cache' : 'no-store' }).then(function(res) {
     if (!res || !res.ok || res.status !== 200) return null;
-    return cache.put(SHELL_URL, res.clone()).then(function() { return res; });
+    return res.arrayBuffer().then(function(buf) {
+      return sha256Hex(buf).then(function(hash) {
+        const h = new Headers();
+        ['Content-Type', 'ETag', 'Last-Modified'].forEach(function(k) { const v = res.headers.get(k); if (v) h.set(k, v); });
+        if (hash) h.set(HASH_HEADER, 'sha256:' + hash);
+        const stored = new Response(buf, { status: 200, statusText: res.statusText || 'OK', headers: h });
+        return cache.put(SHELL_URL, stored.clone()).then(function() { return stored; });
+      });
+    });
   });
 }
 
 // キャッシュ済み app shell の版を確認し、変わっていたら入れ替えて画面へ通知する。
+// 戻り値: 'updated'（新しい版を通知した）／'same'（最新と確認できた）／'unknown'（通信失敗・非200等で判定できない）。
+// ★ 画面へ「最新です」と返してよいのは 'same' だけ。判定できないときに「最新」と扱うと、
+//   画面の予備の再読み込みが取り消され、古い画面が残る。
 // ★ まず HEAD で版だけ確認する。変わっていなければ本体（gzip 約231KB）を取りに行かない。
 //   これが「再訪問のたびに index.html を丸ごと再ダウンロードする」問題の実体的な解決になる。
 // ★ 版が取れなかった場合（ヘッダを返さない配信環境・プロキシ）は必ず GET する。
 //   「取れない＝更新なし」と扱うと古い画面が恒久的に残る。
+// ★ 同時に来た確認（タブ復帰で画面から2本届く等）は、実行中の1本にまとめる（本体の二重取得を避ける）。
+let _revalidating = null;
 function revalidateShell(cache, cached, servedVersion) {
-  const known = normVersion(servedVersion || shellVersionOf(cached));
+  if (_revalidating) return _revalidating;
+  _revalidating = _revalidateShell(cache, cached, servedVersion).then(function(r) {
+    _revalidating = null; return r;
+  }, function() { _revalidating = null; return 'unknown'; });
+  return _revalidating;
+}
+function _revalidateShell(cache, cached, servedVersion) {
+  const known = servedVersion || shellVersionOf(cached);
   const doUpdate = function() {
     return fetchAndStoreShell(cache).then(function(res) {
-      if (!res) return null;
-      if (known && shellVersionOf(res) === known) return null; // 実質同じ＝通知しない
+      if (!res) return 'unknown';
+      // ★ 内容が同じ＝通知しない。キャッシュは入れ直してあるので、次からは HEAD の目印も一致する。
+      if (known && shellVersionOf(res) === known) return 'same';
       // version＝キャッシュへ入れ直した版。画面は同じ版で二度と自動再読み込みしない（更新ループ防止）
-      return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(res) });
+      return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(res) }).then(function() { return 'updated'; });
     });
   };
-  if (!known) return doUpdate().catch(function() {});
+  if (!known) return doUpdate().catch(function() { return 'unknown'; });
   return fetch(SHELL_URL, { method: 'HEAD', cache: 'no-store' }).then(function(head) {
     // ★ HEAD が使えない配信経路（405 を返す中継プロキシ等）では、必ず本体を取り直して確認する。
-    //   ここで null を返すと、その端末は二度と更新に気づけない（古いクライアントが居座る）。
+    //   ここで「最新」と扱うと、その端末は二度と更新に気づけない（古いクライアントが居座る）。
     if (!head || !head.ok) return doUpdate();
-    const fresh = shellVersionOf(head);
-    if (fresh && fresh === known) return null; // 最新版を配信済み＝何もしない
+    // ★ HEAD の目印はキャッシュ済みの本体の目印と比べる（版＝内容のハッシュとは比べられない）
+    const fresh = etagOf(head);
+    if (fresh && fresh === etagOf(cached)) return 'same'; // 最新版を配信済み＝何もしない
     return doUpdate();
-  }).catch(function() {});
+  }).catch(function() { return 'unknown'; });
 }
 
 self.addEventListener('install', function(event) {
@@ -216,17 +258,24 @@ self.addEventListener('message', function(event) {
     return;
   }
   if (data.type !== 'CHECK_APP_UPDATE') return;
+  const src = event.source;
   event.waitUntil(
     caches.open(CACHE_NAME).then(function(cache) {
       return Promise.all([cache.match(SHELL_URL), readServed(cache)]).then(function(r) {
         const cached = r[0], served = r[1];
+        // キャッシュが空（SW 更新の直後）は答えない。画面は期限後に再読み込みでネットワークから取る。
         if (!cached) return null;
         // すでにキャッシュを入れ替えたのに、そのときの通知を画面が取りこぼしている場合がある。
         // 「いま動いている版（＝最後に返した版）」と比べ直し、違っていれば通信せず再通知する。
         if (served && served !== shellVersionOf(cached)) {
           return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(cached) });
         }
-        return revalidateShell(cache, cached, served);
+        return revalidateShell(cache, cached, served).then(function(result) {
+          // ★ 最新と確認できたときだけ依頼元へ返す。画面は配信側の目印（ETag）の変化だけで
+          //   再読み込みしない（index.html を変えない push で再読み込みさせない）。
+          //   判定できないとき（'unknown'）は答えない。画面は期限後の予備の再読み込みで回復する。
+          if (result === 'same' && src) { try { src.postMessage({ type: 'APP_UP_TO_DATE' }); } catch (e) {} }
+        });
       });
     }).catch(function() {})
   );
