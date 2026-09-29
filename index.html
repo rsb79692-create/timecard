@@ -2152,10 +2152,13 @@ function faceCamBrowserDeps(ui){
 // 小さなプレビューを出す（撮影されることを打刻前から分かるようにする）。打刻したらその映像から1枚描く。
 // ★ プレビューは画面に映すだけ。保存・送信・変換は一切しない（撮影と同じく Blob/dataURL を作らない）。
 // ★ render() は #app を作り直すため、プレビューの要素は1つを使い回し、描画のたびに枠
-//   （#facecam-slot。高さ固定なので映像が付いても打刻ボタンの位置は動かない）へ差し戻す。
+//   （#facecam-slot。高さは描画と同じタスクで faceCamFitPreview が幅から決めるので、打刻ボタンの位置は後から動かない）へ差し戻す。
 // ★ カメラを止める時: 打刻画面以外へ移った・打刻した（撮影の最後に止める）・タブが裏へ回った・
 //   ページを離れた・ホームへ戻った（faceCamClose）。カメラが使えなくても打刻はそのまま行える。
-var FACECAM_PV_H=84;   // 枠の高さ（映像 96x72 ＋余白）。打刻ボタンを下へ押し出しすぎない大きさ
+// 大きさ（2026-09-30 変更）: 横幅いっぱい（左右の余白は画面と同じ）、高さ＝幅×3/4（フロントカメラの 4:3 を引き伸ばさない）。
+// ★ 4つの打刻ボタンが最初の画面に入らない端末だけ高さを詰めるが、幅×0.56 より低くはしない（小さなサムネイルにしない）。
+//   本日の打刻履歴が画面の下へ出るのは正常（最初の画面に入れるのは時刻・カメラ・4つの打刻ボタン）。
+var FACECAM_PV_RATIO=0.75,FACECAM_PV_MIN_RATIO=0.56;
 // ★ 打刻画面を開いたまま操作が無ければカメラを一時停止する（共有端末で前を通る人を映し続けない・発熱を避ける）。
 //   画面に触れると再開する。一時停止中も打刻はでき、そのときは従来どおりその場でカメラを起動して撮る。
 var FACECAM_PV_IDLE_MS=90000;
@@ -2165,8 +2168,8 @@ function faceCamPreviewSlotHtml(canCapture){
     if(!canCapture)return "";   // 出勤・退勤を押せない（撮影しない）ときは出さない
     var s=(typeof staffList!=="undefined"&&staffName)?(staffList.find(function(x){return x&&x.name===staffName;})||null):null;
     if(!faceCamShouldCapture("clockIn",s,faceCamEnv()))return "";
-    // ★ 高さは「最低の高さ」。文字が増えても枠から溢れて打刻ボタンへ重ならない（中身は描画と同じタスクで入る）
-    return '<div id="facecam-slot" style="min-height:'+FACECAM_PV_H+'px;margin:0 0 10px;"></div>';
+    // 高さは faceCamFitPreview が幅から決める（中身と同じく描画と同じタスクで決まるので、ボタンは後から動かない）
+    return '<div id="facecam-slot" style="width:100%;aspect-ratio:4/3;margin:0 0 10px;"></div>';
   }catch(e){return "";}
 }
 function faceCamPreviewWanted(){
@@ -2174,72 +2177,55 @@ function faceCamPreviewWanted(){
   if(document.visibilityState==="hidden")return false;
   return !!document.getElementById("facecam-slot");
 }
+// ★ 映像だけを大きく映す。説明文は出さない（2026-09-30 ユーザー指示）。
+//   撮影時の開示（画面上端の「管理者設定により撮影」）は従来どおり出す（faceCamOpenOverlay）。
+//   カメラを使えないときだけ、映像の代わりに「使用できません／打刻はそのまま行えます」を出す（状態の案内）。
 function faceCamPreviewEl(){
   var el=document.createElement("div");
   el.id="facecam-preview";
-  el.style.cssText="display:flex;align-items:center;gap:10px;min-height:"+FACECAM_PV_H+"px;box-sizing:border-box;"
-    +"padding:6px 10px;background:#0f172a;border-radius:8px;color:#fff;text-align:left;";
-  var vw=document.createElement("div");
-  vw.id="facecam-pv-frame";
-  vw.style.cssText="width:96px;height:72px;flex:0 0 96px;border-radius:6px;overflow:hidden;background:#000;";
+  // 画面には出さない読み上げ用の名前（読み上げ機能の利用者にもカメラの起動と理由を伝える）
+  try{el.setAttribute("role","img");el.setAttribute("aria-label","インカメラ映像（管理者設定により撮影・保存と送信はしません）");}catch(e){}
+  el.style.cssText="position:relative;width:100%;height:100%;box-sizing:border-box;"
+    +"border-radius:10px;overflow:hidden;background:#000;";
   var v=document.createElement("video");
   try{v.muted=true;v.playsInline=true;v.autoplay=true;v.setAttribute("playsinline","");v.setAttribute("muted","");}catch(e){}
-  v.style.cssText="width:96px;height:72px;object-fit:cover;transform:scaleX(-1);display:block;";
-  vw.appendChild(v);
-  var txt=document.createElement("div");
-  txt.style.cssText="flex:1;min-width:0;";
+  // cover: 枠いっぱいに映し、縦横比は変えない（はみ出す上下・左右だけを切る。中央＝顔を残す）
+  v.style.cssText="width:100%;height:100%;object-fit:cover;object-position:50% 40%;transform:scaleX(-1);display:block;";
   var msg=document.createElement("div");
-  msg.style.cssText="font-size:.9rem;font-weight:700;line-height:1.35;";
-  var note=document.createElement("div");
-  note.style.cssText="margin-top:2px;font-size:.8rem;color:#cbd5e1;line-height:1.35;";
-  // ★ 「なぜ撮影されるか」を必ず出す（このフラグは管理者が設定する）。
-  // 語の途中で折り返さない（「管理者設定により」「撮影しています」で折り返す）
-  ["📷 管理者設定により","撮影しています"].forEach(function(t){
-    var sp=document.createElement("span");sp.style.cssText="display:inline-block;";sp.textContent=t;msg.appendChild(sp);
-  });
-  note.textContent="保存・送信はしません";
-  txt.appendChild(msg);txt.appendChild(note);
-  el.appendChild(vw);el.appendChild(txt);
-  return {el:el,video:v,msg:msg,note:note,frame:vw};
+  // 枠の内側だけに重ねる（画面に固定しない）。カメラを使えないときだけ表示する
+  msg.style.cssText="position:absolute;left:0;right:0;top:0;bottom:0;padding:0 12px;box-sizing:border-box;"
+    +"align-items:center;justify-content:center;color:#fff;font-size:1rem;font-weight:700;line-height:1.6;"
+    +"text-align:center;white-space:pre-line;display:none;";
+  el.appendChild(v);el.appendChild(msg);
+  return {el:el,video:v,msg:msg};
 }
 /**
- * 画面の高さが足りないとき（バナーや出勤先の選択が出ている等）だけプレビューを小さくし、
- * 4つの打刻ボタンがスクロールなしで押せるようにする。描画のたびに通常の大きさから測り直す。
+ * プレビューの高さを決める（描画のたびに測り直す）。高さ＝幅×3/4。
+ * 4つの打刻ボタンが最初の画面に入らないときだけ詰めるが、幅×0.56 より低くはしない。
  */
 function faceCamFitPreview(){
   try{
-    var el=document.getElementById("facecam-preview")||document.getElementById("facecam-idle");
     var slot=document.getElementById("facecam-slot");
     var g=document.querySelector(".grid2");
-    if(!el||!slot||!g)return;
-    var fr=document.getElementById("facecam-pv-frame"),v=fr&&fr.firstChild;
-    var txt=fr?el.lastChild:el,msg=txt.firstChild,note=txt.lastChild;
-    // 3段階: 通常（映像 96x72）→ 小（64x48）→ 1行（48x36。開示文だけを1行で出す）
-    var size=function(h,w,vh,mini){
-      slot.style.minHeight=h+"px";el.style.minHeight=h+"px";
-      el.style.padding=mini?"2px 8px":(fr?"6px 10px":"6px 12px");
-      if(fr){fr.style.width=w+"px";fr.style.height=vh+"px";fr.style.flex="0 0 "+w+"px";}
-      if(v&&v.style){v.style.width=w+"px";v.style.height=vh+"px";}
-      if(msg&&msg.style){msg.style.fontSize=mini?".75rem":".9rem";msg.style.whiteSpace=mini?"nowrap":"normal";}
-      // ★ 一時停止の表示（映像なし）は「打刻時は撮影します」を隠さない
-      if(note&&note.style&&note!==msg)note.style.display=(mini&&fr)?"none":"block";
-    };
-    var over=function(){return g.getBoundingClientRect().bottom+(window.scrollY||0)-(window.innerHeight||0);};
-    size(FACECAM_PV_H,96,72,false);
-    if(over()>0)size(60,64,48,false);
-    if(over()>0)size(40,48,36,true);
+    if(!slot||!g)return;
+    var w=slot.clientWidth||slot.getBoundingClientRect().width;
+    if(!w)return;
+    var h=Math.round(w*FACECAM_PV_RATIO),min=Math.round(w*FACECAM_PV_MIN_RATIO);
+    slot.style.aspectRatio="auto";slot.style.height=h+"px";
+    var over=g.getBoundingClientRect().bottom+(window.scrollY||0)-(window.innerHeight||0);
+    if(over>0)slot.style.height=Math.max(min,h-Math.ceil(over))+"px";
   }catch(e){}
 }
 function faceCamPreviewStart(){
   if(_faceCam.pv)return _faceCam.pv;
   var ui=faceCamPreviewEl();
-  var pv={el:ui.el,video:ui.video,msg:ui.msg,note:ui.note,stream:null,state:"starting"};
+  var pv={el:ui.el,video:ui.video,msg:ui.msg,stream:null,state:"starting"};
   _faceCam.pv=pv;
   var fail=function(){
     if(_faceCam.pv!==pv)return;
     pv.state="failed";
-    pv.msg.textContent="📷 カメラを使用できません";
-    pv.note.textContent="打刻はそのまま行えます";
+    pv.msg.textContent="📷 カメラを使用できません\n打刻はそのまま行えます";
+    pv.msg.style.display="flex";
   };
   try{
     navigator.mediaDevices.getUserMedia({
@@ -2289,13 +2275,13 @@ function faceCamPreviewIdleEl(){
   if(_faceCam.idleEl)return _faceCam.idleEl;
   var el=document.createElement("div");
   el.id="facecam-idle";
-  el.style.cssText="display:flex;flex-direction:column;justify-content:center;min-height:"+FACECAM_PV_H+"px;box-sizing:border-box;"
-    +"padding:6px 12px;background:#334155;border-radius:8px;color:#fff;text-align:left;";
+  el.style.cssText="display:flex;flex-direction:column;justify-content:center;align-items:center;width:100%;height:100%;"
+    +"box-sizing:border-box;padding:12px;background:#334155;border-radius:10px;color:#fff;text-align:center;overflow:hidden;";
   var a=document.createElement("div");
-  a.style.cssText="font-size:.9rem;font-weight:700;line-height:1.35;";
+  a.style.cssText="font-size:1rem;font-weight:700;line-height:1.5;";
   a.textContent="📷 カメラを一時停止しています";
   var b=document.createElement("div");
-  b.style.cssText="margin-top:2px;font-size:.8rem;color:#e2e8f0;line-height:1.35;";
+  b.style.cssText="margin-top:4px;font-size:.9rem;color:#e2e8f0;line-height:1.5;";
   b.textContent="触れると再開・打刻時は撮影します";
   el.appendChild(a);el.appendChild(b);
   _faceCam.idleEl=el;
@@ -2339,6 +2325,8 @@ try{
     else{_faceCamLastInput=Date.now();faceCamSyncPreview();}   // 戻った時点から放置の時間を数え直す
   });
   window.addEventListener("pagehide",function(){faceCamPreviewStop();});
+  // 画面の回転・幅の変更でプレビューの高さを測り直す（高さは幅から決めているため）
+  window.addEventListener("resize",function(){faceCamFitPreview();});
 }catch(e){}
 
 /** 打刻画面のプレビューの映像で撮るための deps（新たにカメラを起動しない）。 */

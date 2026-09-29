@@ -585,6 +585,9 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
     const c = makePv({ deny: true }); const rec = c.__rec2;
     c.faceCamSyncPreview(); await flush();
     check("カメラを拒否されたらプレビューは失敗表示にする", c._faceCam.pv && c._faceCam.pv.state === "failed");
+    const m = c._faceCam.pv && c._faceCam.pv.msg;
+    check("失敗時は枠の中に「使用できません／打刻はそのまま行えます」を見える状態で出す",
+      !!m && m.style.display === "flex" && /使用できません/.test(m.textContent) && /打刻はそのまま行えます/.test(m.textContent));
     let threw = false;
     try { c.punchMsg = "出勤"; c.__slotOn = false; c.faceCamSyncPreview(); c.faceCamAfterPunch("clockIn"); } catch (e) { threw = true; }
     await flush(); await flush();
@@ -681,13 +684,44 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
     const iSlot = html.indexOf("+faceCamPreviewSlotHtml(ci||co)");
     const iGrid = html.indexOf("+'<div class=\"grid2\">'", iSlot);
     check("プレビューの枠は打刻ボタン（grid2）の直前＝上に置く（ボタンへ重ねない）", iSlot > 0 && iGrid > iSlot && iGrid - iSlot < 200);
-    check("画面が短いときはプレビューを小さくして打刻ボタンを画面内に収める（通常→小→1行の3段階・描画のたびに測り直す）",
-      /faceCamFitPreview\(\);/.test(CODE_NC) && /size\(FACECAM_PV_H,96,72,false\)/.test(CODE_NC)
-      && /size\(60,64,48,false\)/.test(CODE_NC) && /size\(40,48,36,true\)/.test(CODE_NC));
-    check("プレビューの枠は最低の高さを確保する（中身が増えたら枠が伸び、ボタンへ重ならない）",
-      /id="facecam-slot" style="min-height:'\+FACECAM_PV_H\+'px;/.test(html) && !/id="facecam-slot" style="height:/.test(html));
-    check("プレビューにも「管理者設定により撮影しています」と保存・送信しない旨を出す",
-      /\["📷 管理者設定により","撮影しています"\]/.test(CODE_NC) && /保存・送信はしません/.test(CODE_NC));
+    // ── 大きなプレビュー（2026-09-30 変更。横幅いっぱい・高さ＝幅×3/4・説明文なし）──
+    check("描画のたびにプレビューの大きさを決め直す", /faceCamFitPreview\(\);/.test(CODE_NC));
+    check("プレビューは横幅いっぱい・4:3（小さなサムネイルの大きさを持たない）",
+      /id="facecam-slot" style="width:100%;aspect-ratio:4\/3;/.test(html)
+      && /FACECAM_PV_RATIO=0\.75/.test(CODE_NC) && !/96px;height:72px|64,48|48,36/.test(CODE_NC));
+    check("ボタンが入らないときだけ高さを詰め、幅×0.56 より低くしない",
+      /FACECAM_PV_MIN_RATIO=0\.56/.test(CODE_NC) && /Math\.max\(min,h-Math\.ceil\(over\)\)/.test(CODE_NC));
+    const iEl = CODE_NC.indexOf("function faceCamPreviewEl(");
+    const elSrc = CODE_NC.slice(iEl, CODE_NC.indexOf("\nfunction ", iEl + 10));
+    check("プレビューの枠には説明文を出さない（映像だけ。カメラを使えないときの案内を除く）",
+      // 画面に出る文字だけを見る（読み上げ用の aria-label は画面に出ないので除く）
+      iEl > 0 && !/管理者設定|保存・送信|撮影しています/.test(elSrc.replace(/el\.setAttribute\("aria-label","[^"]*"\)/, ""))
+      && /object-fit:cover/.test(elSrc));
+    check("画面に出す説明文は無くても、読み上げ用の名前でカメラと理由を伝える（role=img・aria-label）",
+      /setAttribute\("role","img"\)/.test(elSrc) && /aria-label","インカメラ映像（管理者設定により撮影/.test(elSrc));
+    check("撮影時の開示（画面上端「管理者設定により撮影」）は残す",
+      /FACECAM_STRIP_BEFORE="📷 管理者設定により撮影します/.test(CODE_NC) && /strip\.textContent=FACECAM_STRIP_BEFORE/.test(CODE_NC));
+  }
+  {
+    // 大きさの決め方を実際に動かす（幅 317px＝360px 幅の画面の内側）
+    const mk = (btnBottom, vh) => {
+      const slot = { id: "facecam-slot", clientWidth: 317, style: {}, getBoundingClientRect: () => ({ width: 317 }) };
+      const grid = { getBoundingClientRect: () => ({ bottom: btnBottom(slot) }) };
+      const c = makeCtx({ globals: {
+        document: { createElement: () => mkElement(), body: mkElement(), getElementById: (id) => id === "facecam-slot" ? slot : null, querySelector: (s) => s === ".grid2" ? grid : null, addEventListener() {} },
+        window: { innerHeight: vh, scrollY: 0, addEventListener() {} }
+      } });
+      c.faceCamFitPreview();
+      return parseInt(slot.style.height, 10);
+    };
+    // 余裕がある: 幅×3/4
+    check("余裕があれば高さ＝幅×3/4（317→238px）", mk((s) => 214 + parseInt(s.style.height || 0, 10) + 206, 740) === 238);
+    // 少し足りない: 足りない分だけ詰める
+    const h2 = mk((s) => 214 + parseInt(s.style.height || 0, 10) + 206, 650);
+    check("4つのボタンが入らないときは足りない分だけ詰める（650px の画面で 230px）", h2 === 230, "h=" + h2);
+    // 大きく足りない（バナー等）: 幅×0.56 で止め、それ以上は小さくしない
+    const h3 = mk((s) => 414 + parseInt(s.style.height || 0, 10) + 206, 650);
+    check("大きく足りなくても幅×0.56（178px）より小さくしない（打刻履歴等は下へ出てよい）", h3 === 178, "h=" + h3);
   }
 
   // ===== 結果 =====
