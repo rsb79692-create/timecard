@@ -58,6 +58,7 @@ Claude Code が**常時**読む指示ファイルである。置いてよいの�
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |
 | 施設端末の持ち出し検知 | [`device-watch.md`](docs/features/device-watch.md) | `node scripts/test-device-watch.js` |
 | マルチテナント（会社間分離） | [`multitenant.md`](docs/features/multitenant.md) | `node scripts/test-multitenant.js`（Rules 変更時は `tests/rules`、画面変更時は `tests/visual/*`） |
+| CSV一括登録（施設・従業員） | [`csv-import.md`](docs/features/csv-import.md) | `node scripts/test-csv-import.js` |
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
 
 テストはすべて依存パッケージなし・送信なし・本番データ非アクセス。**テスト件数は増減するため固定値を規範にしない。**
@@ -102,6 +103,9 @@ Claude Code が**常時**読む指示ファイルである。置いてよいの�
 - 施設ごとの判定時刻の正本は `scripts/morning-check.js` の `LATE_CHECK_FACILITIES`（コード側）。**施設マスタ側に持たせない。** `morning-check.js` と `index.html` の同名 `DEFAULT_FACILITIES` を同期しない。
 - `CHECK_HOURS` に時刻を足すときは `morning-check.yml` の cron も足す。`CHECK_HOUR` 不正時は既定へ倒さず `exit 1`。判定時刻を実行時の現在時刻から決めない。
 - 通知の重複抑止記録は `FIREBASE_DATABASE_URL` のオリジン直下 `/morningNotify`（`/honomi` 配下にしない）。未確定の送信を本文と retry key を作り直して送らない。ワークフローへ `concurrency:` を足さない。cron と外部スケジューラのどちらも外さない。
+
+**CSV一括登録（`csv-import.md`）**
+- 従業員の本人の識別子は氏名。登録済みと同じ氏名は上書きせずスキップし、表記ゆれ（施設名・氏名）を推測で紐付けない。書き込みは登録直前の再取得・再検証のうえ1回の PATCH（既存行を丸ごと上書きしない）。
 
 **顔撮影（`face-photo.md`）**
 - `facePhoto === true` のときだけ ON。写真は保存・送信しない（fetch / storage / Blob / dataURL を使わない）。撮影は打刻を止めず await しない。開示は画面上端の固定表示で行い、「管理者設定により撮影しています」を外さない。ON/OFF をサーバ側へ移す場合も、打刻のたびに問い合わせる形にしない。

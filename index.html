@@ -4142,7 +4142,9 @@ var facilityChangeTo=null; // 施設変更モーダルで選択された移動�
 var _fcModalOpen=false;    // 施設変更モーダルの多重表示防止
 var masterDepts=loadData("tc_master_depts",[]);
 var masterLocs=masterFacilities.map(function(f){return f.name;});
-if(!masterDepts.length){masterDepts=["調理","調理補助","事務","介護","その他"];}
+// 部門マスタが未保存のときの既定値（CSV一括登録の登録直前の照合でも同じ値を使う）
+var DEF_DEPTS=["調理","調理補助","事務","介護","その他"];
+if(!masterDepts.length){masterDepts=DEF_DEPTS.slice();}
 var KANA_ROWS=["あ行","か行","さ行","た行","な行","は行","ま行","や行","ら行","わ行","その他"];
 function getKanaRow(s){
   var str=(s.yomi||s.name||"").replace(/[\s　]/g,"");
@@ -8081,6 +8083,10 @@ function _renderInner(){
     if(adminTab==="mileage"){
       tc=mileageAdminCardHtml();
     }
+    // CSV一括登録（施設・従業員）。登録は管理者のみ（csvImpCanWrite）。
+    if(adminTab==="csvImport"){
+      tc=csvImpHtml();
+    }
 
     var _unapv=getUnapprovedSummary();
     updateAppBadge(counts.total);
@@ -8133,6 +8139,7 @@ function _renderInner(){
       +'<button class="tab-btn '+(adminTab==="meals"?"tab-on":"tab-off")+'" onclick="setTab(\'meals\')">賄い一覧</button>'
       // 会社ごとの機能フラグ（TENANT_CONFIGS.features）。無効な会社ではタブ自体を出さない（サーバも拒否する）
       +(tenantFeature("mileage")?'<button class="tab-btn '+(adminTab==="mileage"?"tab-on":"tab-off")+'" onclick="setTab(\'mileage\')">移動距離</button>':'')
+      +(demoMode?'':'<button class="tab-btn '+(adminTab==="csvImport"?"tab-on":"tab-off")+'" onclick="setTab(\'csvImport\')">CSV一括登録</button>')
       +'</div>'
       +'</div>'+tc;
 
@@ -10418,15 +10425,514 @@ function saveFacilities(){
     showAlert("施設マスタを取得できていないため保存できません。再読み込みしてからお試しください。");
     return;
   }
+  applyFacilitiesLocal();
+  authFetch(FB_URL+"/master/locations.json",{
+    method:"PUT",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify(masterFacilities)
+  }).catch(function(e){console.error("facilities save error",e);});
+}
+// masterFacilities を変えたあとの端末側の反映（保存・派生値の再計算）。サーバへは書かない。
+function applyFacilitiesLocal(){
   _lsSet("tc_master_facilities",JSON.stringify(masterFacilities));
   masterLocs=masterFacilities.map(function(f){return f.name;});
   VALID_TOKENS=buildValidTokens();
   tokenValid=isAllToken||Object.prototype.hasOwnProperty.call(VALID_TOKENS,effectiveToken);
   facilityName=VALID_TOKENS[effectiveToken]||"";
-  authFetch(FB_URL+"/master/locations.json",{
-    method:"PUT",headers:{"Content-Type":"application/json"},
-    body:JSON.stringify(masterFacilities)
-  }).catch(function(e){console.error("facilities save error",e);});
+}
+
+// ===== CSV一括登録（施設・従業員）: 純粋関数 BEGIN =====
+// ★ scripts/test-csv-import.js がこの BEGIN〜END を抜き出して検査する。DOM・通信・グローバル状態に触れない。
+// ★ 本人の識別子は氏名（打刻・承認・PINが氏名で紐付く）。社員番号は自由項目で、空欄・重複を許す。
+//   CSV には同一人物を確実に特定できるIDが無いため、登録済みと同じ氏名の行は上書きせずスキップする。
+var CSVIMP=(function(){
+  var MAX_BYTES=1024*1024,MAX_ROWS=3000;
+  var SPEC={
+    fac:{label:"施設",cols:["施設コード","施設名","正式名称","郵便番号","住所","電話番号","状態"]},
+    staff:{label:"従業員",cols:["社員コード","姓","名","ふりがな","在籍状態","所属部署","役職","施設名","雇用区分","入社日","退職日"]}
+  };
+  var LONG_COLS={"住所":200,"正式名称":150};
+  var EMP_TYPES={"正社員":"正社員","社員":"正社員","パート":"パート","アルバイト":"アルバイト","契約社員":"契約社員"};
+  var STATUSES=["在籍","休職","退職"];
+  // 施設CSVのうち、施設マスタへ補足情報として保存する列（施設名・URLトークンは別扱い）
+  var FAC_EXTRA=[["施設コード","code"],["正式名称","formalName"],["郵便番号","postalCode"],["住所","address"],["電話番号","tel"]];
+  var FORMULA_RE=/^[=+\-@]/;               // 表計算ソフトで数式として動く先頭文字（CSV injection）
+  var CTRL_RE=/[\u0000-\u001f\u007f]/;
+  var KEY_BAD_RE=/[.#$\[\]\/]/;            // 承認キー・索引のキーに使われるため、Firebase のキーに使えない文字を拒否
+  function has(o,k){return Object.prototype.hasOwnProperty.call(o,k);}
+  // 照合用の表。★ 氏名・施設名が "constructor" 等でも組み込みのプロパティと取り違えないよう、プロトタイプ無しで作る
+  function D(){return Object.create(null);}
+  function p2(n){return (n<10?"0":"")+n;}
+  function norm(s){return String(s==null?"":s).normalize("NFKC").replace(/\s+/g,"").toLowerCase();}
+  function isObj(x){return !!x&&typeof x==="object"&&!Array.isArray(x);}
+
+  // バイト列 → 文字列。UTF-8（BOM有無とも）だけを受け付ける。Shift_JIS 等は文字化けさせずに拒否する。
+  function decode(bytes){
+    var u8=(bytes instanceof Uint8Array)?bytes:new Uint8Array(bytes);
+    if(u8.length>MAX_BYTES)return {ok:false,error:"ファイルが大きすぎます（1MBまで）"};
+    var text;
+    try{text=new TextDecoder("utf-8",{fatal:true}).decode(u8);}
+    catch(e){return {ok:false,error:"UTF-8 の CSV として読み込めません。Excel で「CSV UTF-8（コンマ区切り）」を選んで保存し直してください"};}
+    if(text.charCodeAt(0)===0xFEFF)text=text.slice(1);
+    return {ok:true,text:text};
+  }
+  // RFC 4180 相当の CSV 解析（引用符・引用符内のコンマと改行・"" のエスケープ）。line は行の開始位置（1始まり）。
+  function parse(text){
+    var rows=[],cells=[],cur="",inQ=false,line=1,rowLine=1,i=0,n=text.length;
+    while(i<n){
+      var c=text[i];
+      if(inQ){
+        if(c==='"'){if(text[i+1]==='"'){cur+='"';i+=2;continue;}inQ=false;i++;continue;}
+        if(c==="\n"||(c==="\r"&&text[i+1]!=="\n"))line++;
+        cur+=c;i++;continue;
+      }
+      if(c==='"'&&cur===""){inQ=true;i++;continue;}
+      if(c===","){cells.push(cur);cur="";i++;continue;}
+      if(c==="\r"||c==="\n"){
+        cells.push(cur);rows.push({line:rowLine,cells:cells});cells=[];cur="";
+        if(c==="\r"&&text[i+1]==="\n")i++;
+        i++;line++;rowLine=line;continue;
+      }
+      cur+=c;i++;
+    }
+    if(inQ)return {ok:false,error:rowLine+"行目：引用符（\"）が閉じられていません"};
+    if(cur!==""||cells.length){cells.push(cur);rows.push({line:rowLine,cells:cells});}
+    return {ok:true,rows:rows};
+  }
+  function isBlank(cells){return cells.every(function(c){return String(c).trim()==="";});}
+  // 見出しの検査と、空行を除いた本体の行（列名 → 値）への変換
+  function prepare(kind,text){
+    var spec=SPEC[kind];if(!spec)return {ok:false,error:"種類が不正です"};
+    var p=parse(text);if(!p.ok)return p;
+    var rows=p.rows;
+    if(!rows.length||isBlank(rows[0].cells))return {ok:false,error:"1行目に見出し（列名）がありません（"+spec.label+"CSVの列："+spec.cols.join("、")+"）"};
+    var head=rows[0].cells.map(function(h){return String(h).replace(/^﻿/,"").trim();});
+    var idx=D(),dup=[],extra=[];
+    head.forEach(function(h,i){
+      if(h==="")return;
+      if(has(idx,h)){if(dup.indexOf(h)<0)dup.push(h);return;}
+      idx[h]=i;if(spec.cols.indexOf(h)<0)extra.push(h);
+    });
+    if(dup.length)return {ok:false,error:"見出しに同じ列名が重複しています："+dup.join("、")};
+    var missing=spec.cols.filter(function(c){return !has(idx,c);});
+    if(missing.length)return {ok:false,error:"列が不足しています："+missing.join("、")+"（"+spec.label+"CSVの列："+spec.cols.join("、")+"）"};
+    var body=[],fileWarnings=[];
+    if(extra.length)fileWarnings.push("想定外の列は取り込みません："+extra.join("、"));
+    for(var r=1;r<rows.length;r++){
+      var cells=rows[r].cells;
+      if(isBlank(cells))continue; // Excel が出力する空行は無視する（エラーにしない）
+      if(body.length>=MAX_ROWS)return {ok:false,error:"行数が多すぎます（"+MAX_ROWS+"行まで）"};
+      var v={},shape="";
+      spec.cols.forEach(function(c){var x=cells[idx[c]];v[c]=x===undefined?"":String(x).trim();});
+      if(cells.length<head.length)shape="列の数が見出しより少なくなっています（途中で列が欠けていないか確認してください）";
+      else if(cells.slice(head.length).some(function(x){return String(x).trim()!=="";}))shape="見出しの無い列に値が入っています";
+      body.push({line:rows[r].line,v:v,shape:shape});
+    }
+    if(!body.length)return {ok:false,error:"登録するデータがありません（見出し以外が空です）"};
+    return {ok:true,rows:body,fileWarnings:fileWarnings};
+  }
+  function cellErrors(v,cols){
+    var out=[];
+    cols.forEach(function(c){
+      var s=v[c];if(!s)return;
+      if(CTRL_RE.test(s))out.push(c+"に改行などの制御文字が含まれています");
+      else if(FORMULA_RE.test(s))out.push(c+"の先頭に「= + - @」は使えません（表計算ソフトで数式として動くおそれがあるため）");
+      var max=LONG_COLS[c]||100;
+      if(s.length>max)out.push(c+"が長すぎます（"+max+"文字まで）");
+    });
+    return out;
+  }
+  // "YYYY-MM-DD" / "YYYY/MM/DD"（月日は1桁可）。実在しない日付は null。
+  function parseDate(s){
+    var m=/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})$/.exec(String(s||""));if(!m)return null;
+    var y=+m[1],mo=+m[2],d=+m[3];
+    var dt=new Date(Date.UTC(2000,mo-1,d));dt.setUTCFullYear(y);
+    if(dt.getUTCFullYear()!==y||dt.getUTCMonth()!==mo-1||dt.getUTCDate()!==d)return null;
+    return {y:y,ymd:y+"-"+p2(mo)+"-"+p2(d),store:y+"/"+p2(mo)+"/"+p2(d)};
+  }
+  // 不自然な日付（補正はしない。警告だけ出す）: 1950年より前、または今日から1年より先
+  function unnatural(d,todayYmd){
+    var lim=String(todayYmd||"");
+    if(/^\d{4}-\d{2}-\d{2}$/.test(lim))lim=(+lim.slice(0,4)+1)+lim.slice(4);else lim="9999-12-31";
+    return d.y<1950||d.ymd>lim;
+  }
+  // RTDB から取得した値（配列・数値キーのオブジェクト・null）を {keys,list,next} へ。想定外の形は ok:false。
+  function normalizeList(raw){
+    if(raw==null)return {ok:true,keys:[],list:[],next:0};
+    var keys;
+    if(Array.isArray(raw))keys=raw.map(function(_,i){return String(i);});
+    else if(isObj(raw)){
+      keys=Object.keys(raw);
+      if(!keys.every(function(k){return /^(0|[1-9]\d*)$/.test(k);}))return {ok:false};
+      keys.sort(function(a,b){return a-b;});
+    } else return {ok:false};
+    var next=keys.length?+keys[keys.length-1]+1:0;
+    var ks=[],list=[];
+    keys.forEach(function(k){var x=raw[k];if(isObj(x)){ks.push(k);list.push(x);}});
+    return {ok:true,keys:ks,list:list,next:next};
+  }
+  function newItem(row,name){return {line:row.line,action:"add",name:name,msgs:[],rec:null,changes:null,idx:-1};}
+  function add(it,lv,t){it.msgs.push({lv:lv,t:t});}
+  function hasErr(it){return it.msgs.some(function(m){return m.lv==="error";});}
+  function finish(items,fileWarnings){
+    var c={add:0,update:0,skip:0,warn:0,error:0};
+    items.forEach(function(it){
+      if(hasErr(it)){it.action="error";it.rec=null;it.changes=null;}
+      c[it.action]++;
+      if(it.action!=="error"&&it.msgs.some(function(m){return m.lv==="warn";}))c.warn++;
+    });
+    return {items:items,counts:c,fileWarnings:(fileWarnings||[]).slice()};
+  }
+
+  function validateFacilities(rows,existing,fileWarnings){
+    var ex=Array.isArray(existing)?existing:[];
+    var byName=D(),byNorm=D();
+    ex.forEach(function(f,i){if(isObj(f)&&typeof f.name==="string"){byName[f.name]=i;byNorm[norm(f.name)]=f.name;}});
+    var seen=D(),seenNorm=D(),seenCode=D();
+    var items=rows.map(function(row){
+      var v=row.v,name=v["施設名"],it=newItem(row,name||"（施設名なし）");
+      if(row.shape)add(it,"error",row.shape);
+      cellErrors(v,SPEC.fac.cols).forEach(function(e){add(it,"error",e);});
+      if(!name)add(it,"error","施設名が空欄です");
+      else if(KEY_BAD_RE.test(name))add(it,"error","施設名に使えない文字（. # $ [ ] /）が含まれています");
+      var st=v["状態"];
+      if(st&&st!=="有効"&&st!=="無効")add(it,"error","状態は「有効」か「無効」で入力してください（入力値：「"+st+"」）");
+      if(v["郵便番号"]&&!/^\d{3}[-−ー]?\d{4}$/.test(v["郵便番号"].normalize("NFKC")))add(it,"warn","郵便番号の形式が一般的ではありません（例：123-4567）");
+      if(v["電話番号"]&&!/^[0-9()\-−ー ]+$/.test(v["電話番号"].normalize("NFKC")))add(it,"warn","電話番号に数字・ハイフン以外が含まれています");
+      if(name){
+        if(has(seen,name))add(it,"error",seen[name]+"行目と施設名が重複しています");
+        else if(has(seenNorm,norm(name)))add(it,"error",seenNorm[norm(name)]+"行目の施設名と空白・全角半角だけが違います");
+        else{seen[name]=row.line;seenNorm[norm(name)]=row.line;}
+      }
+      var code=v["施設コード"];
+      if(code){if(has(seenCode,code))add(it,"warn",seenCode[code]+"行目と施設コードが重複しています");else seenCode[code]=row.line;}
+      if(hasErr(it))return it;
+      if(st==="無効"){it.action="skip";add(it,"info",has(byName,name)?"状態が「無効」ですが、登録済みの施設は変更しません（削除はマスター管理で行ってください）":"状態が「無効」のため登録しません");return it;}
+      var extras={};
+      FAC_EXTRA.forEach(function(p){if(v[p[0]])extras[p[1]]=v[p[0]];});
+      if(has(byName,name)){
+        var i=byName[name],cur=ex[i],ch={};
+        Object.keys(extras).forEach(function(k){
+          var from=cur[k]==null?"":String(cur[k]);
+          if(from!==extras[k])ch[k]={from:from,to:extras[k]};
+        });
+        if(Object.keys(ch).length){
+          it.action="update";it.idx=i;it.changes=ch;
+          add(it,"info","登録済みの施設です。CSVで空欄でない項目だけを更新します（施設名・打刻URLは変えません）");
+        } else {it.action="skip";add(it,"info","登録済みで内容も同じため、変更しません");}
+        return it;
+      }
+      if(has(byNorm,norm(name))){
+        add(it,"error","登録済みの施設「"+byNorm[norm(name)]+"」と空白・全角半角だけが違います。同じ施設ならCSVの施設名を揃え、別の施設なら名前を見直してください");
+        return it;
+      }
+      it.action="add";it.rec=Object.assign({name:name},extras);
+      return it;
+    });
+    return finish(items,fileWarnings);
+  }
+
+  function validateStaff(rows,existing,facilities,depts,todayYmd,fileWarnings){
+    var ex=(Array.isArray(existing)?existing:[]).filter(isObj);
+    var exByName=D(),exByNorm=D(),exIds=D();
+    ex.forEach(function(s){
+      if(typeof s.name==="string"){exByName[s.name]=true;exByNorm[norm(s.name)]=s.name;}
+      var id=String(s.employeeId||"").trim();
+      if(id){(exIds[id]=exIds[id]||[]).push(String(s.name||""));}
+    });
+    var facNames=D(),facNorm=D();
+    (Array.isArray(facilities)?facilities:[]).forEach(function(f){if(isObj(f)&&typeof f.name==="string"){facNames[f.name]=true;facNorm[norm(f.name)]=f.name;}});
+    var deptSet=D();
+    (Array.isArray(depts)?depts:[]).forEach(function(d){if(typeof d==="string")deptSet[d]=true;});
+    var nameLines=D(),normLines=D(),idLines=D();
+    rows.forEach(function(row){
+      var n=row.v["姓"]+row.v["名"];
+      if(row.v["姓"]){(nameLines[n]=nameLines[n]||[]).push(row.line);(normLines[norm(n)]=normLines[norm(n)]||[]).push(row.line);}
+      var id=row.v["社員コード"];if(id)(idLines[id]=idLines[id]||[]).push(row.line);
+    });
+    // 重複の相手の行番号。★ 同じ値が大量にあっても文言が膨らまないよう、先頭5件だけを書く。
+    function others(arr,line){return (arr||[]).filter(function(l){return l!==line;});}
+    function fmtL(o){return o.slice(0,5).join("・")+"行目"+(o.length>5?"（ほか"+(o.length-5)+"行）":"");}
+    var items=rows.map(function(row){
+      var v=row.v,ln=v["姓"],fn=v["名"],name=ln+fn;
+      var it=newItem(row,name||"（氏名なし）");
+      if(row.shape)add(it,"error",row.shape);
+      cellErrors(v,SPEC.staff.cols).forEach(function(e){add(it,"error",e);});
+      if(!ln)add(it,"error","姓が空欄です");
+      else if(KEY_BAD_RE.test(name))add(it,"error","氏名に使えない文字（. # $ [ ] /）が含まれています");
+      else{
+        var dn=others(nameLines[name],row.line);
+        if(dn.length)add(it,"error",fmtL(dn)+"と同じ氏名です（Timecard は氏名で本人を区別するため、同じ氏名は登録できません）");
+        else{
+          var dnn=others(normLines[norm(name)],row.line);
+          if(dnn.length)add(it,"error",fmtL(dnn)+"の氏名と空白・全角半角だけが違います。同一人物か確認してください");
+        }
+      }
+      var yomi=v["ふりがな"],yl="",yf="";
+      if(!yomi)add(it,"error","ふりがなが空欄です");
+      else{
+        var parts=yomi.split(/\s+/).filter(Boolean);
+        yl=parts[0]||"";yf=parts.slice(1).join("");
+        if(parts.length<2)add(it,"info","ふりがなに空白が無いため、すべて「姓よみ」に入れます");
+      }
+      var st=v["在籍状態"];
+      if(!st)add(it,"error","在籍状態が空欄です（在籍・休職・退職のいずれか）");
+      else if(STATUSES.indexOf(st)<0)add(it,"error","在籍状態「"+st+"」は使えません（在籍・休職・退職のいずれか）");
+      var hd=null,rd=null;
+      if(v["入社日"]){
+        hd=parseDate(v["入社日"]);
+        if(!hd)add(it,"error","入社日「"+v["入社日"]+"」の形式が正しくありません（例：2024-04-01）");
+        else if(unnatural(hd,todayYmd))add(it,"warn","入社日「"+hd.ymd+"」は不自然な日付です（有給の付与計算に使われます）。このまま登録するか、CSVを修正してください");
+      }
+      if(v["退職日"]){
+        rd=parseDate(v["退職日"]);
+        if(!rd)add(it,"error","退職日「"+v["退職日"]+"」の形式が正しくありません（例：2024-04-01）");
+        else if(unnatural(rd,todayYmd))add(it,"warn","退職日「"+rd.ymd+"」は不自然な日付です。このまま登録するか、CSVを修正してください");
+      }
+      if(st==="退職"&&!v["退職日"])add(it,"error","在籍状態が「退職」のときは退職日が必要です");
+      if(st&&st!=="退職"&&v["退職日"])add(it,"error","在籍状態が「"+st+"」なのに退職日が入っています（退職日は「退職」のときだけ入力してください）");
+      if(hd&&rd&&rd.ymd<hd.ymd)add(it,"warn","退職日が入社日より前です");
+      if(v["所属部署"]&&!deptSet[v["所属部署"]])add(it,"error","所属部署「"+v["所属部署"]+"」がマスター管理の部門に登録されていません");
+      if(v["役職"])add(it,"warn","役職（「"+v["役職"]+"」）は Timecard に項目が無いため取り込みません");
+      var loc=v["施設名"];
+      if(!loc)add(it,"warn","施設名が空欄のため、拠点は未設定で登録します");
+      else if(!facNames[loc]){
+        var near=facNorm[norm(loc)];
+        add(it,"error","施設「"+loc+"」が見つかりません"+(near?"（表記の近い「"+near+"」がありますが、自動では紐付けません）":"（先に施設CSVを登録してください）"));
+      }
+      var et=v["雇用区分"],etv="";
+      if(et){
+        if(!has(EMP_TYPES,et))add(it,"error","雇用区分「"+et+"」は使えません（正社員・社員・パート・アルバイト・契約社員）");
+        else{etv=EMP_TYPES[et];if(etv!==et)add(it,"info","雇用区分「"+et+"」は「"+etv+"」として登録します");}
+      }
+      var id=v["社員コード"];
+      if(!id)add(it,"warn","社員コードが空欄です（あとでスタッフ管理画面で設定できます）");
+      else{
+        var di=others(idLines[id],row.line);
+        if(di.length)add(it,"warn","社員コード「"+id+"」が"+fmtL(di)+"と重複しています（登録はできます。あとでスタッフ管理画面で修正してください）");
+        if(!/^[A-Za-z0-9_-]+$/.test(id))add(it,"warn","社員コードに英数字・ハイフン・アンダースコア以外が含まれています（月別出勤日数などで使えません）");
+      }
+      if(hasErr(it))return it;
+      // 既存スタッフとの照合。★ 同じ氏名は上書きしない（CSVに本人を確実に特定するIDが無いため）
+      if(exByName[name]){
+        it.action="skip";
+        add(it,"info","同じ氏名のスタッフが登録済みのため取り込みません（上書きしません。変更はスタッフ管理画面で行ってください）");
+        return it;
+      }
+      if(has(exByNorm,norm(name))){
+        add(it,"error","登録済みのスタッフ「"+exByNorm[norm(name)]+"」と空白・全角半角だけが違います。同一人物なら取り込み不要、別人なら氏名を見直してください");
+        return it;
+      }
+      if(id&&exIds[id])add(it,"warn","社員コード「"+id+"」は登録済みのスタッフ（"+exIds[id].slice(0,5).join("・")+(exIds[id].length>5?" ほか"+(exIds[id].length-5)+"名":"")+"）と重複しています");
+      it.action="add";
+      it.rec={name:name,lastName:ln,firstName:fn,yomiLast:yl,yomiFirst:yf,yomi:yl+yf,employeeId:id,
+        hireDate:hd?hd.store:"",location:loc,dept:v["所属部署"],employmentType:etv,role:"",status:st,
+        canSupportWork:false,mealRequired:false};
+      if(st==="退職")it.rec.retireDate=rd.store;
+      return it;
+    });
+    return finish(items,fileWarnings);
+  }
+
+  // 確認時と登録直前で、登録・更新する内容が同じかを比べるための要約
+  function signature(res){
+    return JSON.stringify(res.items.filter(function(it){return it.action==="add"||it.action==="update";})
+      .map(function(it){return [it.line,it.action,it.rec,it.changes,it.idx];}));
+  }
+  // 1回の PATCH（RTDB の複数パス更新は全部成功か全部失敗）で書く内容。既存の行は追加分で上書きしない。
+  function buildFacilityPatch(res,cur,newToken){
+    var patch={},next=cur.next;
+    res.items.forEach(function(it){
+      if(it.action==="add")patch[String(next++)]=Object.assign({},it.rec,{token:newToken()});
+      else if(it.action==="update")Object.keys(it.changes).forEach(function(k){patch[cur.keys[it.idx]+"/"+k]=it.changes[k].to;});
+    });
+    return patch;
+  }
+  function buildStaffPatch(res,cur){
+    var patch={},next=cur.next;
+    res.items.forEach(function(it){if(it.action==="add")patch[String(next++)]=it.rec;});
+    return patch;
+  }
+  return {MAX_BYTES:MAX_BYTES,SPEC:SPEC,decode:decode,parse:parse,prepare:prepare,parseDate:parseDate,
+    normalizeList:normalizeList,validateFacilities:validateFacilities,validateStaff:validateStaff,
+    signature:signature,buildFacilityPatch:buildFacilityPatch,buildStaffPatch:buildStaffPatch};
+})();
+// ===== CSV一括登録（施設・従業員）: 純粋関数 END =====
+
+// ===== CSV一括登録: 画面と登録処理 =====
+// 流れ: ファイル選択 → 解析・検証 → プレビュー → 「登録する」→ 登録直前に最新を取り直して再検証 → 1回の PATCH。
+// ★ 書き込みは既存の管理画面と同じ経路（authFetch → RTDB。権限は Rules が判定）。別の API・鍵は使わない。
+var csvImp={fac:null,staff:null,busy:""};
+function csvImpCanWrite(){return isAdminAuthenticated&&!demoMode&&!viewerMode&&writePolicy==="full";}
+function csvImpValidate(kind,prep,freshList,freshFacs,freshDepts){
+  if(kind==="fac")return CSVIMP.validateFacilities(prep.rows,freshList||masterFacilities,prep.fileWarnings);
+  return CSVIMP.validateStaff(prep.rows,freshList||staffList,freshFacs||masterFacilities,freshDepts||masterDepts,getTodayJSTStr(),prep.fileWarnings);
+}
+function csvImpPick(kind,input){
+  var f=input&&input.files&&input.files[0];
+  if(input)input.value=""; // 同じファイルを選び直せるようにする
+  if(!f||csvImp.busy)return;
+  var st={fileName:f.name,prep:null,result:null,error:"",failMsg:"",done:null};
+  csvImp[kind]=st;
+  if(!/\.csv$/i.test(f.name)){st.error="CSVファイル（.csv）を選んでください。Excel のファイルは「CSV UTF-8（コンマ区切り）」で保存し直してください";render();return;}
+  if(f.size>CSVIMP.MAX_BYTES){st.error="ファイルが大きすぎます（1MBまで）";render();return;}
+  f.arrayBuffer().then(function(buf){
+    if(csvImp[kind]!==st)return;
+    var d=CSVIMP.decode(buf);if(!d.ok){st.error=d.error;render();return;}
+    var p=CSVIMP.prepare(kind,d.text);if(!p.ok){st.error=p.error;render();return;}
+    st.prep=p;st.result=csvImpValidate(kind,p);render();
+  }).catch(function(){if(csvImp[kind]===st){st.error="ファイルを読み込めませんでした";render();}});
+}
+function csvImpClear(kind){if(csvImp.busy)return;csvImp[kind]=null;render();}
+// 施設の打刻URL用トークン（英数字32文字。偏りが出ないよう 248 以上のバイトは捨てる）
+function csvImpNewToken(){
+  var a="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",s="";
+  while(s.length<32){
+    var b=new Uint8Array(48);crypto.getRandomValues(b);
+    for(var i=0;i<b.length&&s.length<32;i++)if(b[i]<248)s+=a[b[i]%62];
+  }
+  return s;
+}
+function csvImpCommit(kind){
+  var st=csvImp[kind];
+  if(!st||!st.result||st.done||csvImp.busy)return;
+  if(!csvImpCanWrite()){showAlert("管理者としてログインしているときだけ登録できます");return;}
+  if(kind==="fac"&&!facilitiesLoaded){showAlert("施設マスタを取得できていないため登録できません。再読み込みしてからお試しください。");return;}
+  if(st.result.counts.add+st.result.counts.update===0)return;
+  var path=kind==="fac"?"/master/locations.json":"/tc5_staff.json";
+  csvImp.busy=kind;st.failMsg="";render();
+  (async function(){
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    // 1) 最新を取り直す（取得できなければ何も書かない＝フェイルクローズ）。
+    //    従業員は照合先の施設マスタ・部門マスタも取り直す（端末のキャッシュや既定値で照合しない）。
+    function getJson(p){
+      return authFetch(FB_URL+p).then(function(x){if(!x||!x.ok)throw 0;return x.json();})
+        .catch(function(){throw new Error("最新のデータを取得できませんでした。通信状態を確認してもう一度お試しください");});
+    }
+    var got=await Promise.all(kind==="fac"?[getJson(path)]:[getJson(path),getJson("/master/locations.json"),getJson("/tc_master_depts.json")]);
+    var cur=CSVIMP.normalizeList(got[0]);
+    if(!cur.ok)throw new Error("保存済みデータの形式が想定と異なるため登録を中止しました");
+    var fFacs=null,fDepts=null;
+    if(kind==="staff"){
+      var fl=CSVIMP.normalizeList(got[1]);
+      if(!fl.ok)throw new Error("施設マスタの形式が想定と異なるため登録を中止しました");
+      fFacs=fl.list;
+      var dv=got[2];
+      fDepts=(Array.isArray(dv)?dv:(dv&&typeof dv==="object"?Object.values(dv):[])).filter(function(x){return typeof x==="string";});
+      // ★ 部門を一度も保存していない会社は、アプリ全体と同じ既定の部門で照合する（取得の失敗は上で中止済み）
+      if(!fDepts.length)fDepts=DEF_DEPTS.slice();
+    }
+    // 2) 最新に対して検証し直し、確認した内容と違えば書かずに確認し直してもらう（二重登録・競合の防止）
+    var fresh=csvImpValidate(kind,st.prep,cur.list,fFacs,fDepts);
+    if(CSVIMP.signature(fresh)!==CSVIMP.signature(st.result)){
+      st.result=fresh;
+      throw new Error("確認中に他の操作でデータが変わりました。内容を更新したので、もう一度確認してから「登録する」を押してください");
+    }
+    // 3) 1回の PATCH で書く（全部成功か全部失敗。途中まで登録された状態を作らない）
+    var patch=kind==="fac"?CSVIMP.buildFacilityPatch(fresh,cur,csvImpNewToken):CSVIMP.buildStaffPatch(fresh,cur);
+    var w=await authFetch(FB_URL+path,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)}).catch(function(){return null;});
+    if(!w)throw new Error("通信に失敗しました。登録されたか分からないため、画面を再読み込みしてから同じCSVをもう一度選んでください（登録済みの行はスキップされます）");
+    if(!w.ok)throw new Error(w.status===401||w.status===403?"権限が無いため登録できませんでした。管理者PINで入り直してください":"登録に失敗しました（HTTP "+w.status+"）");
+    // 4) 登録後を取り直して確認し、端末側の一覧も最新にする。
+    //    ★ ここから先は書き込みが成功している。例外が出ても「何も登録していません」とは出さない。
+    var c=fresh.counts;
+    st.done={add:c.add,update:c.update,skip:c.skip,error:c.error,verified:false,lost:[],pinUnset:[],pinLeft:[]};
+    try{
+    var added=fresh.items.filter(function(it){return it.action==="add";}).map(function(it){return it.name;});
+    var after=await authFetch(FB_URL+path).then(function(x){return x.ok?x.json():undefined;}).catch(function(){return undefined;});
+    var al=after===undefined?{ok:false}:CSVIMP.normalizeList(after);
+    // ★ 追加分が在ることに加え、登録前から在った行が消えていないことも確かめる。
+    //   追加の添字は「取り直した時点の末尾の次」なので、その直後に別の端末が同じ添字へ追加していると上書きしうる（検出して知らせる）。
+    var afterNames=al.ok?al.list.map(function(x){return x.name;}):[];
+    var verified=al.ok&&added.every(function(nm){return afterNames.indexOf(nm)>=0;});
+    var lost=al.ok?cur.list.filter(function(x){return afterNames.indexOf(x.name)<0;}).map(function(x){return String(x.name||"");}):[];
+    if(kind==="fac"){
+      if(al.ok)masterFacilities=al.list;
+      else{
+        masterFacilities=cur.list.slice();
+        fresh.items.forEach(function(it){if(it.action==="update")masterFacilities[it.idx]=Object.assign({},masterFacilities[it.idx],Object.keys(it.changes).reduce(function(o,k){o[k]=it.changes[k].to;return o;},{}));});
+        Object.keys(patch).forEach(function(k){if(/^\d+$/.test(k))masterFacilities.push(patch[k]);});
+      }
+      applyFacilitiesLocal();
+    } else {
+      staffList=al.ok?al.list:cur.list.concat(fresh.items.filter(function(it){return it.action==="add";}).map(function(it){return it.rec;}));
+      _lsSet("tc5_staff",JSON.stringify(staffList));
+    }
+    st.done.verified=verified;st.done.lost=lost;
+    if(kind==="staff"){
+      // ★ staffPins は通常のオブジェクト。"constructor" 等の氏名で組み込みプロパティと取り違えない
+      var hasPin=function(nm){return Object.prototype.hasOwnProperty.call(staffPins||{},nm)&&!!staffPins[nm];};
+      st.done.pinUnset=added.filter(function(nm){return !hasPin(nm);});
+      st.done.pinLeft=added.filter(hasPin);
+    }
+    // 施設を登録したら、表示中の従業員プレビューを新しい施設一覧で検証し直す
+    if(kind==="fac"&&csvImp.staff&&csvImp.staff.prep&&!csvImp.staff.done)csvImp.staff.result=csvImpValidate("staff",csvImp.staff.prep);
+    }catch(e2){console.error("[csvImp] after-write check error",e2);}
+  })().catch(function(e){
+    st.failMsg=(e&&e.message?e.message:"登録に失敗しました")+"（何も登録していません）";
+    if(/登録されたか分からない/.test(st.failMsg))st.failMsg=e.message;
+  }).then(function(){csvImp.busy="";render();});
+}
+function csvImpCardHtml(kind,title){
+  var st=csvImp[kind],busy=csvImp.busy===kind;
+  var btn='style="background:var(--brand);color:#fff;border:none;padding:10px 18px;border-radius:2px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;"';
+  var sub='style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:9px 16px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;"';
+  function tiles(list){
+    return '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;margin:12px 0;">'
+      +list.map(function(t){return '<div style="border:1px solid #cbd5e1;border-radius:2px;padding:8px 10px;background:'+(t[2]||"#f8fafc")+';">'
+        +'<div style="font-size:.85rem;color:#475569;">'+t[0]+'</div><div style="font-size:1.35rem;font-weight:800;color:#0f172a;">'+t[1]+'<span style="font-size:.85rem;font-weight:600;">件</span></div></div>';}).join("")
+      +'</div>';
+  }
+  function msgLines(items,lv,color){
+    var out=[];
+    items.forEach(function(it){it.msgs.forEach(function(m){if(m.lv===lv)out.push('<li style="margin:3px 0;">'+esc(it.line+"行目（"+it.name+"）："+m.t)+'</li>');});});
+    return out.length?'<ul style="margin:6px 0 10px;padding-left:20px;font-size:.9rem;color:'+color+';line-height:1.6;">'+out.join("")+'</ul>':"";
+  }
+  var h='<div class="admin-card"><div class="admin-title">'+esc(title)+'</div>';
+  // ★ キーボードでも選べるよう、本物の button から隠した file input を開く（label 内の display:none はフォーカスできない）
+  if(!busy)h+='<button type="button" onclick="this.nextElementSibling.click()" '+btn+'>CSVファイルを選ぶ</button><input type="file" accept=".csv,text/csv" onchange="csvImpPick(\''+kind+'\',this)" style="display:none;">';
+  if(st)h+='<span style="margin-left:10px;font-size:.9rem;color:#475569;word-break:break-all;">'+esc(st.fileName)+'</span>';
+  if(!st){return h+'</div>';}
+  if(st.error)return h+'<div style="margin-top:12px;background:#fff1f2;color:#b91c1c;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;">'+esc(st.error)+'</div></div>';
+  if(!st.result)return h+'<div style="margin-top:12px;font-size:.9rem;color:#475569;">読み込み中…</div></div>';
+  var res=st.result,c=res.counts;
+  if(st.done){
+    var d=st.done;
+    h+='<div style="margin-top:12px;font-size:.95rem;font-weight:700;color:#166534;">登録しました'+(d.verified?'':'（登録後の確認ができませんでした。画面を再読み込みして一覧を確認してください）')+'</div>'
+      +tiles([["新規登録",d.add,"#f0fdf4"],["更新",d.update],["スキップ",d.skip],["失敗（エラーで未登録）",d.error,d.error?"#fff1f2":""]])
+      +(d.error?'<div style="font-size:.9rem;font-weight:700;color:#b91c1c;">登録しなかった行（エラー。CSVを直して選び直すと、この行だけが登録されます）</div>'+msgLines(res.items,"error","#b91c1c"):"")
+      +(d.lost.length?'<div style="background:#fff1f2;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;color:#b91c1c;margin-bottom:10px;">登録前にあった次の'+(kind==="fac"?'施設':'スタッフ')+'が見当たりません（別の端末で同時に保存された可能性があります）：'+esc(d.lost.join("、"))+'。一覧を確認し、必要なら登録し直してください。</div>':"")
+      +'<div style="font-size:.9rem;color:#475569;margin-bottom:10px;">他の端末で管理画面を開いている場合は、再読み込みしてから編集してください（古い一覧のまま保存すると、今回の登録分が消えることがあります）。</div>'
+      +(d.pinUnset.length?'<div style="background:#fffbeb;border:1px solid #fcd34d;padding:10px 12px;font-size:.92rem;color:#92400e;margin-bottom:10px;">PIN未設定：'+d.pinUnset.length+'名。スタッフ管理の各行から PIN を設定してください（本人が初回打刻時に設定することもできます）。</div>':"")
+      +(d.pinLeft.length?'<div style="background:#fffbeb;border:1px solid #fcd34d;padding:10px 12px;font-size:.92rem;color:#92400e;margin-bottom:10px;">以前の同じ氏名のPINが残っている人がいます：'+esc(d.pinLeft.join("、"))+'。スタッフ管理から PIN を設定し直してください。</div>':"")
+      +'<button onclick="csvImpClear(\''+kind+'\')" '+sub+'>閉じる</button>';
+    return h+'</div>';
+  }
+  h+=tiles([["登録予定",c.add,"#f0fdf4"],["更新予定",c.update],["スキップ",c.skip],["警告",c.warn,c.warn?"#fffbeb":""],["エラー",c.error,c.error?"#fff1f2":""]]);
+  if(res.fileWarnings.length)h+='<div style="font-size:.9rem;color:#92400e;margin-bottom:8px;">'+res.fileWarnings.map(esc).join("<br>")+'</div>';
+  if(c.error)h+='<div style="font-size:.92rem;font-weight:700;color:#b91c1c;">エラー（この行は登録されません）</div>'+msgLines(res.items,"error","#b91c1c");
+  if(c.warn)h+='<div style="font-size:.92rem;font-weight:700;color:#92400e;">警告（このまま登録できます。必要ならCSVを直して選び直してください）</div>'+msgLines(res.items,"warn","#92400e");
+  var planned=res.items.filter(function(it){return it.action==="add"||it.action==="update";});
+  if(planned.length){
+    h+='<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-top:6px;">登録・更新する内容</div><ul style="margin:6px 0 12px;padding-left:20px;font-size:.9rem;color:#0f172a;line-height:1.7;">'
+      +planned.map(function(it){
+        var r=it.rec,t;
+        if(it.action==="update")t="更新："+it.name+"　"+Object.keys(it.changes).map(function(k){return ({code:"施設コード",formalName:"正式名称",postalCode:"郵便番号",address:"住所",tel:"電話番号"})[k]+(it.changes[k].from?"「"+it.changes[k].from+"」":"（空欄）")+"→「"+it.changes[k].to+"」";}).join("／");
+        else if(kind==="fac")t="新規："+r.name+(r.formalName?"（"+r.formalName+"）":"");
+        else t="新規："+r.name+"（"+r.yomi+"）　"+[r.employeeId?"社員コード "+r.employeeId:"社員コード未設定",r.location||"施設未設定",r.employmentType,r.status,r.hireDate?"入社 "+r.hireDate:""].filter(Boolean).join("／");
+        return '<li>'+esc(it.line+"行目　"+t)+'</li>';
+      }).join("")+'</ul>';
+  }
+  if(st.failMsg)h+='<div style="background:#fff1f2;color:#b91c1c;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;margin-bottom:10px;">'+esc(st.failMsg)+'</div>';
+  if(busy)h+='<div style="font-size:.95rem;font-weight:700;color:#475569;">登録中…</div>';
+  else if(planned.length)h+='<button onclick="csvImpCommit(\''+kind+'\')" '+btn+'>登録する（新規'+c.add+'件'+(c.update?'・更新'+c.update+'件':'')+'）</button> <button onclick="csvImpClear(\''+kind+'\')" '+sub+'>やめる</button>';
+  else h+='<div style="font-size:.92rem;color:#475569;margin-bottom:8px;">登録・更新する行はありません。</div><button onclick="csvImpClear(\''+kind+'\')" '+sub+'>閉じる</button>';
+  return h+'</div>';
+}
+function csvImpHtml(){
+  if(!csvImpCanWrite())return '<div class="admin-card"><div class="admin-title">CSV一括登録</div><div style="font-size:.92rem;color:#475569;">この画面では使えません。管理者PINまたは管理者URLで入ってください。</div></div>';
+  return '<div class="admin-card"><div class="admin-title">CSV一括登録</div>'
+    +'<div style="font-size:.92rem;color:#475569;line-height:1.7;">①施設 → ②従業員 の順に登録してください。ファイルを選ぶと内容を確認できます（この時点では登録されません）。</div></div>'
+    +csvImpCardHtml("fac","① 施設CSV")+csvImpCardHtml("staff","② 従業員CSV");
 }
 // ===== 資料管理 =====
 function viewerDownloadAndDelete(url,fileName,docId){
