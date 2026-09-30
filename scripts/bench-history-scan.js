@@ -5,10 +5,10 @@
  * ★ 依存パッケージなし・送信なし・本番データ非アクセス。
  *   `index.html` の RECORDS-RANGE ブロックを実タイマーで動かし、
  *   ネットワークは「RTT ＋ 共有帯域」で模擬する（並列にしても総帯域は増えない）。
- *   件数・転送量は AGENTS.md に記録した本番実測値を使う。
+ *   件数・転送量は docs/features/records-range.md「本番実測（2026-08-28）」の値を使う。
  *
  * これは回帰テストではない（合否を判定しない）。
- * AGENTS.md に載せている「集計完了までの時間」を追試するための計測スクリプト。
+ * docs/features/records-range.md に載せている「集計完了までの時間」を追試するための計測スクリプト。
  *
  * 実行:
  *   node scripts/bench-history-scan.js

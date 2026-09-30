@@ -1433,7 +1433,7 @@ var PUNCH_OUTBOX_AUTH_MAX_MS=600000;
 // 通信復旧・起動・画面復帰は「状況が変わった」契機なのでバックオフを待たない（連打だけ抑える）。
 var PUNCH_OUTBOX_FORCE_MIN_MS=3000;
 var PUNCH_OUTBOX_FORCE_REASONS=["online","startup","pageshow","visible"];
-// 警告のしきい値。決めた根拠は AGENTS.md「打刻のオフラインキュー」の該当節に記載。
+// 警告のしきい値。決めた根拠は docs/features/punch-outbox.md「警告のしきい値と、その値にした理由」に記載。
 var PUNCH_OUTBOX_WARN_MS=10*60*1000;
 var PUNCH_OUTBOX_WARN_RETRIES=8;
 
@@ -15172,7 +15172,7 @@ async function initFirebase() {
     //   サーバの最新 tc5_records で行い、届くまで打刻ボタンは押せない（recordsReady）。
     // ★ 当日分だけで足りる根拠: 打刻状態の判定は `records.filter(r.date===dk)`（当日のみ）と
     //   findOpenClockInAcrossFacilities(staffName, 当日) だけで、前日以前を参照しない。
-    //   対象施設に日付をまたぐ勤務は存在しない（AGENTS.md・2026-08-14 ユーザー確認）。
+    //   対象施設に日付をまたぐ勤務は存在しない（docs/features/mileage.md・2026-08-14 ユーザー確認）。
     //   打刻漏れアラート（14日）・今月の打刻状況・賄い・移動距離が使う範囲は、
     //   ログイン後に punchScreenRecordRange() で追加取得する（打刻の可否には影響しない）。
     var _recordsPromise=loadPunchRecords();
@@ -16352,7 +16352,7 @@ window.addEventListener("online",function(){
  *
  * ★ 施設の対応づけは「施設名の正規化（NFKC＋空白除去）」で行う。サーバ側の
  *   normFacilityName と同じ規則。施設マスタに改名機能が無く、改名＝削除＋追加に
- *   なるため、改名した施設は設定を作り直す必要がある（AGENTS.md に明記）。
+ *   なるため、改名した施設は設定を作り直す必要がある（docs/features/device-watch.md に明記）。
  */
 var DEVICE_API="https://timecard-rho.vercel.app/api/device";
 

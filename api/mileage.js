@@ -419,7 +419,7 @@ async function handleSetEnabled(body, actor) {
     reboundSubjects: rebound.length,        // 無言で外した他サブジェクトの数
     // ★ このログイン（PIN）がいつ登録されたか。
     //   tc5_staff は誰でも書けるため、第三者が氏名を足して自分でPINを登録し、
-    //   管理者にONを押させる経路が原理的に残る（既知の残存リスク・AGENTS.md 参照）。
+    //   管理者にONを押させる経路が原理的に残る（docs/features/mileage.md「既知の残存リスク」参照）。
     //   直前に登録されたPINであることが管理者に見えれば、その場で気づける。
     pinUpdatedAt: (pinRec && typeof pinRec.updatedAt === "number") ? pinRec.updatedAt : 0,
   };

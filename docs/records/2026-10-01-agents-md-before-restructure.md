@@ -1,9 +1,13 @@
+整理前の AGENTS.md の原文（2026-10-01）。現在の規則は AGENTS.md を正とする。
+
 # AGENTS.md — 穂乃味タイムカード（timecard）
 
-<!-- 雛形: _shared_claude/templates/AGENTS.template.md。載せる基準・各節の目安・置き場所は
-     _shared_claude/README.md「AGENTS.md の構造とサイズ管理」。この注記は残してよい（1 行）。 -->
-
+Claude Code が**常時**読む指示ファイルである。置いてよいのは、禁止事項・恒久的な不変条件・開発と出荷のルール・
+セキュリティと環境の重要事項・詳細文書への参照だけとする（共通 `RULES.md`「AGENTS.md の役割」）。
+機能ごとの詳細設計・実測値・経緯・既知の制限の詳細・テストの説明は **`docs/features/`** に置く（自動では読み込まれない）。
 **機能を変更・調査するときは、下の「機能の詳細文書」から該当する文書を必ず読む。**
+文字数は `node ../_shared_claude/config/githooks/instruction-size.js --repo .` で確認する（30,000 超で警告、40,000 超で FAIL）。
+
 リポジトリ名はローカルで `timecard-git`、GitHub remote は `rsb79692-create/timecard`。
 本書には確認できた事実だけを書く。確認できていない事項は「未確認」と書く。
 
@@ -11,9 +15,10 @@
 
 ## 共通運用ルール（_shared_claude 参照）
 
-- 共通ルールの正本は [`../_shared_claude/`](../_shared_claude/)。本書は timecard 固有の事実・禁止事項・不変条件だけを置く。本リポジトリは **Type C（Firebase + GitHub Pages）** である。
+- 共通ルールの正本は [`../_shared_claude/`](../_shared_claude/)。本リポジトリは **Type C（Firebase + GitHub Pages）** である。
   Type A/B（Supabase/Neon・Vercel 出荷・npm ビルド）の前提を持ち込まない。
-- **「レビュー範囲」は共通 `AGENTS.md`「レビュー範囲」が常に優先する**（本書・`.claude/**`・`docs/**` で狭めない）。
+- 共通ルールと矛盾した場合は、timecard 固有の**事実**（Firebase / GitHub Pages / index.html 単体 / 通知系）を優先する。
+  **ただし「レビュー範囲」は例外で、共通 `AGENTS.md`「レビュー範囲」が常に優先する**（本書・`.claude/**`・`docs/**` で狭めない）。
 - `DB.md`: Supabase / RLS / migration 固有部は**適用しない**。汎用の安全原則（本番 DB を変えない・破壊的操作は事前承認・変更前に現状確認・secret を出さない）だけを適用する。
 - `DEPLOY.md`: 「Vercel READY」は **GitHub Actions の成否と GitHub Pages の本番 URL 反映**に読み替える。
 - `migration-agent` は存在しない。DB 相当（RTDB・`database.rules.json`・FCM・PWA・GitHub Actions）は **`firebase-agent`** が担う。
@@ -31,7 +36,6 @@
 - Firebase プロジェクト `honomi-timecard` を **honomi-board と共用**している。`database.rules.json` は両方のルールが入った1ファイルで、
   `firebase deploy --only database` は**全体を置換する**。片方だけを deploy すると、もう片方が即座に止まる。
 - 手順は必ず「本番の現行ルールを取得 → 既存キーを保持してマージ → deploy → 取り直して照合」。**両リポジトリの内容を一致させ、片方だけを編集しない。**
-  honomi-board 側から deploy する場合も同じで、repo 内のファイルが本番と一致していると前提せず、必ず本番を取り直して照合・マージする（旧記載: `docs/records/2026-09-26-honomi-board-rules-sync-note.md`）。
 - トップレベルの持ち主: `honomi`（timecard）／`rooms` `members` `config` `field` `shares` `shareKeys` `guestOf`（honomi-board）／
   `tenants` `srv` `tenantReg`（マルチテナント）／`authz` `ratelimit` `mileage` `devmon` `morningNotify`（ルール未定義＝デフォルト拒否。Admin SDK 専用）。
 - `/honomi` は `auth != null` ではない。**起動面**（匿名可: `tc5_staff` `tc5_pins` `tc5_records` `tc_master_depts` `master/locations` の読み、`tc5_records` の書き）と
@@ -62,6 +66,7 @@
 
 テストはすべて依存パッケージなし・送信なし・本番データ非アクセス。**テスト件数は増減するため固定値を規範にしない。**
 各テストの対象範囲と実行条件の詳細は [`docs/features/qa-tests.md`](docs/features/qa-tests.md)。
+2026-09-26 の整理前の運用節の原文は [`docs/features/archive-agents-md-operations.md`](docs/features/archive-agents-md-operations.md)（経緯の確認用。規範ではない）。
 
 ## 機能ごとの主要な不変条件（★変えてはならない。**抜粋**である）
 
@@ -109,7 +114,7 @@
 - 従業員の本人の識別子は氏名。登録済みと同じ氏名は上書きせずスキップし、表記ゆれ（施設名・氏名）を推測で紐付けない。書き込みは登録直前の再取得・再検証のうえ1回の PATCH（既存行を丸ごと上書きしない）。
 
 **顔撮影（`face-photo.md`）**
-- `facePhoto === true` のときだけ ON。写真は保存・送信しない（fetch / storage / Blob / dataURL を使わない。打刻画面のプレビューも画面に映すだけ）。撮影は打刻を止めず await しない。打刻前のカメラ枠には説明文を出さない（2026-09-30 ユーザー指示。表示は同文書「打刻画面のプレビュー」に従う）。撮影時の開示は画面上端の固定表示で行い、「管理者設定により撮影」の文言を外さない。プレビューは打刻ボタンへ重ねず、カメラは打刻完了・画面離脱・放置・バックグラウンドで必ず止める。ON/OFF をサーバ側へ移す場合も、打刻のたびに問い合わせる形にしない。
+- `facePhoto === true` のときだけ ON。写真は保存・送信しない（fetch / storage / Blob / dataURL を使わない。打刻画面のプレビューも画面に映すだけ）。撮影は打刻を止めず await しない。打刻前は大きなインカメラ映像だけを出し、枠に説明文は出さない（2026-09-30 ユーザー指示）。撮影時の開示は画面上端の固定表示で行い、「管理者設定により撮影」の文言を外さない。プレビューは打刻ボタンへ重ねず、カメラは打刻完了・画面離脱・放置・バックグラウンドで必ず止める。ON/OFF をサーバ側へ移す場合も、打刻のたびに問い合わせる形にしない。
 
 **施設端末の持ち出し検知（`device-watch.md`）**
 - 設定と状態は `/devmon`（ルール未定義）に置き、`/honomi` や `master/locations` に置かない。判定はサーバ側だけで行い、経過時間はサーバ受信時刻で測る。**位置は端末の自己申告であり真正性は保証しない。**
@@ -123,6 +128,7 @@
 - 会社間の遮断は画面・トークン（`c`/`sx`）・API（`T.handler` と `verifyIdToken` の会社一致検査）・RTDB/Storage Rules・端末保存の各層で行う。会社コンテキストの無い DB アクセスを穂乃味へ倒さない。
 - マンテールは匿名サインインを使わず、スタッフ PIN を端末に置かない。システム管理者 PIN と会社管理者 PIN を別にする。`TC_PIN_PEPPER` / `TC_ENC_KEY` を変更・再生成しない。
 - PIN の値はサーバ（`/api/auth/admin-pin-set`）経由でだけ作る。システム管理者 PIN の初回設定は条件付き書き込みで1回だけ成功させる。漏えいを疑ってシステム管理者 PIN を変更するときは、変更直前30秒（`ADMIN_AT_SKEW_SEC`）のセッションが残るため、30秒以上あけてもう一度変更する。
+- honomi-board リポジトリの `database.rules.json` は本番と未一致（2026-09-26 時点）。ボード側から deploy する前に必ず本番を取り直してマージする。
 
 ## 実在するコマンド
 
@@ -164,22 +170,47 @@
 
 `.claude/agents/qa-agent.md` が担当する。ビルドが無いため、構文・整合・回帰テストが中心である。
 
-1. 変更した `.js` に `node --check`、`manifest.json` / `database.rules.json` に JSON 検証
-2. `sw.js` を変えた場合は `CACHE_NAME` の更新と `OFFLINE_URLS` の参照先の実在を確認する
-3. 「機能の詳細文書」の表から、変更に関係する回帰テストをすべて実行する（全件 PASS / 0 FAIL。1件でも FAIL なら「要修正」で出荷しない。関係しないテストは実施不要と報告する）
-4. 通知スクリプトの変更は dryRun で確認する（`DRY_RUN=true node scripts/morning-check.js`。判定時刻ごとに `CHECK_HOUR=6` / `7`）
-5. GitHub Actions の YAML を変えた場合は、構文・cron・`secrets` 参照名・`node-version` を確認する
-6. instruction files を変えた場合は `node ../_shared_claude/config/githooks/instruction-size.js --repo .` が FAIL でないことを確認する
+1. `git status` / `git diff` で変更を把握する
+2. 変更した `.js` に `node --check`、`manifest.json` / `database.rules.json` に JSON 検証
+3. `sw.js` を変えた場合は `CACHE_NAME` の更新と `OFFLINE_URLS` の参照先の実在を確認する
+4. 「機能の詳細文書」の表から、変更に関係する回帰テストをすべて実行する（全件 PASS / 0 FAIL。1件でも FAIL なら「要修正」で出荷しない。関係しないテストは実施不要と報告する）
+5. 通知スクリプトの変更は dryRun で確認する（`DRY_RUN=true node scripts/morning-check.js`。判定時刻ごとに `CHECK_HOUR=6` / `7`）
+6. GitHub Actions の YAML を変えた場合は、構文・cron・`secrets` 参照名・`node-version` を確認する
+7. **instruction files を変えた場合**（`AGENTS.md` / `CLAUDE.md` / `.claude/rules/`）は `node ../_shared_claude/config/githooks/instruction-size.js --repo .` が FAIL でないことを確認する
 
-## Agent の役割と出荷
+総合判定は「出荷可 / 要修正」。要修正なら修正して再検証する（共通 `RULES.md`「実装ループ」）。
 
-- `migration-agent` は無い。Firebase / PWA / 通知 / GitHub Actions のインフラ層は `firebase-agent`（Rules・ワークフロー・Secrets は人の確認が必要）。役割の一覧: `docs/features/operations.md`。
-- 出荷: `git add` は触ったファイルだけをパス指定（`-A` / `.` を使わない）→ commit → `origin main` へ push（force push しない）→ アプリ本体は GitHub Pages（Actions と本番 URL）、API（`api/*.js`）は同じ push からの Vercel Production（`vercel ls --prod` の Ready と `githubCommitSha` の一致）。**2系統を両方確認する。**
+## Agent の役割と流れ
+
+| Agent | 役割 | コード変更 |
+|---|---|---|
+| `analyst-agent` | 変更前の影響範囲調査・修正案 | しない |
+| `debug-agent` | 障害の再現・原因特定・修正方針 | 原則しない（修正は Claude Code 本体または `implementer`） |
+| `firebase-agent` | Firebase / PWA / 通知 / GitHub Actions のインフラ層 | インフラ層のみ。Rules・ワークフロー・Secrets は人の確認が必要 |
+| `review-agent` | 静的レビュー（設計・副作用・セキュリティ・品質） | しない |
+| `qa-agent` | 上記 QA 手順 | しない |
+| `ship-agent` | commit → push → GitHub Pages / Vercel の反映確認 | しない |
+| `orchestrator-agent` | 上記を統括する | 各 Agent に委任 |
+
+通常の実装・不具合修正では、ユーザーが毎回指示しなくても共通 `RULES.md`「実装ループ」を適用する。
+
+実装 → 検証（構文・回帰テスト）→ review-agent / qa-agent（該当すれば security / performance / ui-print）→ 指摘があれば修正 → 影響する検証の再実行 → Critical 0 / High 0 → 出荷
+
+review・QA で「要修正」が出たら、停止せずに修正して再検証する。停止するのは共通 `RULES.md` の停止条件（同一原因3回・安全上の停止・承認が必要な操作）に当たるときだけとする。
+
+## commit / push / deploy
+
+- 通常実装は、明示的な停止指示がない限り、commit → push → GitHub Pages / Vercel の反映確認 → 本番確認まで進める（共通の出荷条件を満たしたうえで）。「commit しない」「調査だけ」等の範囲指定があれば従う。
+- `git add` は触ったファイルだけをパス指定する（`-A` / `.` を使わない）。commit 前に `git diff --staged` を確認する。作業開始前から在る他人の未 commit 差分を含めない。
+- push 先は `origin main`。force push はしない。remote に差分があれば `git pull --rebase` を提案する。
+- アプリ本体は push 後に GitHub Pages が自動反映する（30秒〜数分。`https://github.com/rsb79692-create/timecard/actions` と本番 URL で確認）。
+  API（`api/*.js`）は同じ push から Vercel が Production へ自動デプロイする（`vercel ls --prod` の Ready と `githubCommitSha` の一致で確認）。**2系統を両方確認する。**
 - ワークフロー・Secrets・Firebase Rules・cron-job.org の変更は自律出荷に含めない（人の確認が必要）。
-- 完了報告には、禁止事項の遵守（Firebase データ・Rules・Secrets・cron-job を変更していないこと）・QA 結果（構文 / JSON / SW 整合 / 回帰テスト / dryRun）・GitHub Pages と Vercel それぞれの反映と本番確認を書く。
 
-## 文書索引
+## 完了報告
 
-- 機能詳細: `docs/features/`（上の「機能の詳細文書」の表・`docs/features/operations.md`）
-- 設計判断: `docs/decisions/`
-- 記録: `docs/records/`（2026-09-26 の整理前の運用節の原文: `docs/features/archive-agents-md-operations.md`。経緯の確認用で規範ではない）
+共通 [`../_shared_claude/REPORT.md`](../_shared_claude/REPORT.md) の形式に従う。timecard では次も書く。
+
+- 禁止事項の遵守（Firebase データ・Rules・Secrets・cron-job を変更していないこと、削除なし、secret 非表示）
+- QA 結果（構文 / JSON / SW 整合 / 実行した回帰テスト / dryRun）
+- 本番反映（GitHub Pages と Vercel のそれぞれ）と本番確認の結果。確認できなかった項目は「未確認（理由）」

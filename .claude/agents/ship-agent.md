@@ -114,7 +114,7 @@ git push origin <branch>
 
 GitHub Pages は push 後 30秒〜2分程度で自動デプロイされる。
 
-確認（ship-agent が行う。`AGENTS.md`「commit / push / deploy」の2系統）:
+確認（ship-agent が行う。`AGENTS.md`「Agent の役割と出荷」の2系統）:
 
 - GitHub Pages: `https://github.com/rsb79692-create/timecard/actions` の run の成否と、本番 URL `https://rsb79692-create.github.io/timecard/` で変更が反映されていること
 - `api/*.js` を含む push: `vercel ls --prod` の Ready と `githubCommitSha` が push した commit と一致すること
