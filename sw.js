@@ -1,7 +1,7 @@
 // ===== キャッシュ版 =====
 // ★ sw.js を変更したら必ず CACHE_NAME を上げる。activate で旧キャッシュを全削除するため、
 //   これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
-const CACHE_NAME = 'timecard-v16';
+const CACHE_NAME = 'timecard-v17';
 
 // app shell（index.html）のキャッシュキー。
 // ★ クエリ付き（?admin= / ?token= 等）でも必ずこの1つのキーへ正規化する。
@@ -97,9 +97,27 @@ function readServed(cache) {
   return cache.match(SERVED_KEY).then(function(r) { return r ? r.text() : ''; }).catch(function() { return ''; });
 }
 
+// ===== 更新判定の診断（UPDATE-DIAG・2026-10-05）=====
+// ★ 判定と動作は変えない。画面へ送る通知に「なぜそう判定したか」を添えるだけ（画面側が端末へ記録する）。
+//   「同じ端末に何度も更新通知が出る」の原因を、次に通知が出た瞬間に特定するための情報である。
+// ・_clientVer: ナビゲーションで各タブ（resultingClientId）へ返した版。通知のたびに、そのタブが
+//   実際に動かしている版（clientVersion）として添える。「動かしている版＝通知した版」なら誤検知と分かる。
+//   メモリ上だけに持つ（SW が止まれば消える。消えたら空で送る）。個人情報・URL・トークンは持たない。
+const _clientVer = new Map();
+function rememberClientVersion(clientId, version) {
+  if (!clientId) return;
+  _clientVer.delete(clientId);
+  _clientVer.set(clientId, version || '');
+  while (_clientVer.size > 50) _clientVer.delete(_clientVer.keys().next().value);
+}
 function notifyClients(msg) {
   return self.clients.matchAll({ type: 'window', includeUncontrolled: true })
-    .then(function(list) { list.forEach(function(c) { try { c.postMessage(msg); } catch (e) {} }); })
+    .then(function(list) {
+      list.forEach(function(c) {
+        const m = Object.assign({}, msg, { sw: CACHE_NAME, clientVersion: _clientVer.get(c.id) || '' });
+        try { c.postMessage(m); } catch (e) {}
+      });
+    })
     .catch(function() {});
 }
 
@@ -140,34 +158,45 @@ function fetchAndStoreShell(cache, allowHttpCache) {
 //   「取れない＝更新なし」と扱うと古い画面が恒久的に残る。
 // ★ 同時に来た確認（タブ復帰で画面から2本届く等）は、実行中の1本にまとめる（本体の二重取得を避ける）。
 let _revalidating = null;
-function revalidateShell(cache, cached, servedVersion) {
+function revalidateShell(cache, cached, servedVersion, trigger) {
   if (_revalidating) return _revalidating;
-  _revalidating = _revalidateShell(cache, cached, servedVersion).then(function(r) {
+  _revalidating = _revalidateShell(cache, cached, servedVersion, trigger).then(function(r) {
     _revalidating = null; return r;
   }, function() { _revalidating = null; return 'unknown'; });
   return _revalidating;
 }
-function _revalidateShell(cache, cached, servedVersion) {
+// 直近の判定の診断（UPDATE-DIAG）。APP_UP_TO_DATE / APP_UPDATE_AVAILABLE に添えて画面へ送る。
+let _lastDiag = null;
+function _revalidateShell(cache, cached, servedVersion, trigger) {
   const known = servedVersion || shellVersionOf(cached);
+  // ★ 診断のみ。判定には使わない（値は版の文字列・ETag・HTTP ステータスだけ）。
+  const diag = _lastDiag = {
+    trigger: trigger || '', at: new Date().toISOString(), known: known, served: servedVersion || '',
+    cachedVersion: shellVersionOf(cached), cachedEtag: etagOf(cached),
+    headStatus: 0, headEtag: '', fetchedVersion: '', fetchedEtag: '', result: ''
+  };
   const doUpdate = function() {
     return fetchAndStoreShell(cache).then(function(res) {
-      if (!res) return 'unknown';
+      if (!res) { diag.result = 'unknown:fetch'; return 'unknown'; }
+      diag.fetchedVersion = shellVersionOf(res); diag.fetchedEtag = etagOf(res);
       // ★ 内容が同じ＝通知しない。キャッシュは入れ直してあるので、次からは HEAD の目印も一致する。
-      if (known && shellVersionOf(res) === known) return 'same';
+      if (known && shellVersionOf(res) === known) { diag.result = 'same:hash'; return 'same'; }
+      diag.result = 'updated';
       // version＝キャッシュへ入れ直した版。画面は同じ版で二度と自動再読み込みしない（更新ループ防止）
-      return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(res) }).then(function() { return 'updated'; });
+      return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(res), diag: diag }).then(function() { return 'updated'; });
     });
   };
-  if (!known) return doUpdate().catch(function() { return 'unknown'; });
+  if (!known) return doUpdate().catch(function() { diag.result = 'unknown:error'; return 'unknown'; });
   return fetch(SHELL_URL, { method: 'HEAD', cache: 'no-store' }).then(function(head) {
+    diag.headStatus = head ? head.status : 0; diag.headEtag = etagOf(head);
     // ★ HEAD が使えない配信経路（405 を返す中継プロキシ等）では、必ず本体を取り直して確認する。
     //   ここで「最新」と扱うと、その端末は二度と更新に気づけない（古いクライアントが居座る）。
     if (!head || !head.ok) return doUpdate();
     // ★ HEAD の目印はキャッシュ済みの本体の目印と比べる（版＝内容のハッシュとは比べられない）
     const fresh = etagOf(head);
-    if (fresh && fresh === etagOf(cached)) return 'same'; // 最新版を配信済み＝何もしない
+    if (fresh && fresh === etagOf(cached)) { diag.result = 'same:etag'; return 'same'; } // 最新版を配信済み＝何もしない
     return doUpdate();
-  }).catch(function() { return 'unknown'; });
+  }).catch(function() { if (!diag.result) diag.result = 'unknown:error'; return 'unknown'; });
 }
 
 self.addEventListener('install', function(event) {
@@ -206,15 +235,19 @@ self.addEventListener('fetch', function(event) {
       caches.open(CACHE_NAME).then(function(cache) {
         return cache.match(SHELL_URL).then(function(cached) {
           if (cached) {
+            rememberClientVersion(event.resultingClientId, shellVersionOf(cached)); // 診断用
             // 先にキャッシュを返して即座に起動させ、裏で版を確認する（stale-while-revalidate）
             event.waitUntil(
               markServed(cache, shellVersionOf(cached))
-                .then(function() { return revalidateShell(cache, cached); })
+                .then(function() { return revalidateShell(cache, cached, '', 'navigate'); })
             );
             return cached;
           }
           return fetchAndStoreShell(cache)
-            .then(function(res) { return res || fetch(event.request); })
+            .then(function(res) {
+              if (res) rememberClientVersion(event.resultingClientId, shellVersionOf(res)); // 診断用
+              return res || fetch(event.request);
+            })
             .catch(function() { return fetch(event.request); });
         });
       }).catch(function() { return fetch(event.request); })
@@ -257,6 +290,22 @@ self.addEventListener('message', function(event) {
     );
     return;
   }
+  // 診断（UPDATE-DIAG）: このタブが動かしている版・キャッシュ済みの版・最後に返した版を答える（判定はしない）
+  if (data.type === 'APP_VERSION_INFO') {
+    const asker = event.source;
+    event.waitUntil(
+      caches.open(CACHE_NAME).then(function(cache) {
+        return Promise.all([cache.match(SHELL_URL), readServed(cache)]).then(function(r) {
+          try {
+            asker.postMessage({ type: 'APP_VERSION_INFO', sw: CACHE_NAME,
+              clientVersion: _clientVer.get(asker.id) || '', cachedVersion: shellVersionOf(r[0]),
+              cachedEtag: etagOf(r[0]), served: r[1] || '', lastDiag: _lastDiag });
+          } catch (e) {}
+        });
+      }).catch(function() {})
+    );
+    return;
+  }
   if (data.type !== 'CHECK_APP_UPDATE') return;
   const src = event.source;
   event.waitUntil(
@@ -268,13 +317,15 @@ self.addEventListener('message', function(event) {
         // すでにキャッシュを入れ替えたのに、そのときの通知を画面が取りこぼしている場合がある。
         // 「いま動いている版（＝最後に返した版）」と比べ直し、違っていれば通信せず再通知する。
         if (served && served !== shellVersionOf(cached)) {
-          return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(cached) });
+          return notifyClients({ type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf(cached),
+            diag: { trigger: 'check:served-mismatch', at: new Date().toISOString(), served: served,
+              cachedVersion: shellVersionOf(cached), cachedEtag: etagOf(cached), result: 'renotify' } });
         }
-        return revalidateShell(cache, cached, served).then(function(result) {
+        return revalidateShell(cache, cached, served, 'check').then(function(result) {
           // ★ 最新と確認できたときだけ依頼元へ返す。画面は配信側の目印（ETag）の変化だけで
           //   再読み込みしない（index.html を変えない push で再読み込みさせない）。
           //   判定できないとき（'unknown'）は答えない。画面は期限後の予備の再読み込みで回復する。
-          if (result === 'same' && src) { try { src.postMessage({ type: 'APP_UP_TO_DATE' }); } catch (e) {} }
+          if (result === 'same' && src) { try { src.postMessage({ type: 'APP_UP_TO_DATE', sw: CACHE_NAME, diag: _lastDiag }); } catch (e) {} }
         });
       });
     }).catch(function() {})

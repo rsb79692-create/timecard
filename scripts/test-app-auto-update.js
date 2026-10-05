@@ -42,6 +42,8 @@ function slice(startMark, endMark) {
 const UPDATE_CODE = slice("// ===== 配信版の更新検知（開きっぱなしの古い画面を残さない）=====", "// オンライン復帰時: まだ監視を確立できていなければ");
 const FETCH_CODE = slice("// ===== 書込み通信の実行中件数 =====", "// ===== 会社（テナント）=====");
 
+// 診断（APP_VERSION_INFO）の問い合わせは版の確認ではないので数えない
+function isCheck(m) { return !!m && m.type === "CHECK_APP_UPDATE"; }
 // ── 模擬環境 ─────────────────────────────────────────────
 function el(tag, props) {
   const o = Object.assign({ tagName: tag, style: {}, id: "", type: "", value: "", defaultValue: "", children: [] }, props || {});
@@ -304,14 +306,14 @@ console.log("\n[4] HEAD で配信版の変化を見つけた場合（SW のキ�
         N.ctx.checkAppVersion();
         setImmediate(function () {
           N.tick("timeout");
-          check("ETag の弱い印（W/）の付き外れだけでは更新とみなさない", N.reloads === 0 && N.posted.length === 0);
+          check("ETag の弱い印（W/）の付き外れだけでは更新とみなさない", N.reloads === 0 && !N.posted.some(isCheck));
         });
         const H = makeEnv();
         H.ctx._appVersionTag = '"v1"'; H.ctx._appVersionLastCheck = 0; H.headTag = "";   // オフライン等で版が取れない
         H.ctx.checkAppVersion();
         setImmediate(function () {
           H.tick("timeout");
-          check("版が取れない（オフライン）ときは再読み込みしない", H.reloads === 0 && H.posted.length === 0);
+          check("版が取れない（オフライン）ときは再読み込みしない", H.reloads === 0 && !H.posted.some(isCheck));
           part5();
         });
       });
@@ -416,7 +418,7 @@ function part7() {
   check("location.reload() を呼ぶのは自動更新の1箇所と予備バナーの［再読み込み］だけ",
     (UPDATE_CODE.split("\n").filter(function (l) { return !/^\s*\/\//.test(l); }).join("\n").match(/location\.reload\(\)/g) || []).length === 3);
   check("自動更新は記録を書けた場合にだけ再読み込みする",
-    /if\(!_appWriteAutoLog\(\{v:_appAutoTarget,at:Date\.now\(\)\}\)\)\{_appAutoFallback\(\);return;\}\s*\n\s*_appAutoDone=true;\s*\n\s*_appAutoStop\(\);\s*\n\s*location\.reload\(\);/.test(UPDATE_CODE));
+    /if\(!_appWriteAutoLog\(\{v:_appAutoTarget,at:Date\.now\(\)\}\)\)\{_appAutoFallback\("autolog-write-failed"\);return;\}\s*\n\s*appUpdDiag\("auto-reload"\);\s*\n\s*_appAutoDone=true;\s*\n\s*_appAutoStop\(\);\s*\n\s*location\.reload\(\);/.test(UPDATE_CODE));
   check("sw.js は通知に入れ直した版を添える", /type: 'APP_UPDATE_AVAILABLE', version: shellVersionOf\(res\)/.test(sw));
   check("sw.js を変えたので CACHE_NAME を上げてある（v15 以上）", /const CACHE_NAME = 'timecard-v(1[5-9]|[2-9]\d)'/.test(sw));
   check("書込み件数の差し込みはページ先頭の script（他の通信より前）にある",
@@ -580,7 +582,7 @@ async function part8() {
     E.tick("timeout"); E.tick("interval");
     check("SW が答えないとき（キャッシュが空）は、従来どおり期限後に1回だけ再読み込みする", E.reloads === 1);
   }
-  check("sw.js は画面からの確認に「最新です」を返す", /src\.postMessage\(\{ type: 'APP_UP_TO_DATE' \}\)/.test(sw));
+  check("sw.js は画面からの確認に「最新です」を返す", /src\.postMessage\(\{ type: 'APP_UP_TO_DATE'[,} ]/.test(sw));
   check("sw.js を変えたので CACHE_NAME を v16 以上へ上げてある", /const CACHE_NAME = 'timecard-v(1[6-9]|[2-9]\d)'/.test(sw));
 }
 

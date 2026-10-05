@@ -34,7 +34,7 @@ GitHub Pages は `ETag: W/"…"` と `Cache-Control: max-age=600` を返して�
 　SW 更新直後でキャッシュが空の場合なので、再読み込みでネットワークから取る）。SW が無い端末は HEAD の確認後に再読み込みする。
 　★ 一定間隔で `location.reload()` する実装にしてはならない（入力を奪う・更新ループの原因）。
 ・**更新ループを起こさない**：再読み込みした版をタブの `sessionStorage`（`tc_app_autoreload`）に残し、
-　**同じ版では二度と自動で再読み込みしない**（それでも古いままなら従来のバナーへ切り替える）。版の分からない通知（旧 SW）は
+　**同じタブの中では**同じ版で二度と自動で再読み込みしない（タブを閉じる・再起動で記録は消える。2026-10-05 確認）（それでも古いままなら従来のバナーへ切り替える）。版の分からない通知（旧 SW）は
 　10分に1回まで。記録を読み書きできない端末では自動で再読み込みしない。オフラインの間は再読み込みしない。
 ・**作業を失わせない**：`appReloadBlockReason()` が空になるまで待つ（2秒ごとに再確認し、最後の操作から5秒も待つ）。待つのは
 　書込み通信の途中（`_appWritesInFlight`＝先頭で `fetch` に差し込んだ PUT/PATCH/POST/DELETE の件数）、`savingCount`、
@@ -83,6 +83,46 @@ GitHub Pages は `ETag: W/"…"` と `Cache-Control: max-age=600` を返して�
 ・Service Worker 自身の更新（`sw.js` の変更・`controllerchange`）は、アプリの版の判定に使わない。アプリの版の切り替えは
 　「新しい HTML をキャッシュへ入れ終えた通知（`APP_UPDATE_AVAILABLE`）→ 安全を待って1回だけ再読み込み」だけで行う。
 ・回帰テスト: `node scripts/test-app-auto-update.js` の [8]（本物の `sw.js` を動かして、同じ内容の配信・同じ版で通知しないことを固定）と [8b]。
+
+### 2026-10-05 再調査（9/30 の修正後も「新しいバージョンがあります。再読み込みしてください。」が出る）と診断ログ
+
+**結論: 原因は未特定。** 本番の端末で何が起きたかの記録が無く、本番の GitHub Pages も調査環境から取得できなかった（egress で拒否）。
+推測で修正せず、次に出た瞬間に原因が分かる診断ログ（下記）だけを入れた（判定・動作は変えていない）。
+
+確認できた事実（検証サーバ＋本物の Chromium・永続プロファイルで再起動を再現）:
+・`tc_app_autoreload`（sessionStorage）は**タブ単位**で、タブを閉じる・ブラウザ／PWA を再起動すると消える（実測で `null`）。
+　9/30 の「同じ版では二度と」は**同じタブの中だけ**の保証であり、端末単位ではない（説明が誤っていた）。
+　ただし再起動後に同じ版を再び通知することは再現しなかった。通知の元は SW の Cache Storage（永続）で、
+　キャッシュ済みの版と配信中の版が同じなら通知しないため。sessionStorage が消えても「バナー」は増えない
+　（バナー化は「同じタブで同じ版を2回通知された」ときだけ。消えると逆に1回余分に自動再読み込みする側に倒れる）。
+・ホーム画面・単一/複数タブ・同じタブで連続再読み込み・ブラウザ再起動・内容同じ push（ETag だけ変化）・SW 更新（CACHE_NAME 変更）では、
+　**1デプロイにつき1回の自動再読み込み・バナーなし**だった。
+・「再読み込みしてください」の文言が出る経路は次の4つだけ:
+　① 管理者URL・閲覧用URLの画面を表示中（`view`）に新版を検知（新版のたびに出る。［後で］から5分で再表示）
+　② 待ち理由（入力中・モーダル等）が30分続いた（`APP_AUTO_MAX_WAIT_MS`）
+　③ 同じタブで、再読み込み済みの版をもう一度通知された（`_appAlreadyReloadedFor`）
+　④ sessionStorage を読み書きできない（③の記録が取れない）
+　PIN でログインした画面（`session`）の文言は「ホームに戻ると自動で更新されます」で、③④になったときだけ上の文言に差し替わる。
+・9/30 の修正後に **index.html の内容が変わったデプロイは5回**（9/30 07:48・08:04・08:22、10/01 02:11、10/05 09:13）。
+　10/01 は文書整理でコメント3行だけ変わったもので、内容ハッシュが変わるため**新版として扱われる**。
+・検証サーバで CDN が新旧を交互に返すと、SW は古い内容を「新しい版」としてキャッシュ・通知し、画面は旧版へ戻る（実測）。
+　SW には版の新旧の順序が無い（ハッシュが違えば新版）。本番の GitHub Pages で起きるかは未確認。
+
+#### 診断ログ（UPDATE-DIAG）
+
+・`index.html` の `APP-UPDATE-DIAG-BEGIN`〜`END`。端末の localStorage `tc_app_update_diag` に最大60件（新しいものを残す）。
+　タブを閉じても・再起動しても残る。記録するのは版（ハッシュ／ETag）・画面名・待ち理由・SW の状態・時刻だけで、
+　**URL・クエリ（トークン）・氏名・PIN は記録しない**。
+・見る方法（通常の画面には出さない）: URL に `?updiag=1` を付けて開く／更新バナーの文言を5回続けて押す／開発者ツールで `tcUpdateDiag()`。
+・主な記録: `boot`（起動・nav 種別・PWA か）、`version-info`（このタブが動かしている版 `run`＝SW がこのタブへ返した版）、
+　`sw-update-available`（通知された版 `ver`・そのタブの版 `clientVersion`・**`sameAsRunning`**・SW 側の判定 `swDiag`
+　＝契機 `navigate`/`check`/`check:served-mismatch`、HEAD/キャッシュ/取得した本体の ETag と版、結果）、`head-changed`、
+　`request`（`source`＝`sw`/`head-sw-timeout`/`head-no-sw`/`sw-stale-recheck`）、`wait`（待ち理由が変わったとき）、
+　`pending-banner`（理由・待った時間）、`fallback`（`already-reloaded-for-target`/`autolog-*`）、`banner-shown`、`banner-later`、`banner-reload-click`、`auto-reload`。
+・どの経路かの見分け方: `sameAsRunning:true` なら**同じ版の誤通知**（`swDiag` で SW 側の理由が分かる）。
+　`pending-banner` の `reason:"view"` は①、`maxWait:true` は②、`fallback` は③④。`ver` が前回と行き来していれば CDN の新旧混在。
+・SW（`sw.js` v17）は通知に `sw`（CACHE_NAME）・`clientVersion`・`diag` を添え、`APP_VERSION_INFO` に答える。**判定は変えていない。**
+・★ 原因が確定したら、端末単位（localStorage 等）の適用済み版の管理を含めて修正を検討する。確定前に置き換えない（2026-10-05 ユーザー指示）。
 
 ### ローカル実測（GitHub Pages と同じヘッダを返す検証サーバ）
 
