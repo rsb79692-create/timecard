@@ -10,6 +10,7 @@
 <meta name="theme-color" content="#1976D2">
 <link rel="manifest" href="manifest.json">
 <link rel="apple-touch-icon" href="apple-touch-icon-v2.png">
+<link rel="icon" href="favicon.ico" sizes="any">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js" integrity="sha384-sEVIly94UBRLKWdkYoPpSG7GD/e79YHMrxVyZaOk712Ga7+EAw6w1EFi+xBzBdd+" crossorigin="anonymous"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js" integrity="sha384-XtSlZdmg0Ad5zf0AX4W9TGdm+dGjaNK4KG3lNFjfgbnxkCEuT9ugWXkLExgQTJ+6" crossorigin="anonymous"></script>
@@ -165,6 +166,7 @@ function tenantBrandBarHtml(){
   try{
     var m=document.querySelector('link[rel="manifest"]');if(m)m.setAttribute("href",TENANT.manifest);
     var ti=document.querySelector('link[rel="apple-touch-icon"]');if(ti)ti.setAttribute("href",TENANT.touchIcon);
+    var fi=document.querySelector('link[rel="icon"]');if(fi)fi.setAttribute("href",TENANT.touchIcon);
     var tc=document.querySelector('meta[name="theme-color"]');if(tc)tc.setAttribute("content",TENANT.themeColor);
     var at=document.querySelector('meta[name="apple-mobile-web-app-title"]');if(at)at.setAttribute("content",TENANT.homeTitle);
     document.title=TENANT.title;
