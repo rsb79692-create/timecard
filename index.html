@@ -15051,8 +15051,12 @@ function dlStaffDetailCSV(month,recs,staffArr,approvalsObj){
   var rows=[];
   // \u627F\u8A8D\u6E08\u307F\u6709\u7D66\u65E5\u30DE\u30C3\u30D7\uFF08staffName__date \u2192 type label\uFF09
   var plMap={};
+  // 1\u7533\u8ACB\u3067\u8907\u6570\u65E5\u3092\u7533\u8ACB\u3067\u304D\u308B\u305F\u3081 getLeaveDates() \u3067\u53D6\u5F97\u65E5\u3054\u3068\u306B\u5C55\u958B\u3059\u308B\uFF08r.date \u306F\u5148\u982D\u65E5\u3060\u3051\uFF09\u3002\u5BFE\u8C61\u6708\u306E\u53D6\u5F97\u65E5\u3060\u3051\u3092\u8F09\u305B\u308B\u3002
   paidLeaveRequests.filter(function(r){return r.status==="approved";}).forEach(function(r){
-    plMap[r.staffName+"__"+r.date]="\u6709\u7D66";
+    getLeaveDates(r).forEach(function(d){
+      if(monthKey(d)!==month)return;
+      plMap[r.staffName+"__"+d]="\u6709\u7D66";
+    });
   });
   staffArr.forEach(function(s){
     var nm=s.name;
