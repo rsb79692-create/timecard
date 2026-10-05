@@ -52,6 +52,7 @@
 | `tc5_records` の取得範囲・承認漏れ集計 | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-records-range.js` / `node scripts/test-unapproved-summary.js` |
 | index.html（app shell）のキャッシュ・`sw.js`・配信版の自動更新 | [`app-shell-cache.md`](docs/features/app-shell-cache.md) | `node scripts/test-records-range.js` / `node scripts/test-app-auto-update.js` |
 | 打刻の端末保存と自動再送 | [`punch-outbox.md`](docs/features/punch-outbox.md) | `node scripts/test-punch-outbox.js` |
+| 承認済み有給の日の本人打刻禁止 | [`punch-leave-guard.md`](docs/features/punch-leave-guard.md) | `node scripts/test-punch-leave-guard.js` |
 | 管理者による勤怠編集 | [`admin-attendance-edit.md`](docs/features/admin-attendance-edit.md) | `node scripts/test-admin-attendance-edit.js` |
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |
 | 施設端末の持ち出し検知 | [`device-watch.md`](docs/features/device-watch.md) | `node scripts/test-device-watch.js` |
@@ -73,6 +74,7 @@
 - 送信は `/tc5_records/{eventId}.json` への **PUT**。**POST（push）で採番させない。再送で `eventId` を採り直さない。** 打刻時刻（`timestamp`/`time`/`date`）は再送で変えない。
 - サーバから `tc5_records` を取り直すときは必ず `punchOutboxMergeInto()`（`mergeRecordsRange()` 経由を含む）を通す。`records=arr` の全置換をしない。
 - `punchOutboxEnabled()`（`writePolicy==="full" && !viewerMode`）の境界を緩めない。PIN 未取得（`staffPinsLoaded` 偽）のまま PIN 新規登録へ進めない（`tc5_pins` の全体 PUT で他人の PIN が消える）。
+- 承認済み有給の日の本人打刻は `_execPunch` で端末保存の**前**に止める。判定は `plBuildLeaveHistory` を使い別実装にしない。管理者修正には掛けない。
 
 **tc5_records の取得範囲・キャッシュ（`records-range.md` / `app-shell-cache.md`）**
 - クライアントは `tc5_records` を全件取得しない。範囲取得は必ず `date` 索引で行い、**`orderBy="$key"` + `startAt` を使わない**（ID が時系列順でない）。`id` に時系列の意味を持たせない。

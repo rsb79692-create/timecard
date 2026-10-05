@@ -463,7 +463,8 @@ function elevateShareSession(kind,token){
 function afterElevation(){
   /* ⚠ 待ち時間は最大でおよそ 20 秒（establishSessionEx の 12 秒 ＋ exchangeCustomToken の 5 秒
      ＋ _authInFlight のレース 3 秒）。回線が悪いと管理画面の「資料」タブなどが
-     その間スピナーのままになる。打刻はこの Promise に依存しないので影響しない。 */
+     その間スピナーのままになる。打刻（tc5_records）はこの Promise に依存しない。
+     ただし承認済み有給の判定は、有給申請が未取得または古いときだけ最大 PUNCH_LEAVE_WAIT_MS 待つ（punchLeaveWaitFresh）。 */
   var ps=[_elevatePromise,_adminElevatePromise,_shareElevatePromise].filter(Boolean);
   if(!ps.length)return Promise.resolve();
   return Promise.all(ps.map(function(p){return Promise.resolve(p)["catch"](function(){});}));
@@ -3176,16 +3177,25 @@ function ensureStaffScopedData(name){
   // ⚠⚠ 役割トークンの確立を必ず待つ（ensureAdminData と同じ理由）。
   //    elevateStaffSession は sOk が裏で走らせているだけなので、待たないと
   //    ここは匿名トークンで走り、有給・通知・賄いが 401 で空になる。
-  //    ★ 打刻そのものはこの Promise に依存しない（tc5_records は起動面のまま）。
-  _staffDataPromise=afterElevation().then(function(){
+  //    ★ tc5_records は起動面のまま。打刻が待つのは承認済み有給の判定だけ（PUNCH-LEAVE-FRESH）。
+  var _plGen=_plSeq+1; // この取得の世代（直後の plTrackFetch が採番する値）
+  var _mine=_staffDataPromise=afterElevation().then(function(){
   return Promise.all([
-    fetchJson(FB_URL+"/tc5_paid_leave_requests.json"),
+    // 有給申請は「取得成功（ノードが空でも）」と「取得失敗」を区別する（{v} / null）。打刻判定の鮮度に使う。
+    authFetch(FB_URL+"/tc5_paid_leave_requests.json")
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
+      .then(function(v){return {v:v};})["catch"](function(){return null;}),
     fetchJson(FB_URL+"/tc5_paid_leave_balances.json"),
     sid?fetchJson(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+".json"):Promise.resolve(null),
     fetchJson(FB_URL+"/tc5_meals.json"),
     fetchJson(FB_URL+"/tc5_meal_confirmations.json")
   ]).then(function(r){
-    if(r[0]){var a=(typeof r[0]==="object"&&!Array.isArray(r[0]))?Object.values(r[0]):r[0];paidLeaveRequests=(a||[]).filter(Boolean);}
+    // ★ 後から始めた取得が先に終わっていれば、古い取得の有給申請では上書きしない（世代が最新のときだけ反映）。
+    if(r[0]&&_plGen===_plSeq){
+      var v0=r[0].v,a=(v0&&typeof v0==="object"&&!Array.isArray(v0))?Object.values(v0):(v0||[]);
+      paidLeaveRequests=a.filter(Boolean);
+      _plFetchedAt=Date.now();
+    }
     if(r[1]){var b=(typeof r[1]==="object"&&!Array.isArray(r[1]))?Object.values(r[1]):r[1];paidLeaveBalances=(b||[]).filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});}
     if(r[0]!==null&&r[1]!==null)paidLeaveLoaded=true;
     if(sid&&r[2]&&typeof r[2]==="object"){
@@ -3198,12 +3208,40 @@ function ensureStaffScopedData(name){
     if(r[3]&&typeof r[3]==="object"){mealsData=r[3];}
     if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];}
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
-    if(!paidLeaveLoaded||!mealsLoaded)_staffDataPromise=null; // 再試行を許す
+    if((!paidLeaveLoaded||!mealsLoaded)&&_staffDataPromise===_mine)_staffDataPromise=null; // 再試行を許す（後から始めた取得は消さない）
     if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard)render();
   });
-  }).catch(function(){_staffDataPromise=null;});
+  }).catch(function(){if(_staffDataPromise===_mine)_staffDataPromise=null;});
+  plTrackFetch(_staffDataPromise);
   return _staffDataPromise;
 }
+
+// ===== PUNCH-LEAVE-FRESH-BEGIN =====
+// 承認済み有給の打刻判定（PUNCH-LEAVE-GUARD）に使う tc5_paid_leave_requests の鮮度管理。
+// ・有給申請は全スタッフ分を1つの配列で持つため、鮮度は「最後に取得できた時刻」（_plFetchedAt）で測る
+//   （スタッフが替わっても、取得から PL_FRESH_MS 以内なら取り直さない・待たない）。
+// ・施設端末は開いたままなので、スタッフを選ぶたびに ensureStaffScopedData を取り直す（selStaff）。
+//   ★ 打刻画面にいる間は取り直さない（送信中の有給申請・賄い確認を取得結果で上書きしないため）。
+// ・取得中の印は世代つき。古い取得の完了が新しい取得の印を消さない。
+var PL_FRESH_MS=60000,PUNCH_LEAVE_WAIT_MS=2000;
+var _plFetchedAt=0,_plInflight=null,_plSeq=0;
+function plTrackFetch(p){
+  if(!p)return p;
+  var g=++_plSeq;
+  _plInflight=p;
+  function fin(){if(_plSeq===g)_plInflight=null;}
+  p.then(fin,fin);
+  return p;
+}
+function plLeaveFresh(){return _plFetchedAt>0&&Date.now()-_plFetchedAt<PL_FRESH_MS;}
+// 打刻の直前に呼ぶ。有給申請が未取得または古く、かつ取得中のときだけ、最大 PUNCH_LEAVE_WAIT_MS 待つ Promise を返す。
+// 待つ必要がなければ null（即座に判定してよい）。★ 通信断では待たない（オフライン打刻を遅らせない）。
+function punchLeaveWaitFresh(){
+  if(!_plInflight||plLeaveFresh())return null;
+  if(typeof navigator!=="undefined"&&navigator.onLine===false)return null;
+  return Promise.race([Promise.resolve(_plInflight)["catch"](function(){}),new Promise(function(r){setTimeout(r,PUNCH_LEAVE_WAIT_MS);})]);
+}
+// ===== PUNCH-LEAVE-FRESH-END =====
 
 function listenFirebase() {
   // 10秒ごとにポーリングして同期
@@ -5630,11 +5668,21 @@ function _renderInner(){
     //   （スタッフ選択→PIN入力の所要時間中に届くため、通常は利用者の目に触れない）
     var _recWait=!recordsReady&&writePolicy==="full";
     if(_recWait){ci=false;co=false;cbs=false;cbe=false;cfc=false;}
-    var _recWaitHtml=_recWait
+    // 承認済み有給の日は勤務打刻ボタンを押せなくする（表示だけ。保存は _execPunch で必ず止める）
+    var _plBlock=punchOutboxEnabled()&&punchLeaveBlocked(staffName,dk);
+    if(_plBlock){ci=false;co=false;cbs=false;cbe=false;cfc=false;}
+    // 打刻直前の有給確認の待ち（最大2秒）は、ボタン・顔撮影の枠を動かさず画面下に重ねて出す
+    //（押しても _punchSaving で受け付けない）。枠を消すと顔撮影のプレビューが止まるため。
+    var _plCheckHtml=_plChecking
+      ?'<div style="position:fixed;left:50%;bottom:24px;transform:translateX(-50%);z-index:50;padding:10px 18px;background:#0f172a;color:#fff;border-radius:6px;font-size:1rem;font-weight:700;white-space:nowrap;">確認しています…</div>'
+      :'';
+    var _recWaitHtml=_plBlock
+      ?'<div style="margin:0 0 10px;padding:12px;background:#eff6ff;border:1px solid #93c5fd;border-radius:6px;text-align:center;font-size:1rem;font-weight:700;color:#1e40af;line-height:1.5;">'+esc(PUNCH_LEAVE_MSG)+'</div>'+_plCheckHtml
+      :_plCheckHtml+(_recWait
       ?'<div style="margin:0 0 10px;padding:9px 12px;background:#f1f5f9;border:1px solid #cbd5e1;border-radius:6px;text-align:center;font-size:.85rem;font-weight:700;color:#475569;">本日の打刻状態を確認しています…</div>'
       :(recordsStale
         ?'<div style="margin:0 0 10px;padding:9px 12px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;text-align:center;font-size:.83rem;font-weight:700;color:#92400e;line-height:1.5;">⚠ 最新の打刻状態を取得できていません<div style="font-weight:400;font-size:.76rem;margin-top:2px;">この端末の記録で表示しています。他の端末で打刻済みでないかご確認ください。</div></div>'
-        :'');
+        :''));
     var worked=toHM(calcMs(tr));
     var histHTML=tr.length?tr.map(function(r){
       return '<div class="hist-row"><span class="'+(r.type==="clockIn"?"c-in":r.type==="clockOut"?"c-out":r.type==="facilityChange"?"c-fc":"c-brk")+'">'+esc(TYPE_LABEL[r.type]||r.type)+(r.type==="facilityChange"&&r.workFacility?' → '+esc(r.workFacility):"")+'</span><span style="font-family:monospace;font-weight:600;">'+esc(r.time||"")+'</span></div>';
@@ -5866,7 +5914,7 @@ function _renderInner(){
             +'</div>'
           :(_crossFacilityCin
             ?'<div style="text-align:center;padding:10px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:0 0 12px;font-size:.9rem;font-weight:700;color:#92400e;">'+(_onBreak?'休憩中：':'出勤中：')+esc(_crossFacilityCin.facilityName||"他施設")+'</div>'
-            :((_pso.canSupportWork&&!_openCin)
+            :((_pso.canSupportWork&&!_openCin&&!_plBlock)
               ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
                 +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
                 +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
@@ -9992,6 +10040,8 @@ function selStaff(s){
   if(firebaseError){alert("通信エラーです。画面を再読み込みしてください");return;}
   if(!firebaseReady){alert("読込中です。数秒お待ちください");return;}
   staffName=s;
+  // ログインのたびに本人向けデータ（有給承認を含む）を取り直す（同じスタッフの再ログインでも古い承認で打刻判定しない）
+  _staffDataPromise=null;_staffDataFor="";
   staffNotifOpen=false; // 別スタッフ選択時は通知履歴の展開状態をリセット
   mileageResetSession(); // 別スタッフの移動距離データ・利用可否を持ち越さない
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
@@ -10012,10 +10062,28 @@ function delStaff(n){staffDeleteOne(n);}
 // 打刻の実行。呼び出し側は戻り値（Promise）を待たない（従来どおり即座に制御を返す）。
 // ★ 端末保存（IndexedDB）の成功を確認してから画面を打刻済みにする。
 //   保存できなかった場合は打刻失敗として扱い、records にも積まない。
+var _plChecking=false; // 打刻直前に有給申請の取得を待っている間（ボタン・枠は動かさず画面下に「確認しています…」を重ねる。押下は _punchSaving で受け付けない）
 var _punchSaving=false; // 端末保存中の再入防止（保存完了までの数ミリ秒の連打を弾く）
 async function _execPunch(type,d){
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
   if(_punchSaving)return;
+  // ⓪ 承認済み有給の日は端末へ保存しない（PUNCH-LEAVE-GUARD）。有給データを取得中なら少しだけ待つ。
+  if(punchOutboxEnabled()){
+    var _plName=staffName;
+    var _plWait=punchLeaveWaitFresh();
+    if(_plWait){
+      _punchSaving=true;_plChecking=true;render();
+      try{await _plWait;}catch(e){}
+      _punchSaving=false;_plChecking=false;
+    }
+    if(staffName!==_plName)return; // 待つ間に画面を離れた
+    if(punchLeaveBlocked(staffName,fmtDateKey(d))){
+      if(type==="facilityChange")facilityChangeTo=null;
+      showAlert(PUNCH_LEAVE_MSG);
+      render();
+      return;
+    }
+  }
   var _so=staffList.find(function(s){return s.name===staffName;})||{};
   var _hf=(_so.location)||"";
   var _fn=facilityName||"";
@@ -10104,6 +10172,7 @@ function doPunch(type){
   // 打刻ボタンから来る4種以外は受け付けない（施設変更は doFacilityChange 経由のみ）
   if(["clockIn","clockOut","breakStart","breakEnd"].indexOf(type)<0)return;
   var d=new Date();
+  if(punchOutboxEnabled()&&punchLeaveBlocked(staffName,fmtDateKey(d))){showAlert(PUNCH_LEAVE_MSG);return;}
   console.log("[doPunch start]", staffName, type, fmtDateKey(d));
   // B. 当日・当該スタッフ・未削除レコード取得（同一施設でフィルタ）
   var _today=fmtDateKey(d);
@@ -10184,6 +10253,7 @@ function openFacilityChangeModal(){
   if(!tokenValid)return;
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
   if(_fcModalOpen)return; // 連打によるモーダル多重表示を防ぐ
+  if(punchOutboxEnabled()&&punchLeaveBlocked(staffName,fmtDateKey(new Date()))){showAlert(PUNCH_LEAVE_MSG);return;}
   var _fso=staffList.find(function(s){return s.name===staffName;})||{};
   if(!_fso.canSupportWork){showAlert("施設変更は応援勤務が可能なスタッフのみ利用できます。\n\n管理者に連絡してください。");return;}
   var d=new Date(),dk=fmtDateKey(d);
@@ -14871,6 +14941,27 @@ function plBuildLeaveHistory(requests,opts){
   return out;
 }
 // ===== PL-HISTORY-END =====
+
+// ===== PUNCH-LEAVE-GUARD-BEGIN =====
+// 承認済み有給の日は本人の勤務打刻（出勤・退勤・休憩開始・休憩終了・施設変更）を受け付けない。
+// ★ 承認済みの判定・本人の突き合わせ・複数日の展開は plBuildLeaveHistory をそのまま使う
+//   （有給の判定を別実装にしない。status==="approved" だけが対象で、申請中・却下・取消は打刻できる）。
+// ★ 止めるのは端末保存（punchOutboxCommit）の前。端末に「打刻済み」で保存した後にサーバで
+//   拒否する形にはしない（端末とサーバが食い違うため）。既に端末キューにある打刻は従来どおり送る。
+// ★ 管理者の勤怠修正（saveRecord / patchRecord）はこの判定を通らない。
+var PUNCH_LEAVE_MSG="この日は有給休暇が承認されているため、打刻できません。";
+function punchLeaveApprovedOn(requests,staffId,staffName,dateKey,getDates,getSid){
+  if(!dateKey||!staffName)return false;
+  // 対象日を含む申請だけに絞ってから判定する（判定は申請ごとなので結果は同じ。描画ごとの走査を軽くする）
+  requests=(requests||[]).filter(function(r){return r&&(getDates(r)||[]).indexOf(dateKey)>=0;});
+  if(!requests.length)return false;
+  var h=plBuildLeaveHistory(requests,{staffId:staffId,staffName:staffName,todayJst:"",getDates:getDates,getSid:getSid});
+  return h.taken.some(function(e){return e.date===dateKey;});
+}
+function punchLeaveBlocked(name,dateKey){
+  return punchLeaveApprovedOn(paidLeaveRequests,resolveStaffId(name),name,dateKey,getLeaveDates,getReqStaffId);
+}
+// ===== PUNCH-LEAVE-GUARD-END =====
 
 // staffId\u57FA\u6E96\u306E\u6709\u52B9\u6B8B\u65E5\u6570\uFF08\u671F\u9650\u5185\u30FB\u6B8B>0\u306E\u4ED8\u4E0E\u884C\u306E\u307F\u5408\u8A08\uFF09
 function getValidRemainDays(staffId){

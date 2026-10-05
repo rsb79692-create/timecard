@@ -108,6 +108,8 @@
 
 `node scripts/test-paid-leave-history.js`（依存パッケージなし・送信なし・本番データ非アクセス）。
 **有給取得履歴・`plBuildLeaveHistory`・実績/予定の境界に関係する変更では実行必須**
+（`plBuildLeaveHistory` は承認済み有給の日の打刻禁止の判定にも使っている。変えるときは
+`node scripts/test-punch-leave-guard.js` も実行する。`punch-leave-guard.md`）
 （全件 PASS / 0 FAIL でなければ出荷しない）。テスト件数は増減するため固定値を規範にしない。
 0件／1件／多数／複数日申請／各 status／未知 status／未来日／同姓同名／旧形式データ／
 正本を書き換えないこと／表示系ハンドラが通信・書込をしないことを固定する。
