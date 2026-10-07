@@ -64,7 +64,8 @@ var TENANT_CONFIGS={
     manifest:"manifest.json",
     touchIcon:"apple-touch-icon-v2.png",
     themeColor:"#1976D2",
-    logo:null,                 // 穂乃味は現在のデザインのまま（ロゴ表示を足さない）
+    // ロゴは背景を透過した PNG（元画像 396×396 の JPEG から余白を切り抜き）。表示の高さはマンテールと同じ。
+    logo:{src:"brand/honomi/logo-1x.png",srcset:"brand/honomi/logo-1x.png 1x, brand/honomi/logo-2x.png 2x",alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は現在の色のまま
     features:{mileage:true,deviceWatch:true}
   },
@@ -141,20 +142,20 @@ function tenantUrl(base,query){
   }catch(e){}
 })();
 /**
- * 会社のロゴと会社名（画面上部）。穂乃味は空文字（現在のデザインに何も足さない）。
+ * 会社のロゴと会社名（画面上部）。ロゴ未設定の会社は空文字。
  * ロゴは縦横比を保つ（幅は固定しない・height 指定のみ・object-fit:contain）。
  */
 function tenantBrandHeaderHtml(){
-  if(TENANT.legacy||!TENANT.logo)return "";
+  if(!TENANT.logo)return "";
   return '<div class="tenant-brand" style="display:flex;flex-direction:column;align-items:center;gap:6px;margin:0 auto 14px;">'
     +'<img src="'+TENANT.logo.src+'" srcset="'+TENANT.logo.srcset+'" alt="'+TENANT.logo.alt+'" '
     +'style="height:84px;width:auto;max-width:60vw;object-fit:contain;display:block;" decoding="async">'
     +'<div style="font-size:.85rem;font-weight:700;color:var(--brand);letter-spacing:.04em;">'+TENANT.displayName+'</div>'
     +'</div>';
 }
-/** 管理画面・閲覧画面の上部に出す小さな会社表示。穂乃味は空文字。 */
+/** 管理画面・閲覧画面の上部に出す小さな会社表示。ロゴ未設定の会社は空文字。 */
 function tenantBrandBarHtml(){
-  if(TENANT.legacy||!TENANT.logo)return "";
+  if(!TENANT.logo)return "";
   return '<div class="tenant-brand-bar" style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
     +'<img src="'+TENANT.logo.src+'" alt="'+TENANT.logo.alt+'" style="height:32px;width:auto;object-fit:contain;display:block;" decoding="async">'
     +'<span style="font-size:.82rem;font-weight:700;color:var(--brand);">'+TENANT.displayName+'</span>'
@@ -6165,7 +6166,7 @@ function _renderInner(){
   if(screen==="pin"){
     var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#c8ccd2">────────</span>';
     app.innerHTML='<div class="center" style="padding-top:40px;margin-bottom:28px;">'
-      +(TENANT.legacy?'':tenantBrandHeaderHtml())
+      +tenantBrandHeaderHtml()
       +'<div style="font-size:1.6rem;font-weight:900;">'+(pinScope==="system"?'システム管理者認証':'管理者認証')+'</div>'
       +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +(_tenantLoginGate&&pinScope==="company"&&_tenantAuthError?'<div style="color:#dc2626;font-size:.8rem;margin-top:8px;">'+esc(_tenantAuthError)+'</div>':'')

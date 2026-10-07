@@ -1,7 +1,7 @@
 // ===== キャッシュ版 =====
 // ★ sw.js を変更したら必ず CACHE_NAME を上げる。activate で旧キャッシュを全削除するため、
 //   これが「配信済みの古い app shell を確実に捨てる」唯一の安全弁になる。
-const CACHE_NAME = 'timecard-v18';
+const CACHE_NAME = 'timecard-v19';
 
 // app shell（index.html）のキャッシュキー。
 // ★ クエリ付き（?admin= / ?token= 等）でも必ずこの1つのキーへ正規化する。
@@ -18,6 +18,8 @@ const OFFLINE_URLS = [
   '/timecard/apple-touch-icon-v2.png',
   '/timecard/icon-maskable-512-v2.png',
   '/timecard/favicon.ico',
+  '/timecard/brand/honomi/logo-1x.png',
+  '/timecard/brand/honomi/logo-2x.png',
   // 会社ごとの表示用アセット（配信物のみ。業務データは含まない）
   '/timecard/manifest-mantel.json',
   '/timecard/brand/mantel/logo-160.png',

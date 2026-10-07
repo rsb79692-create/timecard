@@ -729,6 +729,13 @@ async function main() {
       check(k + ": manifest とロゴが在る",
         fs.existsSync(path.join(ROOT, client[k].manifest)) && fs.existsSync(path.join(ROOT, client[k].logo.src)));
     });
+    // ロゴを設定した会社（穂乃味を含む）は srcset の全ファイルが在り、sw.js の OFFLINE_URLS に入っている
+    Object.keys(client || {}).filter(function (k) { return client[k].logo; }).forEach(function (k) {
+      const files = client[k].logo.srcset.split(",").map(function (x) { return x.trim().split(/\s+/)[0]; });
+      check(k + ": ロゴの srcset が全部在り SW に載っている", files.every(function (f) {
+        return fs.existsSync(path.join(ROOT, f)) && sw.indexOf("'/timecard/" + f + "'") >= 0;
+      }), files.join(","));
+    });
   }
 
   console.log("\n==================================");
