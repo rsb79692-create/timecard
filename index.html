@@ -66,7 +66,16 @@ var TENANT_CONFIGS={
     themeColor:"#1976D2",
     // ロゴは背景を透過した PNG（元画像 396×396 の JPEG から余白を切り抜き）。表示の高さはマンテールと同じ。
     logo:{src:"brand/honomi/logo-1x.png",srcset:"brand/honomi/logo-1x.png 1x, brand/honomi/logo-2x.png 2x",alt:"株式会社 穂乃味"},
-    theme:null,                // 穂乃味は現在の色のまま
+    // ロゴの稲穂の金を濃くした金茶を主色に、背景は生成り（2026-10-07 ユーザー指示・案A）。
+    // ★ 出勤の青（--punch-in）は変えない。主色は白文字とのコントラスト比 6.0（#7A5F32）。
+    theme:{
+      "--brand":"#7A5F32","--brand-dark":"#5E4824",
+      "--brand-mid":"#957540","--brand-soft":"#F8F3EA","--brand-soft2":"#FAF6EE","--brand-soft3":"#EFE5D2",
+      "--brand-border":"#E6D9BF","--brand-border2":"#D3BF98",
+      "--brand-tint":"#EFE5D2","--brand-tint2":"#E6D9BF",
+      "--brand-bg":"#FBF8F2","--brand-bg2":"#F2EEE7","--brand-bg3":"#FCFAF6",
+      "--page-bg":"#F4F1EC"
+    },
     features:{mileage:true,deviceWatch:true}
   },
   mantel:{
@@ -133,9 +142,9 @@ function tenantPayload(o){
 function tenantUrl(base,query){
   return base+"?"+(TENANT.legacy?"":("c="+encodeURIComponent(TENANT_ID)+(query?"&":"")))+(query||"");
 }
-// 会社のブランド色を適用する（穂乃味は何もしない＝:root の既定値のまま）
+// 会社のブランド色を適用する（theme 未設定の会社は :root の既定値のまま）
 (function applyTenantTheme(){
-  if(TENANT.legacy||!TENANT.theme)return;
+  if(!TENANT.theme)return;
   try{
     var st=document.documentElement.style;
     Object.keys(TENANT.theme).forEach(function(k){st.setProperty(k,TENANT.theme[k]);});
@@ -3422,7 +3431,7 @@ function listenFirebase() {
 </script>
 <style>
 /* ===== 会社ごとのブランド色（CSS変数）=====
-   ★ 既定値は穂乃味の現在の色そのもの（見た目は変更前と同一）。
+   ★ 既定値は旧来の青（theme 未設定の会社用）。穂乃味は TENANT_CONFIGS.honomi.theme（金茶）で上書きする。
    ★ 他社は TENANT_CONFIGS[会社].theme の値で上書きする（index.html 冒頭の applyTenantTheme）。
    ★ 土曜日の青（カレンダーの慣習）はブランド色ではないので変数にしていない。 */
 :root{
