@@ -66,7 +66,7 @@ var TENANT_CONFIGS={
     themeColor:"#1976D2",
     logo:null,                 // 穂乃味は現在のデザインのまま（ロゴ表示を足さない）
     theme:null,                // 穂乃味は現在の色のまま
-    features:{mileage:true,deviceWatch:true,monthlyDocs:false}
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true}
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -3573,17 +3573,32 @@ body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .mdoc-note{font-size:1rem;color:#334155;margin:8px 0 14px;}
 .mdoc-alert{font-size:1.3rem;font-weight:900;color:#b91c1c;text-align:center;padding:18px 0;}
 .mdoc-row{display:flex;gap:10px;}
+.mdoc-hz-head{font-size:1.5rem;font-weight:900;color:#0f172a;margin:2px 0 14px;}
+.mdoc-hz-q{font-size:1.25rem;font-weight:900;color:#0f172a;line-height:1.6;}
+.mdoc-hz-date{font-size:1.45rem;color:#b91c1c;border-bottom:3px solid #b91c1c;margin-right:2px;}
+.mdoc-hz-row{margin-top:18px;}
+.mdoc-done{font-size:1rem;font-weight:900;color:#166534;background:#dcfce7;border-radius:6px;padding:6px 10px;margin-bottom:10px;display:inline-block;}
+.mdoc-quit{font-size:1.35rem;font-weight:900;color:#b91c1c;line-height:1.6;white-space:pre-line;margin:6px 0 16px;}
+.mdoc-hz-col{display:flex;flex-direction:column;gap:12px;}
+.mdoc-hz-col .mdoc-ok,.mdoc-hz-col .mdoc-ng{min-height:60px;font-size:1.3rem;}
+.mdoc-hyg-items{margin:12px 0 0;font-size:1rem;}
+.mdoc-hz-row .mdoc-ok,.mdoc-hz-row .mdoc-ng{min-height:64px;font-size:1.4rem;}
 .mdoc-btn{font-family:inherit;cursor:pointer;border-radius:8px;font-weight:900;}
 .mdoc-ok{display:block;width:100%;flex:1;background:var(--brand);color:#fff;border:none;padding:16px 8px;font-size:1.15rem;margin-top:4px;}
 .mdoc-ok:disabled{background:#94a3b8;}
 .mdoc-ng{flex:1;background:#fff;color:#b91c1c;border:2px solid #b91c1c;padding:14px 8px;font-size:1.15rem;margin-top:4px;}
 .mdoc-cancel{display:block;margin:10px auto 0;background:none;border:none;color:#64748b;font-size:1rem;font-weight:700;padding:12px 24px;min-height:44px;}
 .mdoc-temps{margin-bottom:14px;}
-.mdoc-tline{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #e2e8f0;}
-.mdoc-tname{flex-basis:100%;font-size:1rem;font-weight:700;color:#0f172a;}
-.mdoc-step{flex:1;background:#e2e8f0;color:#0f172a;border:none;min-width:44px;height:44px;font-size:.95rem;padding:0 4px;}
-.mdoc-tval{background:#fff;border:2px solid #cbd5e1;min-width:84px;height:44px;font-size:1.1rem;font-weight:900;color:#0f172a;font-family:inherit;border-radius:8px;cursor:pointer;}
-.mdoc-tinput{width:84px;height:44px;font-size:1.1rem;font-weight:900;text-align:center;border:2px solid var(--brand);border-radius:8px;font-family:inherit;}
+.mdoc-tline{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #e2e8f0;cursor:text;}
+.mdoc-thead{display:flex;flex-direction:column;min-width:0;}
+.mdoc-tname{font-size:1.1rem;font-weight:900;color:#0f172a;}
+.mdoc-prev{font-size:.85rem;color:#64748b;margin-top:2px;}
+.mdoc-tbox{display:flex;align-items:center;gap:4px;flex-shrink:0;}
+.mdoc-minus{font-size:1.6rem;font-weight:900;color:#0f172a;width:18px;text-align:right;}
+.mdoc-tin{width:104px;height:56px;font-size:1.6rem;font-weight:900;text-align:center;color:#0f172a;border:2px solid #94a3b8;border-radius:10px;background:#f8fafc;font-family:inherit;padding:0 4px;}
+.mdoc-tin::placeholder{font-size:1rem;font-weight:700;color:#64748b;}
+.mdoc-tin:focus{outline:none;border:3px solid var(--brand);background:#e8f1fc;}
+.mdoc-unit{font-size:1.1rem;font-weight:700;color:#334155;}
 </style>
 </head>
 <body>
@@ -10213,7 +10228,9 @@ function mdocPlan(type,staff,fac,d){
   var dk=fmtDateKey(d),hour=d.getHours();
   var day=_mdocDay(dk);
   var tempDone=function(slot){return day.has(function(m){return m.f===fac&&m.temp&&m.temp.s===slot;});};
-  var plan={type:type,staff:staff,fac:fac,dk:dk,hyg:false,hygNg:false,slot:null,hozon:false};
+  var so=(staffList||[]).find(function(x){return x&&x.name===staff;})||{};
+  var sid=(typeof so.employeeId==="string"&&/^[A-Za-z0-9_-]{1,32}$/.test(so.employeeId.trim()))?so.employeeId.trim():"";
+  var plan={type:type,staff:staff,sid:sid,fac:fac,dk:dk,hyg:false,hygNg:false,slot:null,hozon:false};
   if(type==="clockIn"){
     if(!day.has(function(m,r){return r.staff===staff&&!!m.hyg;})){
       plan.hyg=true;
@@ -10261,17 +10278,20 @@ function mdocLastTemps(fac,cache){
 function mdocCollect(plan){
   return new Promise(function(resolve){
     var md={f:plan.fac};
+    if(plan.sid)md.sid=plan.sid; // 確認した職員の社員番号（帳票の表示は氏名）
     var steps=[];
     if(plan.hyg&&!plan.hygNg)steps.push("hyg");
     if(plan.hyg&&plan.hygNg)md.hyg={a:"ng"};
     if(plan.slot!==null)steps.push("temp");
     if(plan.hozon)steps.push("hozon");
-    var temps=null,devs=null,devState="loading";
+    var temps=null,prevs={},devs=null,devState="loading";
+    var punchAt=null;       // 出勤の時刻（「問題なし」を押した時刻）。null なら打刻ボタンを押した時刻のまま
+    var confirmQuit=false;  // 「記録せずに閉じる」の確認を表示中
     var idx=0,done=false;
     function useDevices(c){
       devs=(c&&Array.isArray(c.devices))?c.devices.slice().sort(function(a,b){return a.k===b.k?(a.o-b.o):(a.k==="r"?-1:1);}):[];
-      var last=mdocLastTemps(plan.fac,c);
-      temps={};devs.forEach(function(x){temps[x.id]=(typeof last[x.id]==="number")?last[x.id]:null;});
+      prevs=mdocLastTemps(plan.fac,c);
+      temps={};devs.forEach(function(x){temps[x.id]=null;}); // ★ 前回値を今回の値として入れない
       devState=c?"ok":"error";
     }
     if(plan.slot!==null){
@@ -10289,22 +10309,31 @@ function mdocCollect(plan){
     document.body.appendChild(ov);
     var verb=plan.type==="clockIn"?"出勤":"退勤";
     function finish(v){if(done)return;done=true;if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
-    function next(){idx++;if(idx>=steps.length)finish(md);else draw();}
+    function next(){
+      idx++;
+      if(idx>=steps.length){if(punchAt)md._punchAt=punchAt;finish(md);}
+      else draw();
+    }
     function btn(label,cls,fn){var b=document.createElement("button");b.type="button";b.className="mdoc-btn "+cls;b.textContent=label;b.onclick=fn;return b;}
     function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
     function cancelLink(){return btn("やめる","mdoc-cancel",function(){finish(null);});}
     function draw(){
       card.textContent="";
       var s=steps[idx];
-      card.appendChild(el("div","mdoc-who",plan.staff+"さん　"+verb));
       if(s==="hyg"){
-        card.appendChild(el("div","mdoc-title","衛生管理点検表・新興感染症点検表の全項目を確認し、すべて問題ありませんか？"));
-        var box=el("div","mdoc-items");
+        // 最短の表示（意味: 衛生管理点検表・新興感染症点検表の全項目を確認し、すべて問題ないか）
+        card.appendChild(el("div","mdoc-hz-head","衛生・感染症の確認"));
+        card.appendChild(el("div","mdoc-hz-q","下の全項目、問題ありませんか？"));
+        var box=el("div","mdoc-items mdoc-hyg-items");
         box.appendChild(el("div",null,"衛生："+MDOC_HYG_ITEMS));
         box.appendChild(el("div",null,"感染症："+MDOC_FLU_ITEMS));
         card.appendChild(box);
-        var row=el("div","mdoc-row");
-        row.appendChild(btn("問題なし","mdoc-ok",function(){md.hyg={a:"ok"};next();}));
+        var row=el("div","mdoc-row mdoc-hz-row");
+        row.appendChild(btn("問題なし","mdoc-ok",function(){
+          md.hyg={a:"ok"};
+          if(plan.type==="clockIn")punchAt=new Date(); // ★ この時刻を出勤時刻にする（温度の入力時間を含めない）
+          next();
+        }));
         row.appendChild(btn("問題あり","mdoc-ng",function(){
           _mdocLsSet("mdoc.ng."+plan.dk+"."+plan.staff,Date.now());
           card.textContent="";
@@ -10315,71 +10344,92 @@ function mdocCollect(plan){
         card.appendChild(row);
         card.appendChild(cancelLink());
       } else if(s==="temp"){
-        card.appendChild(el("div","mdoc-title","温度の確認（"+MDOC_SLOT_LABEL[plan.slot]+"）"));
+        var isIn=(plan.type==="clockIn");
+        if(isIn&&confirmQuit){
+          // 閉じる前の確認（出勤は温度の記録で確定するため、閉じると出勤は成立しない）
+          card.appendChild(el("div","mdoc-quit","温度を記録せずに閉じると\n出勤は取り消されます。"));
+          var qrow=el("div","mdoc-hz-col");
+          qrow.appendChild(btn("戻って入力する","mdoc-ok",function(){confirmQuit=false;draw();}));
+          qrow.appendChild(btn("出勤を取り消す","mdoc-ng",function(){finish(null);}));
+          card.appendChild(qrow);
+          return;
+        }
+        if(isIn)card.appendChild(el("div","mdoc-done","出勤 "+fmtTime(punchAt||plan.pressedAt||new Date())));
+        card.appendChild(el("div","mdoc-hz-head","温度の記録（"+MDOC_SLOT_LABEL[plan.slot]+"）"));
         var isLastStep=(idx===steps.length-1);
         if(devState==="loading"){card.appendChild(el("div","mdoc-note","読み込んでいます…"));card.appendChild(cancelLink());return;}
         if(!devs.length){
           // 測定対象の登録が無い（または読み込めない）施設では温度を記録しない
-          if(devState==="error")card.appendChild(el("div","mdoc-note","温度の設定を読み込めませんでした。このまま"+verb+"できます。"));
+          if(devState==="error")card.appendChild(el("div","mdoc-note","いまは温度を記録できません。このまま"+verb+"できます。"));
           else {next();return;}
           card.appendChild(btn(isLastStep?verb+"する":"次へ","mdoc-ok",function(){next();}));
           card.appendChild(cancelLink());
           return;
         }
+        // 温度計を見て数字だけを入れる（テンキー）。冷凍庫のマイナスは画面で固定し、入力させない。
+        // ★ 前回の値は参考に小さく出すだけで、入力欄には入れない（今回の実測値だけを記録する）。
         var list=el("div","mdoc-temps");
-        var go=btn(isLastStep?"記録して"+verb:"次へ","mdoc-ok",function(){
+        var inputs=[];
+        var go=btn(isIn&&isLastStep?"温度を記録":(isLastStep?"記録して"+verb:"次へ"),"mdoc-ok",function(){
           var vs=devs.map(function(x){return {id:x.id,k:x.k,n:x.n,o:x.o,v:temps[x.id]};});
           if(vs.some(function(x){return typeof x.v!=="number";}))return;
-          md.temp={s:plan.slot,d:vs};
+          // at = 温度を確定した時刻（出勤の時刻とは別に持つ）
+          md.temp={s:plan.slot,d:vs,at:new Date().toISOString()};
           next();
         });
-        var hint=el("div","mdoc-note","");
-        function refreshGo(){
-          var blank=devs.some(function(x){return typeof temps[x.id]!=="number";});
-          go.disabled=blank;hint.textContent=blank?"「—」の温度を入れてください":"";
-        }
-        devs.forEach(function(x){
-          var line=el("div","mdoc-tline");
-          line.appendChild(el("div","mdoc-tname",x.n));
-          var val=el("button","mdoc-tval");val.type="button";
-          function show(){val.textContent=(typeof temps[x.id]==="number")?(temps[x.id].toFixed(1)+"℃"):"—";refreshGo();}
-          function step(dv){
-            var base=(typeof temps[x.id]==="number")?temps[x.id]:(x.k==="f"?-18:4);
-            var nv=Math.round((base+dv)*10)/10;
-            if(nv<-50||nv>50)return;
-            temps[x.id]=nv;show();
-          }
-          val.onclick=function(){
-            var inp=document.createElement("input");
-            inp.className="mdoc-tinput";inp.type="text";inp.inputMode="decimal";
-            inp.value=(typeof temps[x.id]==="number")?String(temps[x.id]):"";
-            function commit(){
-              var t=String(inp.value).trim().replace(/[０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xfee0);})
-                .replace(/[－ー−‐]/g,"-").replace(/[．]/g,".");
-              if(/^-?\d{1,2}(\.\d)?$/.test(t)&&Math.abs(Number(t))<=50)temps[x.id]=Number(t);
-              if(inp.parentNode)inp.parentNode.replaceChild(val,inp);
-              show();
-            }
-            inp.onblur=commit;
-            inp.onkeydown=function(e){if(e.key==="Enter")inp.blur();};
-            val.parentNode.replaceChild(inp,val);inp.focus();inp.select();
+        function refreshGo(){go.disabled=devs.some(function(x){return typeof temps[x.id]!=="number";});}
+        devs.forEach(function(x,i){
+          var line=el("label","mdoc-tline");
+          var head=el("span","mdoc-thead");
+          head.appendChild(el("span","mdoc-tname",x.n));
+          if(typeof prevs[x.id]==="number")head.appendChild(el("span","mdoc-prev","前回 "+prevs[x.id].toFixed(1)+"℃"));
+          line.appendChild(head);
+          var box=el("span","mdoc-tbox");
+          if(x.k==="f")box.appendChild(el("span","mdoc-minus","−"));
+          var inp=document.createElement("input");
+          inp.type="text";inp.inputMode="decimal";inp.autocomplete="off";inp.maxLength=4;
+          inp.className="mdoc-tin";inp.placeholder="入力";
+          inp.setAttribute("enterkeyhint",i<devs.length-1?"next":"done");
+          inp.setAttribute("aria-label",x.n+"の温度"+(x.k==="f"?"（マイナスは入力不要）":""));
+          inp.oninput=function(){
+            // 全角→半角、数字と小数点（1つ・小数1桁）以外は捨てる。マイナスは入れさせない。
+            var t=String(inp.value).replace(/[０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xfee0);})
+              .replace(/[．。，,]/g,".").replace(/[^0-9.]/g,"");
+            var p=t.indexOf(".");
+            if(p>=0)t=t.slice(0,p+1)+t.slice(p+1).replace(/\./g,"").slice(0,1);
+            if(t!==inp.value)inp.value=t;
+            var u=t.replace(/\.$/,"");
+            var n=/^\d{1,2}(\.\d)?$/.test(u)?Number(u):NaN;
+            temps[x.id]=(isFinite(n)&&n<=50)?(x.k==="f"?-n:n):null;
+            if(temps[x.id]===0)temps[x.id]=0; // −0 を 0 にそろえる
+            refreshGo();
           };
-          line.appendChild(btn("−1","mdoc-step",function(){step(-1);}));
-          line.appendChild(btn("−0.5","mdoc-step",function(){step(-0.5);}));
-          line.appendChild(val);
-          line.appendChild(btn("+0.5","mdoc-step",function(){step(0.5);}));
-          line.appendChild(btn("+1","mdoc-step",function(){step(1);}));
+          inp.onkeydown=function(e){
+            if(e.key!=="Enter")return;
+            e.preventDefault();
+            if(i<inputs.length-1)inputs[i+1].focus();else inp.blur();
+          };
+          if(typeof temps[x.id]==="number")inp.value=String(Math.abs(temps[x.id]));
+          box.appendChild(inp);
+          box.appendChild(el("span","mdoc-unit","℃"));
+          line.appendChild(box);
+          inputs.push(inp);
           list.appendChild(line);
-          show();
         });
         card.appendChild(list);
-        card.appendChild(hint);
         card.appendChild(go);
         refreshGo();
-        card.appendChild(cancelLink());
+        card.appendChild(isIn?btn("記録せずに閉じる","mdoc-cancel",function(){confirmQuit=true;draw();}):cancelLink());
+        if(inputs[0])setTimeout(function(){try{inputs[0].focus();}catch(e){}},0);
       } else if(s==="hozon"){
-        card.appendChild(el("div","mdoc-title","本日"+_mdocMd(plan.dk)+"分の保存食を冷凍保存し、"+_mdocMd(mdocDiscardDate(plan.dk))+"分の保存食を廃棄しましたか？"));
-        var row2=el("div","mdoc-row");
+        // 1問にまとめた最短の表示（記録は従来どおり 本日分の保存＋15日前の分の廃棄・確認者・日時）
+        card.appendChild(el("div","mdoc-hz-head","保存食の確認"));
+        var q1=el("div","mdoc-hz-q","今日の分を保存しましたか？");
+        var q2=el("div","mdoc-hz-q");
+        q2.appendChild(el("span","mdoc-hz-date",_mdocMd(mdocDiscardDate(plan.dk))));
+        q2.appendChild(document.createTextNode("分を廃棄しましたか？"));
+        card.appendChild(q1);card.appendChild(q2);
+        var row2=el("div","mdoc-row mdoc-hz-row");
         var hz={store:plan.dk,discard:mdocDiscardDate(plan.dk)};
         row2.appendChild(btn("はい","mdoc-ok",function(){md.hozon={a:"yes",store:hz.store,discard:hz.discard};next();}));
         row2.appendChild(btn("いいえ","mdoc-ng",function(){
@@ -10465,11 +10515,19 @@ async function _execPunch(type,d){
     var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(getCurrentWorkFacility(staffName,nr.date)||_effFn);
     var _mdPlan=mdocPlan(type,staffName,_mdFac,d);
     if(_mdPlan){
+      _mdPlan.pressedAt=d;
       var _mdName=staffName,_md=null;
       _punchSaving=true;
       try{_md=await mdocCollect(_mdPlan);}catch(e){_md=null;}
       _punchSaving=false;
       if(!_md||staffName!==_mdName){render();return;}
+      // ★ 出勤の時刻は「問題なし」を押した時刻（温度の入力にかかった時間を含めない）。
+      //   それまで打刻はどこにも保存していない（仮）ので、取り消しで消すものは無い。
+      if(_md._punchAt){
+        d=_md._punchAt;
+        nr.date=fmtDateKey(d);nr.time=fmtTime(d);nr.timestamp=d.toISOString();
+      }
+      delete _md._punchAt;
       nr.mdoc=_md;
     }
   }

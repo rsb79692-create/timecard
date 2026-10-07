@@ -24,6 +24,7 @@ const MAX_DEVS = 8;
 
 const EVENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const SID_RE = /^[A-Za-z0-9_-]{1,32}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // eslint 等は無いが、制御文字は月次書類 DB の CHECK でも拒否される
 const CTRL_RE = /[\u0000-\u001f\u007f]/;
@@ -67,11 +68,15 @@ function facilityNames(raw) {
   return out;
 }
 
-/** 従業員マスタ（tc5_staff）から氏名の集合。 */
+/** 従業員マスタ（tc5_staff）から 氏名 → 社員番号（未登録は ""）の対応。 */
 function staffNames(raw) {
   const arr = Array.isArray(raw) ? raw : Object.values(raw || {});
-  const out = new Set();
-  for (const s of arr) if (s && typeof s === "object" && isText(s.name, 40)) out.add(s.name);
+  const out = new Map();
+  for (const s of arr) {
+    if (!s || typeof s !== "object" || !isText(s.name, 40)) continue;
+    const eid = typeof s.employeeId === "string" ? s.employeeId.trim() : "";
+    out.set(s.name, SID_RE.test(eid) ? eid : "");
+  }
   return out;
 }
 
@@ -118,6 +123,10 @@ function eventsFromRecords(records, master) {
     const at = typeof r.timestamp === "string" ? new Date(r.timestamp) : null;
     if (!at || isNaN(at.getTime())) { bad(); continue; }
     if (!isText(r.staff, 40) || !master.staff.has(r.staff)) { bad(); continue; }
+    // 確認した職員の正式な識別子（社員番号）。端末の申告（md.sid）は使わず、常に従業員マスタの値を記録する
+    // （端末の職員一覧が古く食い違っても、記録そのものは落とさない）。
+    const sid = master.staff.get(r.staff) || "";
+    const who = sid ? { sid: sid } : {};
     const fac = md.f;
     if (!isText(fac, 40) || !master.facilities.has(fac)) { bad(); continue; }
     // 打刻の施設と食い違う申告は受けない。出勤はその打刻の施設、退勤はその日の本人の打刻に現れた施設のいずれか。
@@ -139,7 +148,7 @@ function eventsFromRecords(records, master) {
     if (md.hyg !== undefined) {
       const a = md.hyg && md.hyg.a;
       if (r.type !== "clockIn" || (a !== "ok" && a !== "ng")) bad();
-      else events.push(Object.assign({}, base, { event_id: key + ":hyg", kind: "hygiene", slot: 0, answer: a, payload: {} }));
+      else events.push(Object.assign({}, base, { event_id: key + ":hyg", kind: "hygiene", slot: 0, answer: a, payload: who }));
     }
     if (md.temp !== undefined) {
       const t = md.temp || {};
@@ -148,7 +157,13 @@ function eventsFromRecords(records, master) {
       const devs = Array.isArray(t.d) && t.d.length >= 1 && t.d.length <= MAX_DEVS ? t.d.map(cleanDev) : null;
       const ids = devs ? new Set(devs.filter(Boolean).map(function (d) { return d.id; })) : null;
       if (!slotOk || !devs || devs.some(function (d) { return !d; }) || ids.size !== devs.length) bad();
-      else events.push(Object.assign({}, base, { event_id: key + ":temp", kind: "temp", slot: s, answer: "recorded", payload: { devs: devs } }));
+      else {
+        // 出勤の朝の温度は打刻の後に記録するため、温度を確定した時刻 t.at を記録日時にする（打刻の時刻〜24時間以内だけ認める）
+        const tAt = typeof t.at === "string" ? new Date(t.at) : null;
+        const okAt = tAt && !isNaN(tAt.getTime()) && tAt.getTime() >= at.getTime() - 60000 && tAt.getTime() <= at.getTime() + 86400000;
+        events.push(Object.assign({}, base, okAt ? { recorded_at: tAt.toISOString() } : {},
+          { event_id: key + ":temp", kind: "temp", slot: s, answer: "recorded", payload: Object.assign({ devs: devs }, who) }));
+      }
     }
     if (md.hozon !== undefined) {
       const h = md.hozon || {};
@@ -156,7 +171,7 @@ function eventsFromRecords(records, master) {
         && h.store === r.date && h.discard === hozonDiscardDate(r.date);
       if (!ok) bad();
       else events.push(Object.assign({}, base, {
-        event_id: key + ":hozon", kind: "hozon", slot: 0, answer: h.a, payload: { store: h.store, discard: h.discard },
+        event_id: key + ":hozon", kind: "hozon", slot: 0, answer: h.a, payload: Object.assign({ store: h.store, discard: h.discard }, who),
       }));
     }
   }

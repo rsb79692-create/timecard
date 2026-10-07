@@ -85,7 +85,7 @@ console.log("■ 出勤（衛生・新興感染症／朝の温度）");
   const c = makeClient();
   const p = c.mdocPlan("clockIn", "山田", FAC, at(D, 6, 10));
   check("その日最初の出勤は衛生・感染症を聞く", p && p.hyg === true && p.hygNg === false);
-  check("朝の温度が未記録なら朝（slot 0）を聞く", p && p.slot === 0);
+  check("朝の温度が未記録なら朝（slot 0）を聞く（出勤は温度の記録で確定）", p && p.slot === 0);
   check("出勤では保存食を聞かない", p && p.hozon === false);
 }
 {
@@ -196,7 +196,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   // ── サーバ側の検証 ───────────────────────────────────────
   console.log("■ サーバ: 打刻レコードの mdoc の検証");
   const MD = require(path.join(ROOT, "api/_lib/monthly-docs.js"));
-  const master = { staff: new Set(["山田", "佐藤"]), facilities: new Set([FAC, "ナナイロ"]) };
+  const master = { staff: new Map([["山田", "E001"], ["佐藤", ""]]), facilities: new Set([FAC, "ナナイロ"]) };
   const U1 = "11111111-1111-4111-8111-111111111111", U2 = "22222222-2222-4222-8222-222222222222";
   const R = (id, o) => Object.assign({ eventId: id, staff: "山田", type: "clockIn", date: D, timestamp: "2026-10-06T21:10:00.000Z", workFacility: FAC, facilityName: FAC, serverReceivedAt: 1791320000000 }, o);
   const recs = {
@@ -221,9 +221,20 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("不正なものは数えて捨てる（11件）", rejected === 11, "rejected=" + rejected);
   const t = events.find((e) => e.event_id === "ok1:temp");
   check("温度は0.1℃に丸め、記録時点の機器名を持つ", t && t.payload.devs[0].v === 4 && t.payload.devs[0].n === "冷蔵庫①");
+  {
+    const r3 = MD.eventsFromRecords({ ta: R("ta", { mdoc: { f: FAC, temp: { s: 0, at: "2026-10-06T21:11:30.000Z", d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }) }, master);
+    check("出勤後に記録した温度は、温度を確定した時刻を記録日時にする", r3.events[0] && r3.events[0].recorded_at === "2026-10-06T21:11:30.000Z");
+    const r4 = MD.eventsFromRecords({ tb: R("tb", { mdoc: { f: FAC, temp: { s: 0, at: "2026-10-01T00:00:00.000Z", d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }) }, master);
+    check("打刻より前など範囲外の確定時刻は使わない（打刻の時刻にする）", r4.events[0] && r4.events[0].recorded_at === "2026-10-06T21:10:00.000Z");
+  }
   check("確認者・施設・対象日・記録日時・打刻の受信時刻を持つ",
     t && t.staff_name === "山田" && t.facility === FAC && t.target_date === D && t.recorded_at === "2026-10-06T21:10:00.000Z" && typeof t.punch_received_at === "string");
   const hz = events.find((e) => e.event_id === "ok2:hozon");
+  check("確認した職員の社員番号を記録に持つ（帳票の表示は氏名）", t && t.payload.sid === "E001" && t.staff_name === "山田");
+  {
+    const bad = MD.eventsFromRecords({ x1: R("x1", { mdoc: { f: FAC, sid: "E999", hyg: { a: "ok" } } }) }, master);
+    check("端末の社員番号が食い違っても記録は落とさず、従業員マスタの社員番号を記録する", bad.events.length === 1 && bad.events[0].payload.sid === "E001" && bad.rejected === 0);
+  }
   check("保存食は保存日と廃棄日を持つ", hz && hz.payload.store === D && hz.payload.discard === "2026-09-22" && hz.answer === "yes");
   {
     // 応援勤務の人が自分のスマホ（施設リンクなし）で出勤先 X を選び、退勤時に X の温度と保存食に答えた
