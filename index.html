@@ -66,7 +66,7 @@ var TENANT_CONFIGS={
     themeColor:"#1976D2",
     logo:null,                 // 穂乃味は現在のデザインのまま（ロゴ表示を足さない）
     theme:null,                // 穂乃味は現在の色のまま
-    features:{mileage:true,deviceWatch:true}
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true}
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -89,7 +89,7 @@ var TENANT_CONFIGS={
       "--page-bg":"#FFFFFF"
     },
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
-    features:{mileage:false,deviceWatch:false}
+    features:{mileage:false,deviceWatch:false,monthlyDocs:false}
   }
 };
 var TENANT_INVALID=false;
@@ -1677,6 +1677,7 @@ function punchOutboxFlush(reason){
     }).then(function(r){
       if(r&&r.ok){
         console.log("[punchOutbox] sent:",e.eventId,r.already?"(already on server)":"",reason||"");
+        if(e.rec&&e.rec.mdoc)mdocScheduleSync(mdocSyncDaysFor(e.rec.date)); // 月次書類への転記（穂乃味だけ。MONTHLY-DOCS）
         return punchOutboxAck(e.eventId).then(step);
       }
       e.state="pending";
@@ -3563,6 +3564,26 @@ body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
   .approved-badge{font-size:.95rem!important;font-weight:700!important;}
   .admin-close-btn{font-size:.92rem!important;font-weight:600!important;padding:10px 18px!important;border-radius:6px!important;}
 }
+/* 月次書類の確認画面（穂乃味だけ。MONTHLY-DOCS） */
+.mdoc-ov{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:12px;}
+.mdoc-card{background:#fff;border-radius:8px;padding:18px 16px;width:100%;max-width:440px;max-height:calc(100vh - 24px);overflow-y:auto;}
+.mdoc-who{font-size:.95rem;color:#475569;font-weight:700;margin-bottom:8px;}
+.mdoc-title{font-size:1.15rem;font-weight:900;color:#0f172a;line-height:1.5;margin-bottom:12px;}
+.mdoc-items{font-size:.9rem;color:#334155;line-height:1.6;background:#f1f5f9;border-radius:6px;padding:8px 10px;margin-bottom:14px;}
+.mdoc-note{font-size:1rem;color:#334155;margin:8px 0 14px;}
+.mdoc-alert{font-size:1.3rem;font-weight:900;color:#b91c1c;text-align:center;padding:18px 0;}
+.mdoc-row{display:flex;gap:10px;}
+.mdoc-btn{font-family:inherit;cursor:pointer;border-radius:8px;font-weight:900;}
+.mdoc-ok{display:block;width:100%;flex:1;background:var(--brand);color:#fff;border:none;padding:16px 8px;font-size:1.15rem;margin-top:4px;}
+.mdoc-ok:disabled{background:#94a3b8;}
+.mdoc-ng{flex:1;background:#fff;color:#b91c1c;border:2px solid #b91c1c;padding:14px 8px;font-size:1.15rem;margin-top:4px;}
+.mdoc-cancel{display:block;margin:10px auto 0;background:none;border:none;color:#64748b;font-size:1rem;font-weight:700;padding:12px 24px;min-height:44px;}
+.mdoc-temps{margin-bottom:14px;}
+.mdoc-tline{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 0;border-bottom:1px solid #e2e8f0;}
+.mdoc-tname{flex-basis:100%;font-size:1rem;font-weight:700;color:#0f172a;}
+.mdoc-step{flex:1;background:#e2e8f0;color:#0f172a;border:none;min-width:44px;height:44px;font-size:.95rem;padding:0 4px;}
+.mdoc-tval{background:#fff;border:2px solid #cbd5e1;min-width:84px;height:44px;font-size:1.1rem;font-weight:900;color:#0f172a;font-family:inherit;border-radius:8px;cursor:pointer;}
+.mdoc-tinput{width:84px;height:44px;font-size:1.1rem;font-weight:900;text-align:center;border:2px solid var(--brand);border-radius:8px;font-family:inherit;}
 </style>
 </head>
 <body>
@@ -10044,6 +10065,7 @@ function selStaff(s){
   _staffDataPromise=null;_staffDataFor="";
   staffNotifOpen=false; // 別スタッフ選択時は通知履歴の展開状態をリセット
   mileageResetSession(); // 別スタッフの移動距離データ・利用可否を持ち越さない
+  if(mdocActive()){var _mso=staffList.find(function(x){return x.name===s;});mdocPrefetch(facilityName||(_mso&&_mso.location)||"");} // 温度の測定対象の先読み（穂乃味だけ）
   staffPinInput="";staffPinError=false;staffPinConfirm="";staffPinStep=1;
   if(staffPins[s]){
     screen="staffPin"; // PIN認証画面へ
@@ -10058,6 +10080,322 @@ function selStaff(s){
   render();
 }
 function delStaff(n){staffDeleteOne(n);}
+
+// ===== MONTHLY-DOCS-BEGIN =====
+// 打刻と月次書類（honomi-monthly-docs）の連携。★株式会社 穂乃味（会社ID honomi）専用。詳細: docs/features/monthly-docs.md
+// ・出勤／退勤の前に、必要なときだけ確認画面（衛生・新興感染症／温度／保存食）を出し、回答を打刻レコードの mdoc に入れる。
+//   打刻と同じ端末保存・再送の経路で届くので「打刻だけ残って監査記録が消える」ことが起きない。
+// ・聞くかどうかは手元の当日の打刻（records。10秒ごとに取り直している）だけで決める＝打刻のたびの問い合わせを増やさない。
+// ・温度の測定対象は施設ごとに端末へ控え（起動時・スタッフ選択時に裏で取り直す）、確認画面の表示を通信で待たせない。
+// ・月次書類の DB への転記はサーバ（/api/monthly-docs の sync）が RTDB の打刻を読んで行う（送信成功後と起動時）。
+// ★ 他社では mdocActive() が偽になり、この節の処理（通信・表示・端末保存）は一切動かない。
+var MDOC_API="https://timecard-rho.vercel.app/api/monthly-docs";
+var MDOC_HOZON_OFFSET_DAYS=15;      // 保存食の廃棄日＝保存日の15日前（月次書類の HOZON_OFFSET_DAYS と同じ）
+var MDOC_DEV_TTL_MS=30*60*1000;     // 測定対象の控えを取り直す間隔
+var MDOC_SYNC_TTL_MS=30*60*1000;    // 起動時の転記の最短間隔
+var MDOC_HYG_ITEMS="体調・化膿創・服装・帽子・毛髪・爪・指輪等・手洗い・履物";
+var MDOC_FLU_ITEMS="熱・頭痛・関節痛・筋肉痛・咳・喉の痛み・鼻水・家族の症状";
+var MDOC_SLOT_LABEL=["朝","日中","夕方"];
+var _mdocDevLoading={};
+var _mdocSyncTimer=null,_mdocSyncDays=2;
+
+function mdocActive(){
+  return TENANT_ID==="honomi"&&tenantFeature("monthlyDocs")&&punchOutboxEnabled();
+}
+function _mdocLsGet(k){try{var v=TLS.getItem(k);return v?JSON.parse(v):null;}catch(e){return null;}}
+function _mdocLsSet(k,v){try{TLS.setItem(k,JSON.stringify(v));}catch(e){}}
+async function _mdocPost(payload,timeoutMs){
+  // ★ トークン取得を含めた全体に上限を設ける（通信が詰まっても打刻を待たせ続けない）
+  var ms=timeoutMs||8000;
+  var ctl=(typeof AbortController!=="undefined")?new AbortController():null;
+  var timer=null;
+  var to=new Promise(function(r){timer=setTimeout(function(){if(ctl)ctl.abort();r(null);},ms);});
+  var go=(async function(){
+    try{
+      var tok=await getAuthToken().catch(function(){return "";});
+      if(!tok)return null;
+      var r=await fetch(MDOC_API,{method:"POST",headers:{"Content-Type":"application/json"},
+        body:JSON.stringify(tenantPayload(Object.assign({idToken:tok},payload))),signal:ctl?ctl.signal:undefined});
+      if(!r.ok)return null;
+      return await r.json();
+    }catch(e){return null;}
+  })();
+  return Promise.race([go,to]).then(function(v){if(timer)clearTimeout(timer);return v;});
+}
+
+// ── 測定対象（施設別マスター）の控え ──────────────────────────────────────
+function mdocDevCache(fac){
+  var c=_mdocLsGet("mdoc.dev."+fac);
+  return (c&&Array.isArray(c.devices))?c:null;
+}
+// 取り直す（同じ施設は同時に1本）。結果は端末に控え、失敗しても控えは残す。
+function mdocLoadDevices(fac,force){
+  if(!mdocActive()||!fac)return Promise.resolve(mdocDevCache(fac));
+  var c=mdocDevCache(fac);
+  if(!force&&c&&(Date.now()-(c.at||0))<MDOC_DEV_TTL_MS)return Promise.resolve(c);
+  if(_mdocDevLoading[fac])return _mdocDevLoading[fac];
+  var p=_mdocPost({action:"devices",facility:fac},6000).then(function(d){
+    if(d&&d.ok&&Array.isArray(d.devices)){
+      var v={at:Date.now(),devices:d.devices,last:d.last||null};
+      _mdocLsSet("mdoc.dev."+fac,v);
+      return v;
+    }
+    return mdocDevCache(fac);
+  })["finally"](function(){delete _mdocDevLoading[fac];});
+  _mdocDevLoading[fac]=p;
+  return p;
+}
+// 起動時・スタッフ選択時の先読み（裏で走らせ、待たない）
+function mdocPrefetch(fac){if(mdocActive()&&fac)mdocLoadDevices(fac,false);}
+
+// ── 転記（サーバが RTDB の打刻を読んで月次書類の DB へ書く）──────────────────────
+// days: 打刻の送信後は当日と前日（2）、起動時は遅れて届いた打刻も拾う7日（7）。
+// 送った打刻の日付が入る日数（2〜7。遅れて届いた打刻も転記の範囲に入れる）
+function mdocSyncDaysFor(dk){
+  var t=Date.parse(String(dk||"")+"T00:00:00+09:00");
+  if(isNaN(t))return 2;
+  var n=Math.floor((Date.now()-t)/86400000)+1;
+  return Math.min(7,Math.max(2,n));
+}
+function mdocScheduleSync(days){
+  if(!mdocActive())return;
+  var n=Math.min(7,Math.max(2,Math.floor(Number(days))||2));
+  if(_mdocSyncTimer){clearTimeout(_mdocSyncTimer);n=Math.max(n,_mdocSyncDays);}
+  _mdocSyncDays=n;
+  _mdocSyncTimer=setTimeout(function(){
+    _mdocSyncTimer=null;
+    var dd=_mdocSyncDays;_mdocSyncDays=2;
+    _mdocPost({action:"sync",days:dd},15000).then(function(d){if(d&&d.ok&&dd===7)_mdocLsSet("mdoc.syncAt",Date.now());});
+  },3000);
+}
+function mdocStartup(){
+  if(!mdocActive())return;
+  if(facilityName)mdocPrefetch(facilityName);
+  var last=Number(_mdocLsGet("mdoc.syncAt"))||0;
+  if(Date.now()-last>MDOC_SYNC_TTL_MS)mdocScheduleSync(7);
+}
+
+// ── 当日の状態（手元の打刻だけで判定。その日の打刻を1回だけ抜き出して使う）──────────
+function _mdocDay(dk){
+  var recs=records.filter(function(r){return r&&r.date===dk&&!r.deleted;});
+  return {
+    recs:recs,
+    has:function(fn){return recs.some(function(r){return r.mdoc&&typeof r.mdoc==="object"&&fn(r.mdoc,r);});}
+  };
+}
+// 勤務中の人ごとの勤務先（getCurrentWorkFacility と同じ規則を、その日の打刻1回の走査で全員分求める）
+function _mdocOpenFacilities(day){
+  var rs=day.recs.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+  var st={};
+  rs.forEach(function(r){
+    var s=st[r.staff]||(st[r.staff]={open:false,fac:""});
+    if(r.type==="clockIn"){s.open=true;s.fac=r.workFacility||r.facilityName||"";}
+    else if(r.type==="clockOut"){s.open=false;s.fac="";}
+    else if(r.type==="facilityChange"&&s.open){s.fac=r.workFacility||r.facilityName||s.fac;}
+  });
+  return st;
+}
+function _mdocHour(ts){var t=new Date(ts);return isNaN(t.getTime())?null:t.getHours();}
+function mdocDiscardDate(dk){
+  var p=dk.split("-");var t=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]-MDOC_HOZON_OFFSET_DAYS));
+  return t.toISOString().slice(0,10);
+}
+function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
+
+// 何を聞くか（聞くものが無ければ null＝従来どおりすぐ打刻）。
+// 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度。
+// 退勤: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
+//       （日中勤務の人は16時以降に限る。夕方勤務の人が後から来る施設で、昼の退勤を最後と誤らないため）。
+//       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
+function mdocPlan(type,staff,fac,d){
+  if(!mdocActive()||!fac||!staff)return null;
+  if(type!=="clockIn"&&type!=="clockOut")return null;
+  var dk=fmtDateKey(d),hour=d.getHours();
+  var day=_mdocDay(dk);
+  var tempDone=function(slot){return day.has(function(m){return m.f===fac&&m.temp&&m.temp.s===slot;});};
+  var plan={type:type,staff:staff,fac:fac,dk:dk,hyg:false,hygNg:false,slot:null,hozon:false};
+  if(type==="clockIn"){
+    if(!day.has(function(m,r){return r.staff===staff&&!!m.hyg;})){
+      plan.hyg=true;
+      plan.hygNg=!!_mdocLsGet("mdoc.ng."+dk+"."+staff); // 「問題あり」の後の再打刻は聞き直さない
+    }
+    if(hour<12&&!tempDone(0))plan.slot=0;
+  } else {
+    var d1=tempDone(1),d2=tempDone(2);
+    var hz=day.has(function(m){return m.f===fac&&m.hozon&&m.hozon.a==="yes";});
+    if(d1&&d2&&hz)return null; // その施設のその日の分はすべて記録済み（勤務中の人を数えない）
+    var cin=day.recs.filter(function(r){return r.staff===staff&&r.type==="clockIn";})
+      .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);})[0];
+    var cinHour=cin?_mdocHour(cin.timestamp):null;
+    var dayWorker=(cinHour!==null&&cinHour<12);
+    var open=_mdocOpenFacilities(day);
+    var othersOpen=Object.keys(open).some(function(k){return k!==staff&&open[k].open&&open[k].fac===fac;});
+    var last=!othersOpen&&(!dayWorker||hour>=16);
+    if(last&&!d2)plan.slot=2;
+    else if(dayWorker&&!last&&!d1)plan.slot=1;
+    else if(!dayWorker&&!d2)plan.slot=2;
+    if(last&&!hz)plan.hozon=true;
+  }
+  if(!plan.hyg&&plan.slot===null&&!plan.hozon)return null;
+  return plan;
+}
+
+// 機器ごとの前回値（手元の打刻とサーバの最後の記録のうち新しい方。無ければ空欄）
+function mdocLastTemps(fac,cache){
+  var best=null,bestAt="";
+  records.forEach(function(r){
+    if(r&&!r.deleted&&r.mdoc&&r.mdoc.f===fac&&r.mdoc.temp&&Array.isArray(r.mdoc.temp.d)&&String(r.timestamp)>bestAt){
+      bestAt=String(r.timestamp);best=r.mdoc.temp.d;
+    }
+  });
+  var srv=cache&&cache.last;
+  if(srv&&Array.isArray(srv.devs)&&String(srv.at||"")>bestAt)best=srv.devs;
+  var out={};
+  (best||[]).forEach(function(x){if(x&&typeof x.v==="number")out[x.id]=x.v;});
+  return out;
+}
+
+// ── 確認画面 ───────────────────────────────────────────────────────────
+// 1つの重ね画面の中で 衛生・新興感染症 → 温度 → 保存食 と進む（画面遷移なし）。
+// 戻り値: 回答（打刻レコードの mdoc）／中止・問題ありなら null。
+function mdocCollect(plan){
+  return new Promise(function(resolve){
+    var md={f:plan.fac};
+    var steps=[];
+    if(plan.hyg&&!plan.hygNg)steps.push("hyg");
+    if(plan.hyg&&plan.hygNg)md.hyg={a:"ng"};
+    if(plan.slot!==null)steps.push("temp");
+    if(plan.hozon)steps.push("hozon");
+    var temps=null,devs=null,devState="loading";
+    var idx=0,done=false;
+    function useDevices(c){
+      devs=(c&&Array.isArray(c.devices))?c.devices.slice().sort(function(a,b){return a.k===b.k?(a.o-b.o):(a.k==="r"?-1:1);}):[];
+      var last=mdocLastTemps(plan.fac,c);
+      temps={};devs.forEach(function(x){temps[x.id]=(typeof last[x.id]==="number")?last[x.id]:null;});
+      devState=c?"ok":"error";
+    }
+    if(plan.slot!==null){
+      // ★ 控えがあれば（古くても）すぐ使い、取り直しは裏で行う（確認画面を通信で待たせない）。
+      //   控えが無いときだけ取得を待つ（_mdocPost の上限時間で必ず終わる。失敗は「このまま打刻できます」）。
+      var cached=mdocDevCache(plan.fac);
+      if(cached){useDevices(cached);mdocLoadDevices(plan.fac,false);}
+      else mdocLoadDevices(plan.fac,false).then(function(c){useDevices(c);if(!done&&steps[idx]==="temp")draw();});
+    }
+    if(!steps.length){resolve(md);return;}
+    var ov=document.createElement("div");
+    ov.className="mdoc-ov";
+    var card=document.createElement("div");card.className="mdoc-card";
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+    var verb=plan.type==="clockIn"?"出勤":"退勤";
+    function finish(v){if(done)return;done=true;if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
+    function next(){idx++;if(idx>=steps.length)finish(md);else draw();}
+    function btn(label,cls,fn){var b=document.createElement("button");b.type="button";b.className="mdoc-btn "+cls;b.textContent=label;b.onclick=fn;return b;}
+    function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
+    function cancelLink(){return btn("やめる","mdoc-cancel",function(){finish(null);});}
+    function draw(){
+      card.textContent="";
+      var s=steps[idx];
+      card.appendChild(el("div","mdoc-who",plan.staff+"さん　"+verb));
+      if(s==="hyg"){
+        card.appendChild(el("div","mdoc-title","衛生管理点検表・新興感染症点検表の全項目を確認し、すべて問題ありませんか？"));
+        var box=el("div","mdoc-items");
+        box.appendChild(el("div",null,"衛生："+MDOC_HYG_ITEMS));
+        box.appendChild(el("div",null,"感染症："+MDOC_FLU_ITEMS));
+        card.appendChild(box);
+        var row=el("div","mdoc-row");
+        row.appendChild(btn("問題なし","mdoc-ok",function(){md.hyg={a:"ok"};next();}));
+        row.appendChild(btn("問題あり","mdoc-ng",function(){
+          _mdocLsSet("mdoc.ng."+plan.dk+"."+plan.staff,Date.now());
+          card.textContent="";
+          card.appendChild(el("div","mdoc-alert","責任者に連絡してください"));
+          card.appendChild(el("div","mdoc-note","出勤はまだ記録されていません。"));
+          card.appendChild(btn("閉じる","mdoc-ok",function(){finish(null);}));
+        }));
+        card.appendChild(row);
+        card.appendChild(cancelLink());
+      } else if(s==="temp"){
+        card.appendChild(el("div","mdoc-title","温度の確認（"+MDOC_SLOT_LABEL[plan.slot]+"）"));
+        var isLastStep=(idx===steps.length-1);
+        if(devState==="loading"){card.appendChild(el("div","mdoc-note","読み込んでいます…"));card.appendChild(cancelLink());return;}
+        if(!devs.length){
+          // 測定対象の登録が無い（または読み込めない）施設では温度を記録しない
+          if(devState==="error")card.appendChild(el("div","mdoc-note","温度の設定を読み込めませんでした。このまま"+verb+"できます。"));
+          else {next();return;}
+          card.appendChild(btn(isLastStep?verb+"する":"次へ","mdoc-ok",function(){next();}));
+          card.appendChild(cancelLink());
+          return;
+        }
+        var list=el("div","mdoc-temps");
+        var go=btn(isLastStep?"記録して"+verb:"次へ","mdoc-ok",function(){
+          var vs=devs.map(function(x){return {id:x.id,k:x.k,n:x.n,o:x.o,v:temps[x.id]};});
+          if(vs.some(function(x){return typeof x.v!=="number";}))return;
+          md.temp={s:plan.slot,d:vs};
+          next();
+        });
+        var hint=el("div","mdoc-note","");
+        function refreshGo(){
+          var blank=devs.some(function(x){return typeof temps[x.id]!=="number";});
+          go.disabled=blank;hint.textContent=blank?"「—」の温度を入れてください":"";
+        }
+        devs.forEach(function(x){
+          var line=el("div","mdoc-tline");
+          line.appendChild(el("div","mdoc-tname",x.n));
+          var val=el("button","mdoc-tval");val.type="button";
+          function show(){val.textContent=(typeof temps[x.id]==="number")?(temps[x.id].toFixed(1)+"℃"):"—";refreshGo();}
+          function step(dv){
+            var base=(typeof temps[x.id]==="number")?temps[x.id]:(x.k==="f"?-18:4);
+            var nv=Math.round((base+dv)*10)/10;
+            if(nv<-50||nv>50)return;
+            temps[x.id]=nv;show();
+          }
+          val.onclick=function(){
+            var inp=document.createElement("input");
+            inp.className="mdoc-tinput";inp.type="text";inp.inputMode="decimal";
+            inp.value=(typeof temps[x.id]==="number")?String(temps[x.id]):"";
+            function commit(){
+              var t=String(inp.value).trim().replace(/[０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xfee0);})
+                .replace(/[－ー−‐]/g,"-").replace(/[．]/g,".");
+              if(/^-?\d{1,2}(\.\d)?$/.test(t)&&Math.abs(Number(t))<=50)temps[x.id]=Number(t);
+              if(inp.parentNode)inp.parentNode.replaceChild(val,inp);
+              show();
+            }
+            inp.onblur=commit;
+            inp.onkeydown=function(e){if(e.key==="Enter")inp.blur();};
+            val.parentNode.replaceChild(inp,val);inp.focus();inp.select();
+          };
+          line.appendChild(btn("−1","mdoc-step",function(){step(-1);}));
+          line.appendChild(btn("−0.5","mdoc-step",function(){step(-0.5);}));
+          line.appendChild(val);
+          line.appendChild(btn("+0.5","mdoc-step",function(){step(0.5);}));
+          line.appendChild(btn("+1","mdoc-step",function(){step(1);}));
+          list.appendChild(line);
+          show();
+        });
+        card.appendChild(list);
+        card.appendChild(hint);
+        card.appendChild(go);
+        refreshGo();
+        card.appendChild(cancelLink());
+      } else if(s==="hozon"){
+        card.appendChild(el("div","mdoc-title","本日"+_mdocMd(plan.dk)+"分の保存食を冷凍保存し、"+_mdocMd(mdocDiscardDate(plan.dk))+"分の保存食を廃棄しましたか？"));
+        var row2=el("div","mdoc-row");
+        var hz={store:plan.dk,discard:mdocDiscardDate(plan.dk)};
+        row2.appendChild(btn("はい","mdoc-ok",function(){md.hozon={a:"yes",store:hz.store,discard:hz.discard};next();}));
+        row2.appendChild(btn("いいえ","mdoc-ng",function(){
+          md.hozon={a:"no",store:hz.store,discard:hz.discard};
+          card.textContent="";
+          card.appendChild(el("div","mdoc-alert","責任者に連絡してください"));
+          card.appendChild(btn(verb+"する","mdoc-ok",function(){next();}));
+        }));
+        card.appendChild(row2);
+        card.appendChild(cancelLink());
+      }
+    }
+    draw();
+  });
+}
+// ===== MONTHLY-DOCS-END =====
 
 // 打刻の実行。呼び出し側は戻り値（Promise）を待たない（従来どおり即座に制御を返す）。
 // ★ 端末保存（IndexedDB）の成功を確認してから画面を打刻済みにする。
@@ -10119,6 +10457,21 @@ async function _execPunch(type,d){
     nr.homeFacility=_hf||_fn||"";
     nr.isSupportWork=!!(nr.homeFacility&&_to!==nr.homeFacility);
     nr.wageType=nr.isSupportWork?"support_zero":"normal";
+  }
+  // ⓪-2 月次書類の確認（穂乃味だけ。MONTHLY-DOCS）。聞くものが無ければ何もせず従来どおり進む。
+  //      回答は打刻レコードの mdoc に入れ、下の端末保存で打刻と一緒に保存する（打刻と監査記録を分けない）。
+  //      「やめる」「問題あり」のときは打刻しない（端末にもサーバにも何も残さない）。
+  if(mdocActive()&&(type==="clockIn"||type==="clockOut")){
+    var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(getCurrentWorkFacility(staffName,nr.date)||_effFn);
+    var _mdPlan=mdocPlan(type,staffName,_mdFac,d);
+    if(_mdPlan){
+      var _mdName=staffName,_md=null;
+      _punchSaving=true;
+      try{_md=await mdocCollect(_mdPlan);}catch(e){_md=null;}
+      _punchSaving=false;
+      if(!_md||staffName!==_mdName){render();return;}
+      nr.mdoc=_md;
+    }
   }
   // ① 端末（IndexedDB）へ保存する。サーバ応答は待たない。
   //    スタッフテスト画面・管理者デモ・閲覧用URLではキューを使わず従来経路へ委譲する。
@@ -15442,6 +15795,7 @@ async function initFirebase() {
     }
     listenFirebase();
     punchOutboxFlush("startup");
+    mdocStartup(); // 月次書類（穂乃味だけ。他社では何もしない）
     render();
   } catch(e) {
     console.error("FB init error:",e);

@@ -50,7 +50,7 @@ const TENANTS = Object.freeze({
     adminUrl: APP_BASE_URL + "?token=all",
     envSuffix: "",      // 通知の環境変数は従来の名前（LINE_TO_ID 等）をそのまま使う
     // 会社ごとに有効な機能。★ 穂乃味は現行の全機能（何も止めない）。
-    features: Object.freeze({ mileage: true, deviceWatch: true }),
+    features: Object.freeze({ mileage: true, deviceWatch: true, monthlyDocs: true }),
   }),
   mantel: Object.freeze({
     id: "mantel",
@@ -63,7 +63,7 @@ const TENANTS = Object.freeze({
     envSuffix: "__MANTEL",
     // ★ 移動距離（穂乃味の施設間距離表が前提）と端末持ち出し監視（専用アプリの配布が前提）は、
     //   マンテールでの運用準備ができるまで無効。有効化はここを true にするだけでよい（コード分岐は不要）。
-    features: Object.freeze({ mileage: false, deviceWatch: false }),
+    features: Object.freeze({ mileage: false, deviceWatch: false, monthlyDocs: false }),
   }),
 });
 

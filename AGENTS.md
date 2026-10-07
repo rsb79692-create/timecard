@@ -60,6 +60,7 @@
 | 従業員・施設マスタの保存（1件単位） | [`master-save.md`](docs/features/master-save.md) | `node scripts/test-staff-save.js` |
 | CSV一括登録（施設・従業員） | [`csv-import.md`](docs/features/csv-import.md) | `node scripts/test-csv-import.js` |
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
+| 打刻と月次書類の連携（穂乃味専用） | [`monthly-docs.md`](docs/features/monthly-docs.md) | `node scripts/test-monthly-docs.js` |
 
 テストはすべて依存パッケージなし・送信なし・本番データ非アクセス。**テスト件数は増減するため固定値を規範にしない。**
 各テストの対象範囲と実行条件の詳細は [`docs/features/qa-tests.md`](docs/features/qa-tests.md)。
@@ -118,7 +119,12 @@
 - 状態の既定値を `inside` にしない。判定できていない端末を「監視中」と表示しない。持ち出し検知は送信成功後に確定を書く（取り逃しより重複を選ぶ）。
 - 端末 API（`api/device-report.js`）は CORS 応答ヘッダを返さず Cookie を使わない。管理 API（`api/device.js`）と1本にまとめない。レート制限のキーを本文の `deviceId` にしない（IP 単位）。`devicewatch/App.js` を JSX にしない。
 - 定期実行 `action:"sweep"` の鍵照合はレート制限より前に置き、鍵は32文字以上を強制する。判定は `runSweep` だけに置く。保険の経路（端末報告時・管理画面表示時）を外さない。不正な本文は 500 でなく 400 `bad_json` とし、指紋に本文の内容を含めない。
-- Vercel の Serverless Function は 11 本（Hobby の上限 12）。エンドポイントを足す前に上限を確認する。
+- Vercel の Serverless Function は 12 本（Hobby の上限 12。2026-10-07 `api/monthly-docs.js` で上限に到達）。これ以上足せない。
+
+**打刻と月次書類の連携（`monthly-docs.md`）**
+- 穂乃味（会社ID `honomi` かつ機能フラグ `monthlyDocs`）専用。画面・API 入口・月次書類 DB の3層で判定し、他社の打刻経路では通信も判定もしない。
+- 監査の回答は打刻レコードの `mdoc` に入れて打刻と同じ端末保存・再送で送る（別経路の送信を作らない）。聞く判定は手元の当日の打刻だけで行い、打刻のたびの問い合わせを足さない。
+- 月次書類 DB へは公開キー＋合言葉 `MDOC_INGEST_KEY` で専用関数だけを呼ぶ。service role key を使わない。クライアントから記録内容を受け取らない（サーバが RTDB の打刻を読んで検証する）。
 
 **マルチテナント（`multitenant.md`）**
 - 会社ごとにコードを複製・分岐しない。会社を足すときは同文書の4か所に1件ずつ足す。穂乃味（`honomi`）の既存パス・トークン・URL・端末保存キーを変えない。
@@ -135,7 +141,7 @@
 ## 環境変数名・secret 名（名前のみ。値は表示・記録しない）
 
 - **GitHub Actions Secrets**: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY`
-- **Vercel**（`api/` が参照する9件）: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `DISCORD_WEBHOOK_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_PROJECT_ID` / `TC_ENC_KEY` / `TC_PIN_PEPPER` / `DEVICE_SWEEP_KEY`
+- **Vercel**（`api/` が参照する12件）: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `DISCORD_WEBHOOK_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_PROJECT_ID` / `TC_ENC_KEY` / `TC_PIN_PEPPER` / `DEVICE_SWEEP_KEY` / `MDOC_SUPABASE_URL` / `MDOC_SUPABASE_KEY`（公開キー）/ `MDOC_INGEST_KEY`
   - ⚠ この一覧を「未使用の整理」の根拠にしない（`AUTH.md` §8）。`TC_PIN_PEPPER` を消すと PIN 認証が全滅、`TC_ENC_KEY` を消すと保存済み PIN が復号不能、`DEVICE_SWEEP_KEY` を消すと持ち出し検知の確定の主経路が止まる。
 - **会社ごとの通知用**: 上の通知用の名前に `__<会社ID大文字>` を付ける（例 `DISCORD_WEBHOOK_URL__MANTEL`）。未設定の会社の通知は送らない（穂乃味の宛先へ倒さない）。
 - **クライアント埋め込み（Firebase 公開設定）**: `FB_URL` / `FB_API_KEY` / `FCM_MESSAGING_SENDER_ID` / `FCM_VAPID_KEY`（値は引用しない）

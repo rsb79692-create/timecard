@@ -255,6 +255,21 @@ async function dbPutIfAbsent(path, value) {
 }
 
 const dbGet = (path) => dbRequest(path, "GET");
+
+/**
+ * 子キーの値の範囲で読む（RTDB の索引クエリ。tc5_records の date 索引用）。
+ * ★ 全件取得を避けるための読み取り専用ヘルパー。パスの写像は dbRequest と同じ（会社コンテキスト必須）。
+ */
+async function dbGetRange(path, child, startAt, endAt) {
+  const token = await getDbAccessToken();
+  const p = String(path).replace(/^\/+/, "");
+  const q = "?orderBy=" + encodeURIComponent(JSON.stringify(String(child)))
+    + "&startAt=" + encodeURIComponent(JSON.stringify(String(startAt)))
+    + "&endAt=" + encodeURIComponent(JSON.stringify(String(endAt)));
+  const res = await httpRequest(dbUrlFor(p) + q, { method: "GET", headers: { Authorization: "Bearer " + token } }, null);
+  if (res.status < 200 || res.status >= 300) throw new Error("rtdb range failed: HTTP " + res.status);
+  return res.body;
+}
 const dbPut = (path, value) => dbRequest(path, "PUT", value);
 const dbPatch = (path, value) => dbRequest(path, "PATCH", value);
 
@@ -483,6 +498,7 @@ module.exports = {
   verifyIdToken,
   getDbAccessToken,
   dbGet,
+  dbGetRange,
   dbPut,
   dbPatch,
   dbPutIfAbsent,

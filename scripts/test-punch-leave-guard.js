@@ -108,6 +108,7 @@ async function runExec(type, leaveApproved, opts) {
     generateRecordId: () => "ev-1", fmtDateKey: (d) => d.toISOString().slice(0, 10),
     fmtTime: () => "09:00", fmtTimeSec: () => "09:00:00", getCurrentWorkFacility: () => "本店",
     _lsSet: () => {}, setTimeout: () => 0, clearTimeout: () => {},
+    mdocActive: () => false, // 月次書類の確認（穂乃味の機能。ここでは有給の判定だけを見る）
   };
   vm.createContext(c);
   vm.runInContext(EXEC, c);
