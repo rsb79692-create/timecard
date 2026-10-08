@@ -64,7 +64,8 @@ var TENANT_CONFIGS={
     manifest:"manifest.json",
     touchIcon:"apple-touch-icon-v2.png",
     themeColor:"#1976D2",
-    logo:null,                 // 穂乃味は現在のデザインのまま（ロゴ表示を足さない）
+    // 公式ロゴ（元画像の白い余白だけを詰めて縮小。図柄は変えない）。表示は honomiLogoHtml() だけで行う
+    logo:{src:"brand/honomi/logo-h108.png",w:143,h:108,alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     features:{mileage:true,deviceWatch:true,monthlyDocs:true}
   },
@@ -155,6 +156,17 @@ function tenantBrandHeaderHtml(){
     +'style="height:84px;width:auto;max-width:60vw;object-fit:contain;display:block;" decoding="async">'
     +'<div style="font-size:.85rem;font-weight:700;color:var(--brand);letter-spacing:.04em;">'+TENANT.displayName+'</div>'
     +'</div>';
+}
+/**
+ * 穂乃味の公式ロゴ（打刻・ログイン・管理画面で共通に使う唯一の部品）。h は表示の高さ(px)。
+ * ★ 穂乃味（legacy）だけが返す。他社は空文字（自社のロゴは tenantBrandHeaderHtml/BarHtml が出す）。
+ * ★ width/height を先に決めて読み込み時のずれを防ぐ。読み込めなくても場所は保ったまま隠すだけで、操作は妨げない。
+ * ★ 白地の画像を mix-blend-mode:multiply で背景色へなじませる（画像そのものは加工しない）。
+ */
+function honomiLogoHtml(h,cls){
+  if(!TENANT.legacy||!TENANT.logo)return "";
+  var L=TENANT.logo,w=Math.round(h*L.w/L.h);
+  return '<img class="hn-logo'+(cls?' '+cls:'')+'" src="'+L.src+'" alt="'+L.alt+'" width="'+w+'" height="'+h+'" style="width:'+w+'px;height:'+h+'px;" decoding="async" onerror="this.style.visibility=\'hidden\'">';
 }
 /** 管理画面・閲覧画面の上部に出す小さな会社表示。穂乃味は空文字。 */
 function tenantBrandBarHtml(){
@@ -3511,6 +3523,9 @@ select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,
 .empty{color:#8496a7;font-size:.83rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
 .hrm-row:hover{background:var(--brand-bg)!important;}
+/* 穂乃味のロゴ（honomiLogoHtml）。押せない飾りなので操作の邪魔をしない */
+.hn-logo{display:block;flex-shrink:0;object-fit:contain;mix-blend-mode:multiply;pointer-events:none;user-select:none;}
+.hn-logo-home{position:absolute;left:0;top:0;}
 /* カードの上の補足文字：インラインの #8496a7 はベージュ地で読みにくいため、カード内だけ --muted へ寄せる（ボタンは対象外） */
 .admin-card :not(button)[style*="color:#8496a7"],.history :not(button)[style*="color:#8496a7"],.admin-card .empty{color:var(--muted)!important;}
 /* 勤怠一覧：日付（氏名の上）と氏名下の警告はスマホ専用。下の max-width:767px で表示する */
@@ -5655,7 +5670,9 @@ function _renderInner(){
       :(firebaseReady?'':''));
     app.innerHTML=((!urlToken||isAllToken)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
       +tenantBrandHeaderHtml()
-      +'<div class="center" style="margin-bottom:10px;padding-top:4px;">'
+      // 穂乃味のロゴは時計の欄の左上に重ねて置く（欄の高さを増やさない）
+      +'<div class="center" style="margin-bottom:10px;padding-top:4px;'+(TENANT.legacy?'position:relative;':'')+'">'
+      +(TENANT.legacy?honomiLogoHtml(34,"hn-logo-home"):'')
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
       +'</div>'
@@ -5962,7 +5979,10 @@ function _renderInner(){
       }
       return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #c7d2fe;overflow:hidden;">'+_head+_body+'</div>';
     })();
-    app.innerHTML='<button class="btn-back" onclick="goHome()">← もどる</button>'
+    // 穂乃味のロゴは「もどる」の行の右の空き（高さ36px以下）に置き、時計・打刻ボタンの位置を動かさない
+    app.innerHTML=(TENANT.legacy
+        ?'<div style="display:flex;justify-content:space-between;align-items:flex-start;"><button class="btn-back" onclick="goHome()">← もどる</button>'+honomiLogoHtml(35)+'</div>'
+        :'<button class="btn-back" onclick="goHome()">← もどる</button>')
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
       +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+esc(staffName)+'</div>'
       +'<div class="clock" id="clk" style="margin-top:6px;">'+fmtTimeSec(now)+'</div>'
@@ -6238,8 +6258,9 @@ function _renderInner(){
   // ── PIN ──
   if(screen==="pin"){
     var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#c8ccd2">────────</span>';
-    app.innerHTML='<div class="center" style="padding-top:40px;margin-bottom:28px;">'
-      +(TENANT.legacy?'':tenantBrandHeaderHtml())
+    // 穂乃味のロゴは上の余白40pxの中に置く（4px＋ロゴ36px＝従来の余白と同じ高さ。PINの位置を動かさない）
+    app.innerHTML='<div class="center" style="padding-top:'+(TENANT.legacy?4:40)+'px;margin-bottom:28px;">'
+      +(TENANT.legacy?'<div style="display:flex;justify-content:center;height:36px;">'+honomiLogoHtml(36)+'</div>':tenantBrandHeaderHtml())
       +'<div style="font-size:1.6rem;font-weight:900;">'+(pinScope==="system"?'システム管理者認証':'管理者認証')+'</div>'
       +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +(_tenantLoginGate&&pinScope==="company"&&_tenantAuthError?'<div style="color:#dc2626;font-size:.8rem;margin-top:8px;">'+esc(_tenantAuthError)+'</div>':'')
@@ -8637,7 +8658,8 @@ function _renderInner(){
     app.innerHTML='<div class="admin-sticky-bar">'
       +tenantBrandBarHtml()
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-      +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div>'
+      +'<div style="display:flex;align-items:center;gap:8px;">'+honomiLogoHtml(30)
+      +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div></div>'
       +(demoMode
         ?'<button class="admin-close-btn" data-demo-allow="1" style="background:#ede9fe;color:#5b21b6;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #c4b5fd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="openStaffDemoPicker()">🧪 スタッフ画面をテスト</button>'
         :'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>')
