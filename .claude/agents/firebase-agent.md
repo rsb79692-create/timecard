@@ -121,7 +121,7 @@ DRY_RUN=true node scripts/morning-check.js
 - **icons** — 全サイズのアイコンファイルが存在するか
 - **start_url** — `?token=all` パラメータが意図通りか
 - **display: standalone** — ブラウザUIが非表示になっているか
-- **theme_color / background_color** — ブランドカラーが正しいか（青 #1976D2）
+- **theme_color / background_color** — ブランドカラーが正しいか（theme_color＝穂乃味のゴールド #C9A96A。2026-10-08 に青 #1976D2 から変更。background_color は起動画面の色で #1565C0 のまま）
 
 ### LINE通知・Discord通知 調査
 
