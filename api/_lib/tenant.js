@@ -49,8 +49,8 @@ const TENANTS = Object.freeze({
     appUrl: APP_BASE_URL,
     adminUrl: APP_BASE_URL + "?token=all",
     envSuffix: "",      // 通知の環境変数は従来の名前（LINE_TO_ID 等）をそのまま使う
-    // 会社ごとに有効な機能。★ 穂乃味は現行の全機能（何も止めない）。
-    features: Object.freeze({ mileage: true, deviceWatch: true, monthlyDocs: true }),
+    // 会社ごとに有効な機能。★ 穂乃味は現行の全機能。ただし monthlyDocs は 2026-10-08 から本番停止中（index.html の同じ行と2か所で切り替える）。
+    features: Object.freeze({ mileage: true, deviceWatch: true, monthlyDocs: false }),
   }),
   mantel: Object.freeze({
     id: "mantel",

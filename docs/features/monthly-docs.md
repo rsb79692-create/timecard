@@ -4,6 +4,7 @@
 
 ## 対象と範囲
 
+- ⚠ **2026-10-08 から本番停止中**（ユーザー指示の緊急停止）。穂乃味の `features.monthlyDocs:false`（`index.html` と `api/_lib/tenant.js` の2か所）。再開は両方を `true` に戻す。停止中も打刻は通常どおりで、記録は削除していない。
 - 会社ID `honomi` だけ。判定は 画面（`mdocActive()` = `TENANT_ID==="honomi"` かつ `tenantFeature("monthlyDocs")` かつ `punchOutboxEnabled()`）・
   API 入口（`T.current().id === "honomi"` かつ `T.feature("monthlyDocs")`）・月次書類 DB（`tc_events.tenant` の CHECK）の3層。
   マンテール（`features.monthlyDocs:false`）では確認画面・通信・端末保存・RTDB/月次書類 DB へのアクセスが一切起きない（`scripts/test-monthly-docs.js`）。

@@ -287,6 +287,16 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("マンテール: RTDB・月次書類 DB・レート制限のいずれにも触れていない", touched.db === 0 && touched.http === 0, JSON.stringify(touched));
   r = await call({ tenant: "unknown", idToken: "x".repeat(40), action: "sync" });
   check("未知の会社: 拒否（穂乃味へ倒さない）", r.code >= 400 && r.code < 500 && touched.db === 0);
+  // 会社設定の monthlyDocs が false の間は、穂乃味でも入口で止まる（2026-10-08 本番停止）
+  const T = require(path.join(ROOT, "api/_lib/tenant.js"));
+  const realFeature = T.feature;
+  T.feature = (n) => (n === "monthlyDocs" ? false : realFeature(n));
+  r = await call({ idToken: "x".repeat(40), action: "sync" });
+  check("穂乃味: monthlyDocs が false なら 403 feature_disabled", r.code === 403 && r.body && r.body.error === "feature_disabled", JSON.stringify(r));
+  r = await call({ idToken: "x".repeat(40), action: "devices", facility: FAC });
+  check("穂乃味: monthlyDocs が false なら測定対象も取れず、DB に触れない", r.code === 403 && touched.db === 0 && touched.http === 0, JSON.stringify(touched));
+  // 以下は monthlyDocs が true のときの入口の検査
+  T.feature = (n) => (n === "monthlyDocs" ? true : realFeature(n));
   delete process.env.MDOC_SUPABASE_URL;
   r = await call({ idToken: "x".repeat(40), action: "sync" });
   check("穂乃味でも接続設定が無ければ 503（フェイルクローズ）", r.code === 503);
@@ -295,6 +305,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   G.verifyIdToken = async () => { throw new Error("bad token"); };
   r = await call({ idToken: "x".repeat(40), action: "sync" });
   check("穂乃味: トークン不正は 401", r.code === 401);
+  T.feature = realFeature;
   process.env.MDOC_SUPABASE_URL = "https://abcdefghijklmnop.supabase.co";
   process.env.MDOC_SUPABASE_KEY = "sb_secret_xxxxxxxx";
   process.env.MDOC_INGEST_KEY = "k".repeat(40);
