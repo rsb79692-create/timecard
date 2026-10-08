@@ -65,7 +65,7 @@ var TENANT_CONFIGS={
     touchIcon:"apple-touch-icon-v2.png",
     themeColor:"#1976D2",
     logo:null,                 // 穂乃味は現在のデザインのまま（ロゴ表示を足さない）
-    theme:null,                // 穂乃味は現在の色のまま
+    theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     features:{mileage:true,deviceWatch:true,monthlyDocs:true}
   },
   mantel:{
@@ -86,7 +86,11 @@ var TENANT_CONFIGS={
       "--brand-border":"#F5C2C2","--brand-border2":"#EFA3A3",
       "--brand-tint":"#FBE3E3","--brand-tint2":"#F5C2C2",
       "--brand-bg":"#FFF5F5","--brand-bg2":"#F3F4F6","--brand-bg3":"#FAFAFA",
-      "--page-bg":"#FFFFFF"
+      "--page-bg":"#FFFFFF",
+      // 装飾の色は従来の値（:root の既定値は穂乃味のロゴ色のため、ここで戻す）
+      "--card-bg":"#FFFFFF","--card-border":"#ADB5BD","--head-bg":"#EAECEF",
+      "--title-line":"#E9ECEF","--bar-line":"#ADB5BD","--text":"#0F172A","--heading":"#8496A7",
+      "--head-bg2":"#E8EDF3","--head-line2":"#94A3B8","--muted":"#8496A7"
     },
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
     features:{mileage:false,deviceWatch:false,monthlyDocs:false}
@@ -3431,16 +3435,24 @@ function listenFirebase() {
   --brand-border:#bfdbfe;--brand-border2:#93c5fd;
   --brand-tint:#e0e7ff;--brand-tint2:#c7d7fd;
   --brand-bg:#f0f4ff;--brand-bg2:#eef2ff;--brand-bg3:#f8fbff;
-  /* ページの背景（穂乃味は現在のグレー）*/
-  --page-bg:#eaecef;
+  /* 装飾の色（2026-10-08 穂乃味のロゴに合わせる）。★ ボタン・状態色（成功/警告/エラー/選択）には使わない。
+     ページ背景=オフホワイト、カード=薄いベージュ、線=ロゴの稲穂のゴールド、文字=チャコール。
+     他社は TENANT_CONFIGS[会社].theme で従来の値へ戻している（マンテールの見た目は変えない）。 */
+  --page-bg:#FAF8F3;
+  --card-bg:#F1E9D9;--card-border:#D8C7A3;
+  --head-bg:#E8DCC3;
+  --title-line:#C9A96A;--bar-line:#C9A96A;
+  --text:#2B2B2B;--heading:#7A5C2A;
+  /* 有給・月別出勤日数・取得計画・賄いの表見出し（従来は青灰）と、カード上の補足文字（従来 #8496a7） */
+  --head-bg2:#E8DCC3;--head-line2:#D8C7A3;--muted:#6B5E4A;
   /* 出勤の色。★ ブランド色ではなく「出勤＝青／退勤＝赤」の区別のための色なので、会社で変えない
      （赤がブランド色の会社で出勤まで赤くなると、退勤と見分けられなくなる）。 */
   --punch-in:#1e40af;
 }
 *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-body{background:var(--page-bg);color:#0f172a;font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
+body{background:var(--page-bg);color:var(--text);font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
 .wrap{max-width:420px;margin:0 auto;padding:10px 14px 40px;}
-.clock{font-size:2.6rem;font-family:monospace;color:#0f172a;letter-spacing:.02em;font-weight:900;}
+.clock{font-size:2.6rem;font-family:monospace;color:var(--text);letter-spacing:.02em;font-weight:900;}
 .date-disp{font-size:.9rem;color:#475569;font-weight:700;margin-bottom:2px;}
 .label{font-size:.72rem;font-weight:700;letter-spacing:.12em;color:#8496a7;text-align:center;margin-bottom:8px;}
 button{border:none;border-radius:2px;font-weight:700;cursor:pointer;user-select:none;font-family:inherit;}
@@ -3475,9 +3487,9 @@ button:active{filter:brightness(.86);}
 .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
 .pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#0f172a;}
 .msg-ok{background:var(--brand-soft2);border:1px solid var(--brand-border2);border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:var(--brand);}
-.history{background:#fff;border-radius:2px;padding:16px;border:1px solid #adb5bd;}
+.history{background:var(--card-bg);border-radius:2px;padding:16px;border:1px solid var(--card-border);}
 .hist-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;}
-.hist-label{color:#8496a7;font-size:1.4rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
+.hist-label{color:var(--heading);font-size:1.4rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;}
 .hist-worked{color:var(--brand);font-size:1.1rem;font-weight:900;font-family:monospace;}
 .hist-row{display:flex;justify-content:space-between;font-size:1.15rem;padding:12px 0;line-height:1.8;border-bottom:1px solid #e9ecef;}
 .hist-row:last-child{border-bottom:none;}
@@ -3487,8 +3499,8 @@ button:active{filter:brightness(.86);}
 .tab-btn{padding:6px 12px;border-radius:5px;font-size:.78rem;font-weight:700;border:1px solid transparent;}
 .tab-on{background:var(--brand);color:#fff;border-color:var(--brand);}
 .tab-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
-.admin-card{background:#fff;border-radius:2px;padding:16px;margin-bottom:10px;border:1px solid #adb5bd;}
-.admin-title{font-weight:700;font-size:.88rem;margin-bottom:10px;color:#0f172a;letter-spacing:.06em;padding-bottom:6px;border-bottom:1px solid #e9ecef;}
+.admin-card{background:var(--card-bg);border-radius:2px;padding:16px;margin-bottom:10px;border:1px solid var(--card-border);}
+.admin-title{font-weight:700;font-size:.88rem;margin-bottom:10px;color:var(--text);letter-spacing:.06em;padding-bottom:6px;border-bottom:1px solid var(--title-line);}
 select,input[type=text],input[type=date],input[type=time]{background:#fff;color:#0f172a;border:1px solid #adb5bd;border-radius:2px;padding:6px 10px;font-size:.83rem;font-family:inherit;outline:none;}
 select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,64,175,.12);}
 .btn-export{background:var(--brand);color:#fff;padding:10px;font-size:.9rem;font-weight:700;border-radius:2px;width:100%;}
@@ -3499,6 +3511,8 @@ select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,
 .empty{color:#8496a7;font-size:.83rem;text-align:center;padding:20px 0;}
 .center{text-align:center;}
 .hrm-row:hover{background:var(--brand-bg)!important;}
+/* カードの上の補足文字：インラインの #8496a7 はベージュ地で読みにくいため、カード内だけ --muted へ寄せる（ボタンは対象外） */
+.admin-card :not(button)[style*="color:#8496a7"],.history :not(button)[style*="color:#8496a7"],.admin-card .empty{color:var(--muted)!important;}
 /* 勤怠一覧：日付（氏名の上）と氏名下の警告はスマホ専用。下の max-width:767px で表示する */
 .ua-date-sp,.ua-warn-sp,.rd-brk-sp{display:none;}
 /* 管理者画面：PC(768px以上)は広幅、スマホは画面幅に収める */
@@ -3549,7 +3563,7 @@ select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,
   .rd-brk-sp .time-cell{display:inline-block;min-height:32px;line-height:32px;padding:0 4px;}
   .rd-table .btn-withdraw{min-height:32px;padding:4px 8px!important;font-size:.78rem!important;}
 }
-.admin-sticky-bar{position:sticky;top:0;z-index:20;background:var(--page-bg);padding-bottom:10px;border-bottom:2px solid #adb5bd;margin-bottom:14px;}
+.admin-sticky-bar{position:sticky;top:0;z-index:20;background:var(--page-bg);padding-bottom:10px;border-bottom:2px solid var(--bar-line);margin-bottom:14px;}
 /* デモ／スタッフテスト画面の固定バナー */
 .mode-banner{position:fixed;top:0;left:0;right:0;z-index:60;padding:7px 12px;text-align:center;line-height:1.35;box-shadow:0 1px 5px rgba(0,0,0,.2);}
 .mode-banner .mb-t{font-size:.88rem;font-weight:900;letter-spacing:.04em;}
@@ -3558,7 +3572,7 @@ select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,
 .mode-banner-sandbox{background:#5b21b6;color:#fff;}
 body.has-mode-banner{padding-top:var(--mode-banner-h,56px);}
 body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
-.records-th{position:sticky;z-index:2;background:#eaecef;box-shadow:0 2px 4px rgba(0,0,0,.08);}
+.records-th{position:sticky;z-index:2;background:var(--head-bg);box-shadow:0 2px 4px rgba(0,0,0,.08);}
 .records-th.sticky-name-col{z-index:3;}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
@@ -5296,7 +5310,7 @@ function _renderInner(){
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var allStaffV=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var hasBrkV=dRecsV.some(function(r){return r.type==="breakStart"||r.type==="breakEnd";});
-    var thSV="padding:8px 10px;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;text-align:center;";
+    var thSV="padding:8px 10px;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:var(--head-bg);text-align:center;";
     var colCount=hasBrkV?6:5;
     var vRowsD=allStaffV.map(function(s){
       var nm=s.name;
@@ -5413,7 +5427,7 @@ function _renderInner(){
       +'</div>'
       +'<div style="overflow-x:auto;margin-top:8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;">'
       +'<table style="width:100%;border-collapse:collapse;min-width:360px;">'
-      +'<thead><tr style="background:#eaecef;">'
+      +'<thead><tr style="background:var(--head-bg);">'
       +'<th style="'+thSV+'text-align:left;border-right:1px solid #dee2e6;">氏名</th>'
       +'<th style="'+thSV+'color:var(--punch-in);">出勤</th>'
       +(hasBrkV?'<th style="'+thSV+'color:#4b5563;">休憩</th>':"")
@@ -5427,7 +5441,7 @@ function _renderInner(){
       +'<div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">この月の有給申請<span style="font-size:.72rem;font-weight:700;color:#64748b;margin-left:8px;">（'+reviewMonth+' 月締め対象）</span></div>'
       +'<div style="overflow-x:auto;border:1px solid #adb5bd;border-radius:2px;background:#fff;">'
       +'<table style="width:100%;border-collapse:collapse;min-width:300px;">'
-      +'<thead><tr style="background:#eaecef;">'
+      +'<thead><tr style="background:var(--head-bg);">'
       +'<th style="'+thSV+'text-align:left;border-right:1px solid #dee2e6;">氏名</th>'
       +'<th style="'+thSV+'">取得日</th>'
       +'<th style="'+thSV+'">状態</th>'
@@ -5439,7 +5453,7 @@ function _renderInner(){
       +'<div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">この月の賄い回数<span style="font-size:.72rem;font-weight:700;color:#64748b;margin-left:8px;">（'+reviewMonth+' 月締め対象）</span></div>'
       +'<div style="overflow-x:auto;border:1px solid #adb5bd;border-radius:2px;background:#fff;">'
       +'<table style="width:100%;border-collapse:collapse;min-width:300px;">'
-      +'<thead><tr style="background:#eaecef;">'
+      +'<thead><tr style="background:var(--head-bg);">'
       +'<th style="'+thSV+'text-align:left;border-right:1px solid #dee2e6;">氏名</th>'
       +'<th style="'+thSV+'">社員番号</th>'
       +'<th style="'+thSV+'">賄い回数</th>'
@@ -6271,7 +6285,7 @@ function _renderInner(){
     for(var di=1;di<=daysInMonth;di++){allDates.push(year+"-"+pad(mon+1)+"-"+pad(di));}
     var DAYS=["日","月","火","水","木","金","土"];
     var totalMs=0,totalDays=0,totalOtMs=0;
-    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;height:38px;";
+    var thS="padding:0 10px;font-size:.78rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:var(--head-bg);height:38px;";
     var dayRows=allDates.map(function(dk,rowIdx){
       var dr=mRecsStaff.filter(function(r){return r.date===dk&&!r.deleted;});
       var cin=dr.find(function(r){return r.type==="clockIn";});
@@ -6464,7 +6478,7 @@ function _renderInner(){
     var locOptsP='<option value="">拠点（すべて）</option>'+allLocsP.map(function(l){return'<option value="'+esc(l)+'">'+esc(l)+'</option>';}).join("");
     var typeOptsP='<option value="">雇用形態（すべて）</option>'+allTypesP.map(function(t){return'<option value="'+esc(t)+'">'+esc(t)+'</option>';}).join("");
     var titleP=csvPreviewType==="monthly"?"月次集計データ":"日次データ";
-    var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
+    var thS="padding:10px 12px;text-align:left;font-size:.8rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:var(--head-bg);";
     var theadHtmlP,tbodyHtmlP;
     if(csvPreviewType==="monthly"){
       theadHtmlP='<tr style="background:#f3f4f6;">'
@@ -6665,7 +6679,7 @@ function _renderInner(){
           +'<button id="btn-bulk-approve" style="margin-left:auto;background:var(--brand);color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(recordsHistoryReady()?"全件承認":"表示中の分を承認")+'</button>'
           +'</div>'
           +'<table class="records-table ua-table" style="width:100%;border-collapse:collapse;min-width:360px;">'
-          +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
+          +'<thead><tr style="border-bottom:2px solid #adb5bd;background:var(--head-bg);">'
           +'<th class="records-th ua-date" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;">日付</th>'
           +'<th class="records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;"><span class="ua-date-sp">日付・</span>氏名</th>'
           +'<th class="records-th" style="text-align:center;font-size:.72rem;color:var(--punch-in);padding:4px;font-weight:700;">出勤</th>'
@@ -6745,7 +6759,7 @@ function _renderInner(){
           :"";
         var rowBg=approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"");
         return '<tr'+(showBreakColumn?' class="rd-has-brk"':'')+' style="border-bottom:1px solid #e9ecef;'+(rowBg?"background:"+rowBg+";":"")+'">'
-          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"#fff"))+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
+          +'<td class="sticky-name-col" style="padding:6px 4px;font-weight:700;font-size:1.12rem;white-space:nowrap;position:sticky;left:0;z-index:1;background:'+(approved?"#f0fdf4":(hasPunch&&!validation.valid?"#fff5f5":"var(--card-bg)"))+';border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08);">'
           +'<span style="color:var(--brand);cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(&#39;'+escJs(nm)+'&#39;,&#39;admin&#39;)">'+esc(nm).replace(/・/g,"・<wbr>")+'</span>'
           +(cin
             ?'<div class="rd-fac" style="font-size:.76rem;color:#6b7280;font-weight:400;margin-top:2px;line-height:1.4;white-space:normal;max-width:200px;">'
@@ -6800,8 +6814,8 @@ function _renderInner(){
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:var(--brand);color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
         +'</div>'
         +'<table class="records-table rd-table" style="width:100%;border-collapse:collapse;min-width:360px;">'
-        +'<thead><tr style="border-bottom:2px solid #adb5bd;background:#eaecef;">'
-        +'<th class="sticky-name-col records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:#eaecef;z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08),0 2px 4px rgba(0,0,0,.08);">氏名</th>'
+        +'<thead><tr style="border-bottom:2px solid #adb5bd;background:var(--head-bg);">'
+        +'<th class="sticky-name-col records-th" style="text-align:left;font-size:.72rem;color:#475569;padding:4px;font-weight:700;position:sticky;left:0;background:var(--head-bg);z-index:3;border-right:1px solid #dee2e6;box-shadow:2px 0 5px rgba(0,0,0,0.08),0 2px 4px rgba(0,0,0,.08);">氏名</th>'
         +'<th class="records-th" style="text-align:center;font-size:.72rem;color:var(--punch-in);padding:4px;font-weight:700;">出勤</th>'
         +(showBreakColumn?'<th class="records-th rd-brk-col" style="text-align:center;font-size:.72rem;color:#4b5563;padding:4px;font-weight:700;">休憩</th>':"")
         +'<th class="records-th" style="text-align:center;font-size:.72rem;color:#dc2626;padding:4px;font-weight:700;">退勤</th>'
@@ -7396,7 +7410,7 @@ function _renderInner(){
       var _td='padding:6px 8px;text-align:';
       var supSumHtml=supSummary.length
         ?'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
-          +'<thead><tr style="background:#eaecef;">'
+          +'<thead><tr style="background:var(--head-bg);">'
           +'<th style="'+_th+'left;">氏名</th><th style="'+_th+'left;">登録施設</th><th style="'+_th+'left;">応援先施設</th>'
           +'<th style="'+_th+'right;">日数</th><th style="'+_th+'right;">合計時間</th>'
           +'<th style="'+_th+'center;">初回</th><th style="'+_th+'center;">最終</th>'
@@ -7417,7 +7431,7 @@ function _renderInner(){
       var _td2='padding:5px 6px;white-space:nowrap;text-align:';
       var supDetHtml=supDetails.length
         ?'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.78rem;">'
-          +'<thead><tr style="background:#eaecef;">'
+          +'<thead><tr style="background:var(--head-bg);">'
           +'<th style="'+_th2+'left;">日付</th><th style="'+_th2+'left;">氏名</th>'
           +'<th style="'+_th2+'left;">登録施設</th><th style="'+_th2+'left;">応援先施設</th>'
           +'<th style="'+_th2+'center;">出勤</th><th style="'+_th2+'center;">退勤</th>'
@@ -7486,7 +7500,7 @@ function _renderInner(){
         +'<div style="font-size:1.1rem;font-weight:900;color:'+(ngCount>0?"#be123c":"#15803d")+';">'+ngCount+'施設</div></div>'
         +'</div>';
       var facTableHtml='<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:.82rem;">'
-        +'<thead><tr style="background:#eaecef;">'
+        +'<thead><tr style="background:var(--head-bg);">'
         +'<th style="padding:7px 8px;text-align:left;font-weight:700;white-space:nowrap;">施設名</th>'
         +'<th style="padding:7px 8px;text-align:center;font-weight:700;white-space:nowrap;">状態</th>'
         +'<th style="padding:7px 8px;text-align:right;font-weight:700;white-space:nowrap;">人数</th>'
@@ -7989,7 +8003,7 @@ function _renderInner(){
         +'<div style="font-size:.74rem;color:#64748b;margin-bottom:8px;line-height:1.6;">付与日数は<b style="color:var(--brand);">出勤日数からの自動算出</b>です（初回＝入社月から6か月×2、2回目以降＝付与月の前12か月の年間勤務日数で週相当を判定）。<b>判定不可・要確認</b>は自動算出できないため管理者の確認が必要です。登録ボタンを押すまで保存されません。</div>'
         +_dupWarnGr+_noIdWarnGr
         +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;min-width:920px;">'
-        +'<thead><tr style="background:#e8edf3;border-bottom:2px solid #94a3b8;">'
+        +'<thead><tr style="background:var(--head-bg2);border-bottom:2px solid var(--head-line2);">'
         +'<th style="'+_plTh+'text-align:left;">社員番号</th>'
         +'<th style="'+_plTh+'text-align:left;">氏名</th>'
         +'<th style="'+_plTh+'text-align:center;">付与回</th>'
@@ -8034,7 +8048,7 @@ function _renderInner(){
           ?'<div class="empty">読み込み中...</div>'
           :'<div style="overflow-x:auto;">'
           +'<table class="pl-req-table" style="width:100%;border-collapse:collapse;min-width:480px;">'
-          +'<thead><tr style="background:#e8edf3;border-bottom:2px solid #94a3b8;">'
+          +'<thead><tr style="background:var(--head-bg2);border-bottom:2px solid var(--head-line2);">'
           +'<th style="'+_plTh+'text-align:left;">状態</th>'
           +'<th style="'+_plTh+'text-align:left;">氏名</th>'
           +'<th style="'+_plTh+'text-align:left;">取得日</th>'
@@ -8051,7 +8065,7 @@ function _renderInner(){
         // 明細を1件も開いていない間は min-width と見出しを外す（スマホで横スクロールせず全項目が見える）
         +'<table style="width:100%;border-collapse:collapse;'+(_plBalAnyOpen?'min-width:640px;':'')+'margin-bottom:12px;">'
         +(_plBalAnyOpen
-          ?'<thead><tr style="background:#e8edf3;border-bottom:2px solid #94a3b8;">'
+          ?'<thead><tr style="background:var(--head-bg2);border-bottom:2px solid var(--head-line2);">'
            +'<th style="'+_plTh+'text-align:left;">状態</th>'
            +'<th style="'+_plTh+'text-align:left;">付与回</th>'
            +'<th style="'+_plTh+'text-align:left;">付与日</th>'
@@ -8149,7 +8163,7 @@ function _renderInner(){
             +'</tr>';
         }).join("")
         :'<tr><td colspan="7" style="padding:16px;text-align:center;color:#8496a7;font-size:.85rem;">'+esc(adjLabel)+'の修正履歴はありません</td></tr>';
-      var adjThS="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:#eaecef;";
+      var adjThS="padding:6px 8px;font-size:.72rem;font-weight:700;color:#475569;white-space:nowrap;border-bottom:2px solid #adb5bd;background:var(--head-bg);";
       // 月切替バー（スマホでも押しやすいよう高さ44px・セレクトは残り幅いっぱい）。閲覧操作のみのため デモ画面でも操作可。
       var adjNavBtnS="padding:10px 12px;min-height:44px;border:1px solid #adb5bd;border-radius:2px;background:#fff;color:var(--brand);font-size:.9rem;font-weight:700;font-family:inherit;white-space:nowrap;";
       var adjNav='<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">'
@@ -8162,7 +8176,7 @@ function _renderInner(){
         +adjNav
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:400px;margin-bottom:4px;">'
-        +'<thead><tr style="background:#eaecef;">'
+        +'<thead><tr style="background:var(--head-bg);">'
         +'<th style="'+adjThS+'text-align:left;">氏名</th>'
         +'<th style="'+adjThS+'text-align:center;">打刻漏れ</th>'
         +'<th style="'+adjThS+'text-align:center;">遅刻</th>'
@@ -8177,7 +8191,7 @@ function _renderInner(){
         +'<div class="admin-title">'+esc(adjLabel)+'　修正履歴</div>'
         +'<div style="overflow-x:auto;">'
         +'<table style="width:100%;border-collapse:collapse;min-width:620px;">'
-        +'<thead><tr style="background:#eaecef;">'
+        +'<thead><tr style="background:var(--head-bg);">'
         +'<th style="'+adjThS+'text-align:left;">日付</th>'
         +'<th style="'+adjThS+'text-align:left;">氏名</th>'
         +'<th style="'+adjThS+'text-align:left;">修正前</th>'
@@ -8240,11 +8254,11 @@ function _renderInner(){
       // スタイルは有給申請一覧（_plTh/_plTd/_plName）・有給取得計画（_lpTh/_lpTd/_lpName）と同一値に統一
       // （th padding 7px 8px / td padding 8px 8px / font-size .82rem / 氏名は太字にしない）
       var _mcol='min-width:44px;'; // 月列の最小幅（中身は2桁数字のみ）
-      var _mth='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;text-align:';
+      var _mth='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:var(--head-bg2);border-bottom:2px solid var(--head-line2);text-align:';
       var _mtd='padding:8px 8px;font-size:.82rem;font-family:monospace;text-align:';
       var _mtot='padding:8px 8px;font-size:.82rem;font-family:monospace;font-weight:800;text-align:right;color:var(--brand-dark);background:var(--brand-soft3);border-left:2px solid var(--brand-border2);';
       var _mname='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;';
-      var mdStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var mdStickyHead='position:sticky;left:0;z-index:2;background:var(--head-bg2);border-right:2px solid var(--head-line2);';
       var mdStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
       var mdRows=mdStaff.map(function(s,ri){
         var rowTotal=0;
@@ -8399,11 +8413,11 @@ function _renderInner(){
         d.plan=plan;
       });
       // スタイル（有給申請一覧と同一値に統一：th padding 7px 8px / td padding 8px 8px / font-size .82rem）
-      var _lpTh='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _lpTh='padding:7px 8px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:var(--head-bg2);border-bottom:2px solid var(--head-line2);';
       var _lpTd='padding:8px 8px;font-size:.82rem;';
       var _lpName='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;'; // 氏名は太字にしない（有給申請一覧の _plName と同じ）
       var lpSticky='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
-      var lpStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var lpStickyHead='position:sticky;left:0;z-index:2;background:var(--head-bg2);border-right:2px solid var(--head-line2);';
       var lpMonthTotals={};
       lpMonths.forEach(function(mo){var t=0;lpData.forEach(function(d){t+=(d.plan[mo.idx]||0);});lpMonthTotals[mo.idx]=t;});
       var lpRows=lpData.length?lpData.map(function(d,ri){
@@ -8511,11 +8525,11 @@ function _renderInner(){
       // （th padding 7px 8px / td padding 8px 8px / font-size .82rem / 氏名は太字にしない）
       // 日別セルだけは31列あるため左右paddingを4pxに詰める（縦paddingと文字サイズは共通値）
       var _meConfTd='padding:8px 8px;font-size:.82rem;text-align:center;white-space:nowrap;border-left:1px solid #e5e7eb;';
-      var _meTh='padding:7px 4px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:#e8edf3;border-bottom:2px solid #94a3b8;';
+      var _meTh='padding:7px 4px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:var(--head-bg2);border-bottom:2px solid var(--head-line2);';
       var _meTd='padding:8px 4px;font-size:.82rem;text-align:center;';
       var _meName='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;'; // 氏名は太字にしない（有給申請一覧の _plName と同じ）
       var _meTot='padding:8px 8px;font-size:.82rem;font-family:monospace;font-weight:800;text-align:right;color:#15803d;background:#dcfce7;border-left:2px solid #86efac;';
-      var meStickyHead='position:sticky;left:0;z-index:2;background:#e8edf3;border-right:2px solid #94a3b8;';
+      var meStickyHead='position:sticky;left:0;z-index:2;background:var(--head-bg2);border-right:2px solid var(--head-line2);';
       var meStickyCell='position:sticky;left:0;z-index:1;border-right:2px solid #cbd5e1;box-shadow:2px 0 3px -1px rgba(0,0,0,.08);';
       var _medcol='min-width:26px;';
       var meDayTotals=[];for(var _mx=0;_mx<=meLastDay;_mx++)meDayTotals.push(0);
