@@ -65,7 +65,7 @@ var TENANT_CONFIGS={
     touchIcon:"apple-touch-icon-v2.png",
     themeColor:"#1976D2",
     // 公式ロゴ（元画像の白い余白だけを詰めて縮小。図柄は変えない）。表示は honomiLogoHtml() だけで行う
-    logo:{src:"brand/honomi/logo-h108.png",w:143,h:108,alt:"株式会社 穂乃味"},
+    logo:{src:"brand/honomi/logo-h108.png",src2x:"brand/honomi/logo-h240.png",w:143,h:108,alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     features:{mileage:true,deviceWatch:true,monthlyDocs:true}
   },
@@ -91,7 +91,8 @@ var TENANT_CONFIGS={
       // 装飾の色は従来の値（:root の既定値は穂乃味のロゴ色のため、ここで戻す）
       "--card-bg":"#FFFFFF","--card-border":"#ADB5BD","--head-bg":"#EAECEF",
       "--title-line":"#E9ECEF","--bar-line":"#ADB5BD","--text":"#0F172A","--heading":"#8496A7",
-      "--head-bg2":"#E8EDF3","--head-line2":"#94A3B8","--muted":"#8496A7"
+      "--head-bg2":"#E8EDF3","--head-line2":"#94A3B8","--muted":"#8496A7",
+      "--btn2-bg":"#DDE1E7","--btn2-text":"#475569","--btn-border":"#ADB5BD","--sel-bg":"var(--brand)","--date-text":"#475569"
     },
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
     features:{mileage:false,deviceWatch:false,monthlyDocs:false}
@@ -166,7 +167,7 @@ function tenantBrandHeaderHtml(){
 function honomiLogoHtml(h,cls){
   if(!TENANT.legacy||!TENANT.logo)return "";
   var L=TENANT.logo,w=Math.round(h*L.w/L.h);
-  return '<img class="hn-logo'+(cls?' '+cls:'')+'" src="'+L.src+'" alt="'+L.alt+'" width="'+w+'" height="'+h+'" style="width:'+w+'px;height:'+h+'px;" decoding="async" onerror="this.style.visibility=\'hidden\'">';
+  return '<img class="hn-logo'+(cls?' '+cls:'')+'" src="'+L.src+'"'+(L.src2x?' srcset="'+L.src+' 1x, '+L.src2x+' 2x"':'')+' alt="'+L.alt+'" width="'+w+'" height="'+h+'" style="width:auto;aspect-ratio:'+L.w+'/'+L.h+';" decoding="async" onerror="this.style.visibility=\'hidden\'">';
 }
 /** 管理画面・閲覧画面の上部に出す小さな会社表示。穂乃味は空文字。 */
 function tenantBrandBarHtml(){
@@ -3447,7 +3448,7 @@ function listenFirebase() {
   --brand-border:#bfdbfe;--brand-border2:#93c5fd;
   --brand-tint:#e0e7ff;--brand-tint2:#c7d7fd;
   --brand-bg:#f0f4ff;--brand-bg2:#eef2ff;--brand-bg3:#f8fbff;
-  /* 装飾の色（2026-10-08 穂乃味のロゴに合わせる）。★ ボタン・状態色（成功/警告/エラー/選択）には使わない。
+  /* 装飾の色（2026-10-08 穂乃味のロゴに合わせる）。★ 打刻ボタン・PINの決定ボタン・成功/警告/エラーの色には使わない（トップ画面の補助ボタン・五十音タブの選択色には使う）。
      ページ背景=オフホワイト、カード=薄いベージュ、線=ロゴの稲穂のゴールド、文字=チャコール。
      他社は TENANT_CONFIGS[会社].theme で従来の値へ戻している（マンテールの見た目は変えない）。 */
   --page-bg:#FAF8F3;
@@ -3457,6 +3458,8 @@ function listenFirebase() {
   --text:#2B2B2B;--heading:#7A5C2A;
   /* 有給・月別出勤日数・取得計画・賄いの表見出し（従来は青灰）と、カード上の補足文字（従来 #8496a7） */
   --head-bg2:#E8DCC3;--head-line2:#D8C7A3;--muted:#6B5E4A;
+  /* トップ画面（スタッフ選択）の部品：補助ボタン・枠・選択中のタブ・日付。★ 打刻ボタン（.btn-in 等）には使わない */
+  --btn2-bg:#EDE3CF;--btn2-text:#5C4B33;--btn-border:#D8C7A3;--sel-bg:#7A5C2A;--date-text:#6B5E4A;
   /* 出勤の色。★ ブランド色ではなく「出勤＝青／退勤＝赤」の区別のための色なので、会社で変えない
      （赤がブランド色の会社で出勤まで赤くなると、退勤と見分けられなくなる）。 */
   --punch-in:#1e40af;
@@ -3465,18 +3468,18 @@ function listenFirebase() {
 body{background:var(--page-bg);color:var(--text);font-family:'Hiragino Kaku Gothic ProN','Noto Sans JP',sans-serif;min-height:100vh;}
 .wrap{max-width:420px;margin:0 auto;padding:10px 14px 40px;}
 .clock{font-size:2.6rem;font-family:monospace;color:var(--text);letter-spacing:.02em;font-weight:900;}
-.date-disp{font-size:.9rem;color:#475569;font-weight:700;margin-bottom:2px;}
-.label{font-size:.72rem;font-weight:700;letter-spacing:.12em;color:#8496a7;text-align:center;margin-bottom:8px;}
+.date-disp{font-size:.9rem;color:var(--date-text);font-weight:700;margin-bottom:2px;}
+.label{font-size:.72rem;font-weight:700;letter-spacing:.12em;color:var(--muted);text-align:center;margin-bottom:8px;}
 button{border:none;border-radius:2px;font-weight:700;cursor:pointer;user-select:none;font-family:inherit;}
 button:active{filter:brightness(.86);}
 /* あいうえおタブ */
 .yomi-tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;}
 .yomi-tab{padding:6px 11px;border-radius:5px;font-size:.88rem;font-weight:700;border:1px solid transparent;}
-.yomi-on{background:var(--brand);color:#fff;border-color:var(--brand);}
-.yomi-off{background:#fff;color:#475569;border:1px solid #adb5bd;}
+.yomi-on{background:var(--sel-bg);color:#fff;border-color:var(--sel-bg);}
+.yomi-off{background:#fff;color:var(--btn2-text);border:1px solid var(--btn-border);}
 /* スタッフ2列グリッド */
 .staff-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:10px;}
-.btn-staff{background:#fff;color:#0f172a;padding:16px 8px;font-size:1.35rem;font-weight:600;width:100%;border-radius:2px;border:1px solid #adb5bd;letter-spacing:.06em;line-height:1.3;}
+.btn-staff{background:#fff;color:var(--text);padding:16px 8px;font-size:1.35rem;font-weight:600;width:100%;border-radius:2px;border:1px solid var(--btn-border);letter-spacing:.06em;line-height:1.3;}
 .btn-staff:active{background:var(--brand-soft2);}
 /* 打刻 */
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;}
@@ -3491,11 +3494,11 @@ button:active{filter:brightness(.86);}
 @keyframes mealExpand{from{opacity:0;transform:translateY(-4px);}to{opacity:1;transform:translateY(0);}}
 .meal-collapse-body{animation:mealExpand .18s ease-out;}
 /* 共通 */
-.btn-admin{background:#dde1e7;color:#475569;font-size:.83rem;padding:11px;width:100%;border-radius:2px;border:1px solid #adb5bd;margin-top:8px;}
-.btn-back{background:#dde1e7;color:#475569;font-size:.83rem;font-weight:700;padding:7px 14px;text-align:left;margin-bottom:10px;display:inline-block;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;}
-.btn-pin{background:#fff;color:#0f172a;padding:16px;font-size:1.4rem;font-weight:700;border-radius:2px;border:1px solid #adb5bd;}
+.btn-admin{background:var(--btn2-bg);color:var(--btn2-text);font-size:.83rem;padding:11px;width:100%;border-radius:2px;border:1px solid var(--btn-border);margin-top:8px;}
+.btn-back{background:var(--btn2-bg);color:var(--btn2-text);font-size:.83rem;font-weight:700;padding:7px 14px;text-align:left;margin-bottom:10px;display:inline-block;border-radius:2px;border:1px solid var(--btn-border);cursor:pointer;font-family:inherit;}
+.btn-pin{background:#fff;color:var(--text);padding:16px;font-size:1.4rem;font-weight:700;border-radius:2px;border:1px solid var(--btn-border);}
 .btn-pin-enter{background:var(--brand);color:#fff;padding:16px;font-size:1.2rem;font-weight:700;border-radius:2px;}
-.btn-pin-clear{background:#dde1e7;color:#8496a7;padding:16px;font-size:1rem;border-radius:2px;border:1px solid #adb5bd;}
+.btn-pin-clear{background:var(--btn2-bg);color:var(--muted);padding:16px;font-size:1rem;border-radius:2px;border:1px solid var(--btn-border);}
 .pin-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;}
 .pin-display{font-size:2.3rem;font-family:monospace;text-align:center;letter-spacing:.3em;min-height:50px;line-height:50px;margin-bottom:10px;color:#0f172a;}
 .msg-ok{background:var(--brand-soft2);border:1px solid var(--brand-border2);border-radius:2px;padding:12px;text-align:center;font-size:1rem;font-weight:700;margin-bottom:14px;color:var(--brand);}
@@ -3525,7 +3528,16 @@ select:focus,input:focus{border-color:var(--brand);box-shadow:0 0 0 2px rgba(30,
 .hrm-row:hover{background:var(--brand-bg)!important;}
 /* 穂乃味のロゴ（honomiLogoHtml）。押せない飾りなので操作の邪魔をしない */
 .hn-logo{display:block;flex-shrink:0;object-fit:contain;mix-blend-mode:multiply;pointer-events:none;user-select:none;}
-.hn-logo-home{position:absolute;left:0;top:0;}
+/* 高さは画面幅で自動調整（幅は縦横比から自動）。 */
+/* トップ画面は時計と横並び。画面幅から時計（2.6rem の8桁≒12.6〜12.9rem。余裕を見て13rem）と余白40pxを引いた残りの幅でロゴの高さを決める
+   （文字を大きくした端末でも横にはみ出さない。収まらないときは .hn-home-head が折り返してロゴが上に回る）。 */
+.hn-logo-home{height:clamp(44px,calc((100vw - 40px - 13rem) / 1.324),78px);}
+.hn-logo-punch{height:clamp(50px,15vw,58px);}
+.hn-logo-admin{height:clamp(44px,12vw,48px);}
+.hn-logo-pin{height:48px;}
+/* トップ画面の見出し：ロゴと日付・時計を横に並べる（縦に積まない＝縦スクロールを増やさない） */
+.hn-home-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;margin-bottom:10px;padding-top:4px;}
+.hn-home-clock{text-align:center;min-width:0;}
 /* カードの上の補足文字：インラインの #8496a7 はベージュ地で読みにくいため、カード内だけ --muted へ寄せる（ボタンは対象外） */
 .admin-card :not(button)[style*="color:#8496a7"],.history :not(button)[style*="color:#8496a7"],.admin-card .empty{color:var(--muted)!important;}
 /* 勤怠一覧：日付（氏名の上）と氏名下の警告はスマホ専用。下の max-width:767px で表示する */
@@ -5670,12 +5682,13 @@ function _renderInner(){
       :(firebaseReady?'':''));
     app.innerHTML=((!urlToken||isAllToken)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
       +tenantBrandHeaderHtml()
-      // 穂乃味のロゴは時計の欄の左上に重ねて置く（欄の高さを増やさない）
-      +'<div class="center" style="margin-bottom:10px;padding-top:4px;'+(TENANT.legacy?'position:relative;':'')+'">'
-      +(TENANT.legacy?honomiLogoHtml(34,"hn-logo-home"):'')
+      // 穂乃味はロゴと日付・時計を横に並べる（縦に積まないので画面の高さはほぼ変わらない）
+      +(TENANT.legacy
+        ?'<div class="hn-home-head">'+honomiLogoHtml(78,"hn-logo-home")+'<div class="hn-home-clock">'
+        :'<div class="center" style="margin-bottom:10px;padding-top:4px;">')
       +'<div class="date-disp" id="dt">'+fmtDate(now)+'</div>'
       +'<div class="clock" id="clk">'+fmtTimeSec(now)+'</div>'
-      +'</div>'
+      +(TENANT.legacy?'</div></div>':'</div>')
       +'<div class="label">'+(firebaseError?'通信エラー':firebaseReady?'スタッフを選択してください':'読込中...')+'</div>'
       +statusLabel
       +'<div class="yomi-tabs">'+tabsHTML+'</div>'
@@ -5979,9 +5992,9 @@ function _renderInner(){
       }
       return '<div style="margin-top:8px;background:#fff;border-radius:2px;border:1px solid #c7d2fe;overflow:hidden;">'+_head+_body+'</div>';
     })();
-    // 穂乃味のロゴは「もどる」の行の右の空き（高さ36px以下）に置き、時計・打刻ボタンの位置を動かさない
+    // 穂乃味のロゴは「もどる」の行の右に置く（打刻ボタンの色・大きさ・並びは変えない）
     app.innerHTML=(TENANT.legacy
-        ?'<div style="display:flex;justify-content:space-between;align-items:flex-start;"><button class="btn-back" onclick="goHome()">← もどる</button>'+honomiLogoHtml(35)+'</div>'
+        ?'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;"><button class="btn-back" onclick="goHome()">← もどる</button>'+honomiLogoHtml(58,"hn-logo-punch")+'</div>'
         :'<button class="btn-back" onclick="goHome()">← もどる</button>')
       +'<div class="center" style="margin-bottom:16px;padding-top:4px;">'
       +'<div style="font-size:3rem;font-weight:900;letter-spacing:-1px;">'+esc(staffName)+'</div>'
@@ -6258,9 +6271,9 @@ function _renderInner(){
   // ── PIN ──
   if(screen==="pin"){
     var dots=pinInput?'●'.repeat(pinInput.length):'<span style="color:#c8ccd2">────────</span>';
-    // 穂乃味のロゴは上の余白40pxの中に置く（4px＋ロゴ36px＝従来の余白と同じ高さ。PINの位置を動かさない）
-    app.innerHTML='<div class="center" style="padding-top:'+(TENANT.legacy?4:40)+'px;margin-bottom:28px;">'
-      +(TENANT.legacy?'<div style="display:flex;justify-content:center;height:36px;">'+honomiLogoHtml(36)+'</div>':tenantBrandHeaderHtml())
+    // 穂乃味のロゴは上の余白の中に置く（余白40px→ロゴ48px。PIN欄・テンキーは8pxだけ下がる）
+    app.innerHTML='<div class="center" style="padding-top:'+(TENANT.legacy?0:40)+'px;margin-bottom:28px;">'
+      +(TENANT.legacy?'<div style="display:flex;justify-content:center;">'+honomiLogoHtml(48,"hn-logo-pin")+'</div>':tenantBrandHeaderHtml())
       +'<div style="font-size:1.6rem;font-weight:900;">'+(pinScope==="system"?'システム管理者認証':'管理者認証')+'</div>'
       +'<div style="color:#8496a7;font-size:.85rem;margin-top:4px;">PINを入力してください</div>'
       +(_tenantLoginGate&&pinScope==="company"&&_tenantAuthError?'<div style="color:#dc2626;font-size:.8rem;margin-top:8px;">'+esc(_tenantAuthError)+'</div>':'')
@@ -8658,7 +8671,7 @@ function _renderInner(){
     app.innerHTML='<div class="admin-sticky-bar">'
       +tenantBrandBarHtml()
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">'
-      +'<div style="display:flex;align-items:center;gap:8px;">'+honomiLogoHtml(30)
+      +'<div style="display:flex;align-items:center;gap:10px;">'+honomiLogoHtml(48,"hn-logo-admin")
       +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div></div>'
       +(demoMode
         ?'<button class="admin-close-btn" data-demo-allow="1" style="background:#ede9fe;color:#5b21b6;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #c4b5fd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="openStaffDemoPicker()">🧪 スタッフ画面をテスト</button>'
