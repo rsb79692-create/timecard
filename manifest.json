@@ -4,7 +4,7 @@
   "start_url": "./?token=all",
   "scope": "./",
   "display": "standalone",
-  "background_color": "#1565C0",
+  "background_color": "#FAF8F3",
   "theme_color": "#C9A96A",
   "orientation": "portrait",
   "icons": [

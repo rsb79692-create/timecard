@@ -121,7 +121,7 @@ DRY_RUN=true node scripts/morning-check.js
 - **icons** — 全サイズのアイコンファイルが存在するか
 - **start_url** — `?token=all` パラメータが意図通りか
 - **display: standalone** — ブラウザUIが非表示になっているか
-- **theme_color / background_color** — ブランドカラーが正しいか（theme_color＝穂乃味のゴールド #C9A96A。2026-10-08 に青 #1976D2 から変更。background_color は起動画面の色で #1565C0 のまま）
+- **theme_color / background_color** — ブランドカラーが正しいか（theme_color＝穂乃味のゴールド #C9A96A。2026-10-08 に青 #1976D2 から変更。background_color＝Android の起動画面の色はアプリ内の背景と同じオフホワイト #FAF8F3（2026-10-08 に #1565C0 から変更）。manifest の background_color / theme_color の変更は、Chrome の定期確認（24時間に1回）後の WebAPK 更新で反映される（web.dev「How Chrome handles updates to the web app manifest」）。Android のナビゲーションバーをどちらの色で塗るかは Chrome・Android の版で異なり得る（実機未確認）。Web からナビゲーションバーの色を直接指定する API は無い）
 
 ### LINE通知・Discord通知 調査
 
