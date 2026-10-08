@@ -51,6 +51,11 @@ module.exports = T.handler(async function handler(req, res) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 401, "unauthorized");
     }
+    // ★ 測定対象の取得は対象施設（ミュゲの泉）だけ。他施設は RTDB・月次書類 DB・レート制限に触れずに断る
+    if (action === "devices" && !MD.facilityEnabled(H.str(body.facility, 40))) {
+      await H.withMinDuration(startedAt, MIN_MS);
+      return H.fail(res, 403, "facility_disabled");
+    }
     if (!MD.config()) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 503, "not_configured");

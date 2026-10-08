@@ -67,7 +67,7 @@ var TENANT_CONFIGS={
     // 公式ロゴ（元画像の白い余白だけを詰めて縮小。図柄は変えない）。表示は honomiLogoHtml() だけで行う
     logo:{src:"brand/honomi/logo-h108.png",src2x:"brand/honomi/logo-h240.png",w:143,h:108,alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
-    features:{mileage:true,deviceWatch:true,monthlyDocs:false}
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true}  // monthlyDocs はミュゲの泉だけ（MDOC_FACILITIES。2026-10-09 再開）
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -1694,7 +1694,7 @@ function punchOutboxFlush(reason){
     }).then(function(r){
       if(r&&r.ok){
         console.log("[punchOutbox] sent:",e.eventId,r.already?"(already on server)":"",reason||"");
-        if(e.rec&&e.rec.mdoc)mdocScheduleSync(mdocSyncDaysFor(e.rec.date)); // 月次書類への転記（穂乃味だけ。MONTHLY-DOCS）
+        if(e.rec&&e.rec.mdoc&&mdocFacilityOn(e.rec.mdoc.f))mdocScheduleSync(mdocSyncDaysFor(e.rec.date)); // 月次書類への転記（穂乃味だけ。MONTHLY-DOCS）
         return punchOutboxAck(e.eventId).then(step);
       }
       e.state="pending";
@@ -10191,6 +10191,11 @@ var MDOC_SYNC_TTL_MS=30*60*1000;    // 起動時の転記の最短間隔
 var MDOC_HYG_ITEMS="体調・化膿創・服装・帽子・毛髪・爪・指輪等・手洗い・履物";
 var MDOC_FLU_ITEMS="熱・頭痛・関節痛・筋肉痛・咳・喉の痛み・鼻水・家族の症状";
 var MDOC_SLOT_LABEL=["朝","日中","夕方"];
+// ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開（他施設は従来の打刻画面のまま。通信もしない）。2026-10-09 以降の打刻だけが対象。
+//   サーバ（api/_lib/monthly-docs.js の ENABLED_FACILITIES / START_DATE）と同じ値にする。施設を足すときは両方に足す。
+var MDOC_FACILITIES=["ミュゲの泉"];
+var MDOC_START_DATE="2026-10-09";
+function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
 var _mdocDevLoading={};
 var _mdocSyncTimer=null,_mdocSyncDays=2;
 
@@ -10225,7 +10230,7 @@ function mdocDevCache(fac){
 }
 // 取り直す（同じ施設は同時に1本）。結果は端末に控え、失敗しても控えは残す。
 function mdocLoadDevices(fac,force){
-  if(!mdocActive()||!fac)return Promise.resolve(mdocDevCache(fac));
+  if(!mdocActive()||!mdocFacilityOn(fac))return Promise.resolve(mdocDevCache(fac));
   var c=mdocDevCache(fac);
   if(!force&&c&&(Date.now()-(c.at||0))<MDOC_DEV_TTL_MS)return Promise.resolve(c);
   if(_mdocDevLoading[fac])return _mdocDevLoading[fac];
@@ -10241,7 +10246,7 @@ function mdocLoadDevices(fac,force){
   return p;
 }
 // 起動時・スタッフ選択時の先読み（裏で走らせ、待たない）
-function mdocPrefetch(fac){if(mdocActive()&&fac)mdocLoadDevices(fac,false);}
+function mdocPrefetch(fac){if(mdocActive()&&mdocFacilityOn(fac))mdocLoadDevices(fac,false);}
 
 // ── 転記（サーバが RTDB の打刻を読んで月次書類の DB へ書く）──────────────────────
 // days: 打刻の送信後は当日と前日（2）、起動時は遅れて届いた打刻も拾う7日（7）。
@@ -10264,8 +10269,10 @@ function mdocScheduleSync(days){
   },3000);
 }
 function mdocStartup(){
-  if(!mdocActive())return;
-  if(facilityName)mdocPrefetch(facilityName);
+  // 起動時の先読み・転記は対象施設の施設端末だけ（他施設の端末・施設リンクの無い端末では通信しない。
+  // 個人のスマホの回答は送信成功時の転記で届く）
+  if(!mdocActive()||!mdocFacilityOn(facilityName))return;
+  mdocPrefetch(facilityName);
   var last=Number(_mdocLsGet("mdoc.syncAt"))||0;
   if(Date.now()-last>MDOC_SYNC_TTL_MS)mdocScheduleSync(7);
 }
@@ -10303,9 +10310,10 @@ function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
 //       （日中勤務の人は16時以降に限る。夕方勤務の人が後から来る施設で、昼の退勤を最後と誤らないため）。
 //       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
 function mdocPlan(type,staff,fac,d){
-  if(!mdocActive()||!fac||!staff)return null;
+  if(!mdocActive()||!mdocFacilityOn(fac)||!staff)return null;
   if(type!=="clockIn"&&type!=="clockOut")return null;
   var dk=fmtDateKey(d),hour=d.getHours();
+  if(dk<MDOC_START_DATE)return null;
   var day=_mdocDay(dk);
   var tempDone=function(slot){return day.has(function(m){return m.f===fac&&m.temp&&m.temp.s===slot;});};
   var so=(staffList||[]).find(function(x){return x&&x.name===staff;})||{};

@@ -4,7 +4,12 @@
 
 ## 対象と範囲
 
-- ⚠ **2026-10-08 から本番停止中**（ユーザー指示の緊急停止）。穂乃味の `features.monthlyDocs:false`（`index.html` と `api/_lib/tenant.js` の2か所）。再開は両方を `true` に戻す。停止中も打刻は通常どおりで、記録は削除していない。
+- ⚠ **2026-10-09 から「ミュゲの泉」だけで再開**（2026-10-08 にユーザー指示で緊急停止 → 2026-10-09 ユーザー指示で施設を限定して再開）。
+  穂乃味の `features.monthlyDocs:true`（`index.html` と `api/_lib/tenant.js` の2か所）に加え、対象施設と開始日を
+  画面 `MDOC_FACILITIES` / `MDOC_START_DATE`（`index.html`）とサーバ `ENABLED_FACILITIES` / `START_DATE`（`api/_lib/monthly-docs.js`）の**両方**で限定する（同じ値にする。テストが一致を検査）。
+  ★ **他施設へ広げるのはユーザーの指示があるときだけ。** 他施設では確認画面・通信・端末保存が起きず（起動時の先読み・転記も対象施設の施設端末だけ）、
+  サーバも他施設・2026-10-08 以前の回答を転記しない（`outOfScope`。既存の月次書類データに足さない）・測定対象の取得は 403 `facility_disabled`。
+  全面停止は2か所の `monthlyDocs` を `false` に戻す。停止しても打刻は通常どおりで、記録は削除しない。
 - 会社ID `honomi` だけ。判定は 画面（`mdocActive()` = `TENANT_ID==="honomi"` かつ `tenantFeature("monthlyDocs")` かつ `punchOutboxEnabled()`）・
   API 入口（`T.current().id === "honomi"` かつ `T.feature("monthlyDocs")`）・月次書類 DB（`tc_events.tenant` の CHECK）の3層。
   マンテール（`features.monthlyDocs:false`）では確認画面・通信・端末保存・RTDB/月次書類 DB へのアクセスが一切起きない（`scripts/test-monthly-docs.js`）。

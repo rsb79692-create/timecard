@@ -21,6 +21,13 @@ const SYNC_DAYS = 7;
 const HOZON_OFFSET_DAYS = 15;
 /** 1施設×種別の機器の上限（月次書類の帳票の欄＝冷蔵庫1〜4）。打刻1件に載せられる機器は冷蔵・冷凍で8台まで。 */
 const MAX_DEVS = 8;
+/**
+ * ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開し、2026-10-09 以降の打刻だけを転記する
+ * （他施設・それより前の打刻は転記しない＝既存の月次書類データに足さない）。index.html の MDOC_FACILITIES / MDOC_START_DATE と同じ値。
+ */
+const ENABLED_FACILITIES = Object.freeze(["ミュゲの泉"]);
+const START_DATE = "2026-10-09";
+function facilityEnabled(name) { return typeof name === "string" && ENABLED_FACILITIES.indexOf(name) >= 0; }
 
 const EVENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -100,7 +107,7 @@ function cleanDev(d) {
  */
 function eventsFromRecords(records, master) {
   const events = [];
-  let rejected = 0;
+  let rejected = 0, outOfScope = 0;
   const entries = records && typeof records === "object" ? Object.entries(records) : [];
   // 同じ人・同じ日の打刻に現れる施設（退勤の記録は打刻した端末の施設しか持たないため、出勤・施設変更の勤務先も認める）
   const dayFacs = {};
@@ -134,6 +141,8 @@ function eventsFromRecords(records, master) {
     const recFacs = [r.workFacility, r.facilityName, r.homeFacility].filter(function (x) { return typeof x === "string" && x; });
     const allowed = r.type === "clockOut" ? (dayFacs[r.staff + "|" + r.date] || new Set()) : new Set(recFacs);
     if (!allowed.has(fac)) { bad(); continue; }
+    // 対象外の施設・開始日より前の打刻は転記しない（不正ではないので rejected に数えない）
+    if (!facilityEnabled(fac) || r.date < START_DATE) { outOfScope++; continue; }
 
     const base = {
       punch_type: r.type,
@@ -175,7 +184,7 @@ function eventsFromRecords(records, master) {
       }));
     }
   }
-  return { events: events, rejected: rejected };
+  return { events: events, rejected: rejected, outOfScope: outOfScope };
 }
 
 // ===== 月次書類 DB（Supabase）=====
@@ -242,15 +251,17 @@ async function syncRecent(days, nowMs) {
   // 2〜SYNC_DAYS 日に丸める（入力で読み込み範囲を広げさせない）
   const n = Math.min(SYNC_DAYS, Math.max(2, Math.floor(Number(days)) || 2));
   const to = todayJst(nowMs);
-  const from = addDays(to, -(n - 1));
+  if (to < START_DATE) return { found: 0, rejected: 0, outOfScope: 0, inserted: 0, skipped: 0, invalid: 0 };
+  let from = addDays(to, -(n - 1));
+  if (from < START_DATE) from = START_DATE; // 開始日より前は読まない
   const [recs, staffRaw, locRaw] = await Promise.all([
     G.dbGetRange("tc5_records", "date", from, to),
     G.dbGet("tc5_staff"),
     G.dbGet("master/locations"),
   ]);
-  const { events, rejected } = eventsFromRecords(recs, { staff: staffNames(staffRaw), facilities: facilityNames(locRaw) });
+  const { events, rejected, outOfScope } = eventsFromRecords(recs, { staff: staffNames(staffRaw), facilities: facilityNames(locRaw) });
   const r = events.length ? await ingest(events) : { inserted: 0, skipped: 0, invalid: 0 };
-  return Object.assign({ found: events.length, rejected: rejected }, r);
+  return Object.assign({ found: events.length, rejected: rejected, outOfScope: outOfScope }, r);
 }
 
 /** 施設名が施設マスタにあるか（測定対象の取得前の確認）。 */
@@ -262,6 +273,9 @@ async function facilityExists(name) {
 module.exports = {
   SYNC_DAYS,
   HOZON_OFFSET_DAYS,
+  ENABLED_FACILITIES,
+  START_DATE,
+  facilityEnabled,
   eventsFromRecords,
   hozonDiscardDate,
   addDays,
