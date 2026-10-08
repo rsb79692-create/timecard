@@ -161,6 +161,25 @@ console.log("■ 送信後の転記の範囲（遅れて届いた打刻の日付
   check("日付が不正なら2日", c.mdocSyncDaysFor("x") === 2);
 }
 
+console.log("■ 温度入力欄の表示順（表示だけ。冷蔵庫の番号順・同じ番号は冷蔵→冷凍）");
+{
+  const c = makeClient();
+  // 記録の並び（従来どおり冷蔵→冷凍、各番号順）
+  const devs = [
+    { id: "r1", k: "r", n: "冷蔵庫1 冷蔵", o: 1 }, { id: "r2", k: "r", n: "冷蔵庫2 冷蔵", o: 2 },
+    { id: "f1", k: "f", n: "冷蔵庫1 冷凍", o: 1 }, { id: "f3", k: "f", n: "冷蔵庫3 冷凍", o: 3 },
+  ];
+  const before = JSON.stringify(devs);
+  const v = c.mdocViewOrder(devs).map((x) => x.n);
+  check("冷蔵庫1 冷蔵 → 冷蔵庫1 冷凍 → 冷蔵庫2 冷蔵 → 冷蔵庫3 冷凍", JSON.stringify(v) === JSON.stringify(["冷蔵庫1 冷蔵", "冷蔵庫1 冷凍", "冷蔵庫2 冷蔵", "冷蔵庫3 冷凍"]), v.join(","));
+  check("元の配列（記録する temp.d の並び・機器ID）は変えない", JSON.stringify(devs) === before);
+  check("並べ替えても機器ID・種別・番号の組はそのまま", c.mdocViewOrder(devs).every((x) => devs.some((d) => d.id === x.id && d.k === x.k && d.o === x.o && d.n === x.n)));
+}
+{
+  // 記録する値は表示順でなく devs の並びで作る（mdocCollect のソース上の確認）
+  check("記録する temp.d は devs の並びから作る（表示順の view を使わない）", /var vs=devs\.map\(/.test(MDOC) && /view\.forEach\(function\(x,i\)/.test(MDOC));
+}
+
 console.log("■ 前回の温度（手元の打刻とサーバの最後の記録の新しい方）");
 {
   const devA = "11111111-1111-4111-8111-111111111111";

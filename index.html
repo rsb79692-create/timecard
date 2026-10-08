@@ -3657,11 +3657,14 @@ body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .mdoc-tline{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid #e2e8f0;cursor:text;}
 .mdoc-thead{display:flex;flex-direction:column;min-width:0;}
 .mdoc-tname{font-size:1.1rem;font-weight:900;color:#0f172a;}
+.mdoc-tname.mdoc-k-r{color:#166534;}  /* 冷蔵（濃い緑） */
+.mdoc-tname.mdoc-k-f{color:#1D4ED8;}  /* 冷凍（濃い青） */
 .mdoc-prev{font-size:.85rem;color:#64748b;margin-top:2px;}
 .mdoc-tbox{display:flex;align-items:center;gap:4px;flex-shrink:0;}
 .mdoc-minus{font-size:1.6rem;font-weight:900;color:#0f172a;width:18px;text-align:right;}
-.mdoc-tin{width:104px;height:56px;font-size:1.6rem;font-weight:900;text-align:center;color:#0f172a;border:2px solid #94a3b8;border-radius:10px;background:#f8fafc;font-family:inherit;padding:0 4px;}
-.mdoc-tin::placeholder{font-size:1rem;font-weight:700;color:#64748b;}
+.mdoc-tin{width:104px;height:56px;font-size:28px;font-weight:900;text-align:center;color:#0f172a;border:2px solid #94a3b8;border-radius:10px;background:#f8fafc;font-family:inherit;padding:0 4px;}
+input[type=text].mdoc-tin{font-size:28px;}  /* ★ 共通の input[type=text]（.83rem）より優先させる。幅・高さ・余白は従来のまま */
+.mdoc-tin::placeholder{font-size:28px;font-weight:900;color:#64748b;}
 .mdoc-tin:focus{outline:none;border:3px solid var(--brand);background:#e8f1fc;}
 .mdoc-unit{font-size:1.1rem;font-weight:700;color:#334155;}
 </style>
@@ -10360,6 +10363,11 @@ function mdocLastTemps(fac,cache){
   return out;
 }
 
+// 温度入力欄の表示順（表示だけ。元の配列は変えない）: 冷蔵庫の番号（o＝slot）順、同じ番号は冷蔵→冷凍。
+function mdocViewOrder(devs){
+  return (devs||[]).slice().sort(function(a,b){return (a.o-b.o)||(a.k===b.k?0:(a.k==="r"?-1:1));});
+}
+
 // ── 確認画面 ───────────────────────────────────────────────────────────
 // 1つの重ね画面の中で 衛生・新興感染症 → 温度 → 保存食 と進む（画面遷移なし）。
 // 戻り値: 回答（打刻レコードの mdoc）／中止・問題ありなら null。
@@ -10372,12 +10380,15 @@ function mdocCollect(plan){
     if(plan.hyg&&plan.hygNg)md.hyg={a:"ng"};
     if(plan.slot!==null)steps.push("temp");
     if(plan.hozon)steps.push("hozon");
-    var temps=null,prevs={},devs=null,devState="loading";
+    var temps=null,prevs={},devs=null,view=null,devState="loading";
     var punchAt=null;       // 出勤の時刻（「問題なし」を押した時刻）。null なら打刻ボタンを押した時刻のまま
     var confirmQuit=false;  // 「記録せずに閉じる」の確認を表示中
     var idx=0,done=false;
     function useDevices(c){
       devs=(c&&Array.isArray(c.devices))?c.devices.slice().sort(function(a,b){return a.k===b.k?(a.o-b.o):(a.k==="r"?-1:1);}):[];
+      // 画面の並び（表示だけ）: 冷蔵庫の番号順、同じ番号は冷蔵→冷凍（例 冷蔵庫1 冷蔵→冷蔵庫1 冷凍→冷蔵庫2 冷蔵→冷蔵庫3 冷凍）。
+      // ★ 記録する temp.d は devs の並び（冷蔵→冷凍）のまま。機器ID・保存先・帳票との対応は変えない。
+      view=mdocViewOrder(devs);
       prevs=mdocLastTemps(plan.fac,c);
       temps={};devs.forEach(function(x){temps[x.id]=null;}); // ★ 前回値を今回の値として入れない
       devState=c?"ok":"error";
@@ -10466,10 +10477,10 @@ function mdocCollect(plan){
           next();
         });
         function refreshGo(){go.disabled=devs.some(function(x){return typeof temps[x.id]!=="number";});}
-        devs.forEach(function(x,i){
+        view.forEach(function(x,i){
           var line=el("label","mdoc-tline");
           var head=el("span","mdoc-thead");
-          head.appendChild(el("span","mdoc-tname",x.n));
+          head.appendChild(el("span","mdoc-tname mdoc-k-"+(x.k==="f"?"f":"r"),x.n));
           if(typeof prevs[x.id]==="number")head.appendChild(el("span","mdoc-prev","前回 "+prevs[x.id].toFixed(1)+"℃"));
           line.appendChild(head);
           var box=el("span","mdoc-tbox");
