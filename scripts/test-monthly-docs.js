@@ -85,7 +85,7 @@ console.log("■ 出勤（衛生・新興感染症／朝の温度）");
   const c = makeClient();
   const p = c.mdocPlan("clockIn", "山田", FAC, at(D, 6, 10));
   check("その日最初の出勤は衛生・感染症を聞く", p && p.hyg === true && p.hygNg === false);
-  check("朝の温度が未記録なら朝（slot 0）を聞く（出勤は温度の記録で確定）", p && p.slot === 0);
+  check("朝の温度が未記録なら朝（slot 0）を聞く（出勤の確定後に聞く）", p && p.slot === 0);
   check("出勤では保存食を聞かない", p && p.hozon === false);
 }
 {
@@ -179,6 +179,221 @@ console.log("■ 温度入力欄の表示順（表示だけ。冷蔵庫の番号
   // 記録する値は表示順でなく devs の並びで作る（mdocCollect のソース上の確認）
   check("記録する temp.d は devs の並びから作る（表示順の view を使わない）", /var vs=devs\.map\(/.test(MDOC) && /view\.forEach\(function\(x,i\)/.test(MDOC));
 }
+
+// 確認画面を動かすための最小の DOM（ボタンを文字で探して押す）
+function fakeDom() {
+  const mk = (tag) => {
+    const e = {
+      tag, children: [], parentNode: null, className: "", _text: "", listeners: {}, attrs: {}, disabled: false, value: "",
+      appendChild(c) { c.parentNode = e; e.children.push(c); return c; },
+      removeChild(c) { e.children = e.children.filter((x) => x !== c); c.parentNode = null; },
+      addEventListener(n, fn) { (e.listeners[n] = e.listeners[n] || []).push(fn); },
+      setAttribute(k, v) { e.attrs[k] = v; }, focus() {}, blur() {},
+      get textContent() { return e._text + e.children.map((c) => c.textContent).join(""); },
+      set textContent(v) { e._text = String(v); e.children.forEach((c) => (c.parentNode = null)); e.children = []; },
+    };
+    return e;
+  };
+  const body = mk("body");
+  const all = (n, out) => { out.push(n); n.children.forEach((c) => all(c, out)); return out; };
+  return {
+    document: { createElement: mk, createTextNode: (t) => Object.assign(mk("#text"), { _text: t }), body },
+    find: (text) => all(body, []).find((n) => n.tag === "button" && n._text === text),
+    inputs: () => all(body, []).filter((n) => n.tag === "input"),
+    open: () => body.children.length > 0,
+  };
+}
+function uiClient(opts) {
+  const c = makeClient(Object.assign({ facilityName: FAC }, opts));
+  const dom = fakeDom();
+  c.document = dom.document;
+  c.fmtTime = (d) => d.getHours() + ":" + String(d.getMinutes()).padStart(2, "0");
+  c.__timers = [];
+  c.setTimeout = (fn, ms) => { c.__timers.push({ fn, ms }); return c.__timers.length; }; // 放置タイマー等は自動では進めない
+  c.__dom = dom;
+  return c;
+}
+const DEVS = [{ id: "11111111-1111-4111-8111-111111111111", k: "r", n: "冷蔵庫1 冷蔵", o: 1 }, { id: "22222222-2222-4222-8222-222222222222", k: "f", n: "冷蔵庫1 冷凍", o: 1 }];
+const tick = () => new Promise((r) => setImmediate(r));
+// 後半の API テストの最後で待ち合わせる（結果の集計より前に終える）
+const uiTests = (async () => {
+  console.log("■ 出勤は「問題なし」で確定し、朝の温度は確定後に聞く（2026-10-09 ユーザー指示）");
+  {
+    const c = uiClient();
+    c.__store["mdoc.dev." + FAC] = JSON.stringify({ at: Date.now(), devices: DEVS, last: null });
+    const plan = c.mdocPlan("clockIn", "山田", FAC, at(D, 6));
+    check("朝・初回の出勤の判定は従来どおり（衛生＋朝の温度 slot 0）", plan && plan.hyg && plan.slot === 0);
+    plan.pressedAt = at(D, 6);
+    const pr = c.mdocCollect(plan);
+    check("出勤の確認画面は衛生・感染症から始まる", !!c.__dom.find("問題なし") && !!c.__dom.find("問題あり"));
+    c.__dom.find("問題なし").onclick();
+    const md = await pr;
+    check("「問題なし」を押した時点で確認画面が閉じて回答が返る（温度の画面を挟まない）", md && md.hyg && md.hyg.a === "ok" && !c.__dom.open());
+    check("出勤の回答に温度は入らない（温度は出勤の条件にしない）", md && md.temp === undefined);
+    check("出勤の時刻は「問題なし」を押した時刻（_punchAt）", md && md._punchAt instanceof Date);
+    check("出勤の確認画面で測定対象の通信をしない", c.__calls.fetch === 0);
+  }
+  {
+    const c = uiClient();
+    const plan = c.mdocPlan("clockIn", "山田", FAC, at(D, 6));
+    let resolved = false;
+    c.mdocCollect(plan).then(() => { resolved = true; });
+    c.__dom.find("問題あり").onclick();
+    const txt = c.__dom.document.body.textContent;
+    check("「問題あり」は従来どおり打刻しない（責任者に連絡）", /責任者に連絡してください/.test(txt) && /出勤はまだ記録されていません/.test(txt));
+    check("「問題あり」は端末に印を残す（開き直した出勤では聞かずに ng を記録）", !!c.__store["mdoc.ng." + D + ".山田"]);
+    c.__dom.find("閉じる").onclick();
+    await tick();
+    check("「問題あり」→閉じる は回答なし（打刻しない）", resolved && !c.__dom.open());
+  }
+  {
+    // 出勤の確定後の朝の温度（mdocAfterClockIn）。送信は止めておき、温度を書き足してから送る
+    const c = uiClient();
+    c.__store["mdoc.dev." + FAC] = JSON.stringify({ at: Date.now(), devices: DEVS, last: null });
+    const nr = rec("山田", "clockIn", D, 6, { mdoc: { f: FAC, hyg: { a: "ok" } } });
+    c.records.push(nr);
+    const saved = [], flushed = [];
+    c.punchOutbox = { [nr.id]: { eventId: nr.id, rec: nr, state: "pending", retryCount: 0 } };
+    c._punchOutboxSave = (e) => { saved.push(JSON.parse(JSON.stringify(e.rec))); return Promise.resolve(true); };
+    c.punchOutboxFlush = (r) => { flushed.push({ r, held: c.mdocHeld(nr.id) }); return Promise.resolve(); };
+    c._lsSet = () => {};
+    c._mdocHold[nr.id] = 1;
+    const plan = Object.assign(c.mdocPlan("clockIn", "佐藤", FAC, at(D, 6)), { staff: "山田" });
+    const done = c.mdocAfterClockIn(plan, nr);
+    await tick();
+    const txt = c.__dom.document.body.textContent;
+    check("出勤の確定後に朝の温度の画面が出る（「出勤しました」）", /出勤しました/.test(txt) && /温度の記録（朝）/.test(txt), txt.slice(0, 80));
+    check("誰の出勤かを表示する（共用端末で別の人が入れない）", /山田 さん/.test(txt));
+    check("打刻後の温度の画面に衛生・保存食は出ない", !c.__dom.find("問題なし") && !c.__dom.find("はい"));
+    check("閉じても出勤は取り消されない（取り消しの確認を出さない）", !!c.__dom.find("記録しないで閉じる") && !/取り消/.test(txt));
+    check("温度の画面が開いている間は出勤の送信を止める", c.mdocHeld(nr.id) && flushed.length === 0);
+    const go = c.__dom.find("温度を記録");
+    check("値が入るまで記録ボタンは押せない", !!go && go.disabled === true);
+    const ins = c.__dom.inputs();
+    ins[0].value = "3.5"; ins[0].oninput(); ins[1].value = "18"; ins[1].oninput();
+    check("全機器に値が入ると記録ボタンが押せる", go.disabled === false);
+    go.onclick();
+    check("記録すると「温度を記録しました」を短く出す（送信はまだ止めたまま）", /温度を記録しました/.test(c.__dom.document.body.textContent) && c.mdocHeld(nr.id));
+    const tm = c.__timers.filter((x) => x.ms === 1200).pop();
+    if (tm) tm.fn();
+    await done;
+    const t = nr.mdoc && nr.mdoc.temp;
+    check("温度は同じ出勤レコード（未送信の端末保存）の mdoc.temp に書き足す", !!(t && t.s === 0 && t.d.length === 2 && saved.length === 1 && saved[0].mdoc.temp && saved[0].mdoc.hyg.a === "ok"));
+    check("冷凍はマイナス・記録の並びは devs の並び", !!(t && t.d[0].v === 3.5 && t.d[1].v === -18));
+    check("打刻の時刻は変えない（温度の時刻は temp.at に別に持つ）", nr.timestamp === at(D, 6).toISOString() && !!t && typeof t.at === "string");
+    check("記録後に止めを外して送る", !c.mdocHeld(nr.id) && flushed.length === 1 && flushed[0].held === false && !c.__dom.open());
+  }
+  {
+    // 「問題あり」の後に開き直した出勤（聞かずに ng を記録）でも、朝の温度は確定後に聞く
+    const c = uiClient();
+    c.__store["mdoc.ng." + D + ".山田"] = JSON.stringify(Date.now());
+    const plan = c.mdocPlan("clockIn", "山田", FAC, at(D, 6));
+    const md = await c.mdocCollect(plan);
+    check("問題ありの後の出勤: 画面を出さずに hyg ng を返し、朝の温度は後で聞く（slot 0）", plan.hygNg && md.hyg && md.hyg.a === "ng" && md.temp === undefined && !c.__dom.open() && plan.slot === 0);
+  }
+  {
+    // 測定対象を読み込めない（控えなし・取得失敗）ときの出勤後の画面は「閉じる」1つ
+    const c = uiClient();
+    c.fetch = async () => ({ ok: false, json: async () => ({}) });
+    const nr = rec("山田", "clockIn", D, 6, { mdoc: { f: FAC, hyg: { a: "ok" } } });
+    c.punchOutbox = { [nr.id]: { eventId: nr.id, rec: nr, state: "pending", retryCount: 0 } };
+    c._punchOutboxSave = () => Promise.resolve(true); c.punchOutboxFlush = () => Promise.resolve(); c._lsSet = () => {};
+    c._mdocHold[nr.id] = 1;
+    const done = c.mdocAfterClockIn(Object.assign(c.mdocPlan("clockIn", "山田", FAC, at(D, 6))), nr);
+    for (let i = 0; i < 5; i++) await tick();
+    check("読み込めないときは「閉じる」1つだけ（同じ結果のボタンを並べない）", !!c.__dom.find("閉じる") && !c.__dom.find("記録しないで閉じる"));
+    c.__dom.find("閉じる").onclick();
+    await done;
+    check("読み込めず閉じても出勤はそのまま・止めを外す", !nr.mdoc.temp && !c.mdocHeld(nr.id));
+  }
+  for (const [label, act, state, retry] of [["「記録しないで閉じる」", "close", "pending", 0], ["放置（3分）", "idle", "pending", 0], ["送信中のエントリ", "rec", "syncing", 0], ["一度送ろうとしたエントリ", "rec", "pending", 1]]) {
+    const c = uiClient();
+    c.__store["mdoc.dev." + FAC] = JSON.stringify({ at: Date.now(), devices: DEVS, last: null });
+    const nr = rec("山田", "clockIn", D, 6, { mdoc: { f: FAC, hyg: { a: "ok" } } });
+    const saved = [], flushed = [];
+    c.punchOutbox = { [nr.id]: { eventId: nr.id, rec: nr, state, retryCount: retry } };
+    c._punchOutboxSave = (e) => { saved.push(e); return Promise.resolve(true); };
+    c.punchOutboxFlush = (r) => { flushed.push(r); return Promise.resolve(); };
+    c._lsSet = () => {};
+    c._mdocHold[nr.id] = 1;
+    const plan = Object.assign(c.mdocPlan("clockIn", "佐藤", FAC, at(D, 6)), { staff: "山田" });
+    const done = c.mdocAfterClockIn(plan, nr);
+    await tick();
+    if (act === "close") c.__dom.find("記録しないで閉じる").onclick();
+    else if (act === "idle") { const tm = c.__timers.filter((x) => x.ms === c.MDOC_POST_TEMP_IDLE_MS).pop(); if (tm) tm.fn(); }
+    else { const ins = c.__dom.inputs(); ins[0].value = "3"; ins[0].oninput(); ins[1].value = "18"; ins[1].oninput(); c.__dom.find("温度を記録").onclick(); const tm = c.__timers.filter((x) => x.ms === 1200).pop(); if (tm) tm.fn(); }
+    await done;
+    check(label + ": 出勤レコードはそのまま（温度を書き足さない）・止めを外して送る", !nr.mdoc.temp && saved.length === 0 && !c.mdocHeld(nr.id) && flushed.length === 1 && !c.__dom.open());
+  }
+  {
+    // 送信の一時停止は止めた出勤だけ（他の未送信の打刻は送る）
+    const due = fnSrc("function _punchOutboxDue(e,nowMs,force){", "// 1件送信する");
+    const ctx = { mdocHeld: (id) => id === "a", punchOutboxBackoffMs: () => 0, PUNCH_OUTBOX_FORCE_MIN_MS: 0, Date };
+    vm.createContext(ctx); vm.runInContext(due, ctx);
+    check("止めた出勤だけ送信対象から外す", ctx._punchOutboxDue({ eventId: "a", state: "pending", retryCount: 0 }, Date.now()) === false
+      && ctx._punchOutboxDue({ eventId: "b", state: "pending", retryCount: 0 }, Date.now()) === true);
+    const ctx2 = { punchOutboxBackoffMs: () => 0, PUNCH_OUTBOX_FORCE_MIN_MS: 0, Date };
+    vm.createContext(ctx2); vm.runInContext(due, ctx2);
+    check("月次書類の節が無い環境（mdocHeld 未定義）でも従来どおり送る", ctx2._punchOutboxDue({ eventId: "a", state: "pending", retryCount: 0 }, Date.now()) === true);
+  }
+  {
+    // _execPunch の順序（ソース上の確認）: 確認 → 二重打刻の再確認 → 止める → 端末保存 → 画面 → 送信 → 打刻後の温度
+    const EP = fnSrc("async function _execPunch(type,d){", "function doPunch(type){");
+    const iCollect = EP.indexOf("await mdocCollect(_mdPlan)"), iDup = EP.indexOf("var _mdDup"), iHold = EP.indexOf("_mdocHold[nr.id]=1"),
+      iCommit = EP.indexOf("await punchOutboxCommit(nr)"), iPush = EP.indexOf("records.push(nr)"), iFlush = EP.indexOf('punchOutboxFlush("punch")'),
+      iAfter = EP.indexOf("mdocAfterClockIn(_mdPost,nr)");
+    check("出勤: 確認 → 二重打刻の再確認 → 送信停止 → 端末保存 → 画面 → 送信 → 朝の温度 の順", iCollect > 0 && iCollect < iDup && iDup < iHold && iHold < iCommit && iCommit < iPush && iPush < iFlush && iFlush < iAfter);
+    check("打刻後の温度は待たない（await しない）", !/await\s+mdocAfterClockIn/.test(EP));
+    check("端末保存に失敗したら止めを外す", /if\(!_saved\)\{\s*if\(_mdPost\)delete _mdocHold\[nr\.id\]/.test(EP));
+    check("朝の温度を後で聞くのは出勤で slot 0 のときだけ", /if\(type==="clockIn"&&_mdPlan\.slot===0\)_mdPost=_mdPlan;/.test(EP));
+    check("回答が1つも無い出勤には mdoc を付けない", /if\(_md\.hyg\|\|_md\.temp\|\|_md\.hozon\)nr\.mdoc=_md;/.test(EP));
+    const zs = /strip\.id="facecam-strip";[\s\S]{0,400}?z-index:(\d+);/.exec(html), zo = /\.mdoc-ov\{[^}]*z-index:(\d+);/.exec(html);
+    check("顔撮影の開示表示は確認画面（.mdoc-ov）より前面", !!(zs && zo && Number(zs[1]) > Number(zo[1])), zs && zo ? zs[1] + " vs " + zo[1] : "not found");
+    check("自動更新の再読み込みは確認画面（.mdoc-ov）の表示中は待つ", /function _appOverlayOpen\(\)\{[^}]*?if\(document\.querySelector\("\.mdoc-ov"\)\)return true;/.test(html) && /if\(_appOverlayOpen\(\)\)return "modal";/.test(html));
+    check("二重打刻の見直しは mdocDupPunch を使う", /var _mdDup=mdocDupPunch\(type,_mdName,nr\.date,_mdFn\);/.test(EP));
+  }
+  {
+    // 二重打刻の見直し（実際の判定）
+    const FOC = fnSrc("function findOpenClockInAcrossFacilities(staff,date){", "// ===== ストレージ =====");
+    const mk = (recs) => { const c = uiClient({ records: recs }); vm.runInContext(FOC, c); return c; };
+    let c = mk([rec("山田", "clockIn", D, 7)]);
+    check("二重打刻: 同じ施設の出勤が届いていれば止める", !!c.mdocDupPunch("clockIn", "山田", D, FAC));
+    check("二重打刻: 別の人の出勤では止めない", c.mdocDupPunch("clockIn", "佐藤", D, FAC) === null);
+    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ナナイロ", workFacility: "ナナイロ" })]);
+    const d1 = c.mdocDupPunch("clockIn", "山田", D, FAC);
+    check("二重打刻: 他施設で出勤中なら止める", !!d1 && d1.facilityName === "ナナイロ");
+    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ナナイロ", workFacility: "ナナイロ" }), rec("山田", "clockOut", D, 9, { facilityName: "ナナイロ" })]);
+    check("二重打刻: 他施設で退勤済みなら出勤できる（doPunch と同じ）", c.mdocDupPunch("clockIn", "山田", D, FAC) === null);
+    check("二重打刻: その日の退勤は施設を問わず止める", !!c.mdocDupPunch("clockOut", "山田", D, FAC));
+    c = mk([rec("山田", "clockIn", D, 7, { deleted: true })]);
+    check("二重打刻: 削除された打刻は数えない", c.mdocDupPunch("clockIn", "山田", D, FAC) === null);
+  }
+  {
+    // 退勤（最後の退勤者）: 温度 → 保存食を1つの画面で聞き、すべて答えてから回答を返す。送信停止はしない
+    const c = uiClient({ records: [rec("山田", "clockIn", D, 7)] });
+    c.__store["mdoc.dev." + FAC] = JSON.stringify({ at: Date.now(), devices: DEVS, last: null });
+    const plan = c.mdocPlan("clockOut", "山田", FAC, at(D, 17));
+    check("退勤（最後）: 夕方の温度と保存食を聞く", plan && plan.slot === 2 && plan.hozon === true && !plan.post);
+    let out = "pending";
+    const pr = c.mdocCollect(plan).then((v) => { out = v; });
+    check("退勤: 温度の画面（記録して退勤ではなく次へ）", !!c.__dom.find("次へ") && !/出勤しました/.test(c.__dom.document.body.textContent));
+    const ins = c.__dom.inputs(); ins[0].value = "4"; ins[0].oninput(); ins[1].value = "19"; ins[1].oninput();
+    c.__dom.find("次へ").onclick();
+    await tick();
+    check("退勤: 温度の後もまだ打刻しない（保存食の回答待ち）", out === "pending" && !!c.__dom.find("はい"));
+    c.__dom.find("はい").onclick();
+    await pr;
+    check("退勤: すべて答えると温度と保存食がそろって返る", out && out.temp && out.temp.s === 2 && out.hozon && out.hozon.a === "yes" && !c.__dom.open());
+    check("退勤: 送信停止は使わない", Object.keys(c._mdocHold).length === 0);
+    const c2 = uiClient({ records: [rec("山田", "clockIn", D, 7)] });
+    c2.__store["mdoc.dev." + FAC] = JSON.stringify({ at: Date.now(), devices: DEVS, last: null });
+    const pr2 = c2.mdocCollect(c2.mdocPlan("clockOut", "山田", FAC, at(D, 17)));
+    c2.__dom.find("やめる").onclick();
+    check("退勤: 「やめる」は打刻しない（null）", (await pr2) === null);
+    check("打刻後の温度の画面は開いてから一定時間で閉じる（操作で延びない）", /if\(plan\.post\)idleTimer=setTimeout\(function\(\)\{finish\(null\);\},MDOC_POST_TEMP_IDLE_MS\);/.test(MDOC) && !/addEventListener\("input",idle/.test(MDOC));
+    check("退勤は従来どおり確認画面の中で温度・保存食を聞き、そろってから端末保存する",/var wantTemp=plan\.slot!==null&&\(plan\.type!=="clockIn"\|\|!!plan\.post\);/.test(MDOC));
+  }
+})().catch((e) => { check("出勤の確定と打刻後の温度のテストが例外なく終わる", false, String(e && e.stack)); });
 
 console.log("■ 前回の温度（手元の打刻とサーバの最後の記録の新しい方）");
 {
@@ -389,6 +604,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("公開キー以外（sb_secret_）は使わない", MD.config() === null);
   process.env.MDOC_SUPABASE_KEY = "sb_publishable_xxxxxxxx";
   check("公開キー＋合言葉なら設定あり", MD.config() !== null);
+  await uiTests;
 
   console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
   process.exit(fail ? 1 : 0);

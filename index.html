@@ -1617,6 +1617,7 @@ function punchOutboxBackoffMs(retryCount,isAuth){
 }
 function _punchOutboxDue(e,nowMs,force){
   if(e.state==="syncing")return false;      // 送信中は重ねて送らない
+  if(typeof mdocHeld==="function"&&mdocHeld(e.eventId))return false; // 朝の温度を書き足すまで送らない（MONTHLY-DOCS。画面が開いている間だけ）
   if(!e.retryCount)return true;
   var last=Date.parse(e.lastAttemptAt||"");
   if(isNaN(last))return true;
@@ -2013,7 +2014,8 @@ function faceCamOpenOverlay(hideBox){
   // ① 開示のストリップ。★ 必ず出す（撮影する打刻で開示が出ない状態を作らない）。
   var strip=document.createElement("div");
   strip.id="facecam-strip";
-  strip.style.cssText="position:fixed;left:0;right:0;top:0;z-index:900;"
+  // ★ z-index は月次書類の確認画面（.mdoc-ov 10000。出勤の確定後に朝の温度で重なる）より前面にする（開示を覆わせない。pointer-events:none）
+  strip.style.cssText="position:fixed;left:0;right:0;top:0;z-index:10060;"
     +"background:rgba(15,23,42,.92);color:#fff;font-size:11px;font-weight:700;"
     +"padding:6px 10px;text-align:center;pointer-events:none;line-height:1.4;"
     +"box-sizing:border-box;";
@@ -3637,13 +3639,13 @@ body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .mdoc-items{font-size:.9rem;color:#334155;line-height:1.6;background:#f1f5f9;border-radius:6px;padding:8px 10px;margin-bottom:14px;}
 .mdoc-note{font-size:1rem;color:#334155;margin:8px 0 14px;}
 .mdoc-alert{font-size:1.3rem;font-weight:900;color:#b91c1c;text-align:center;padding:18px 0;}
+.mdoc-saved{color:#166534;}
 .mdoc-row{display:flex;gap:10px;}
 .mdoc-hz-head{font-size:1.5rem;font-weight:900;color:#0f172a;margin:2px 0 14px;}
 .mdoc-hz-q{font-size:1.25rem;font-weight:900;color:#0f172a;line-height:1.6;}
 .mdoc-hz-date{font-size:1.45rem;color:#b91c1c;border-bottom:3px solid #b91c1c;margin-right:2px;}
 .mdoc-hz-row{margin-top:18px;}
 .mdoc-done{font-size:1rem;font-weight:900;color:#166534;background:#dcfce7;border-radius:6px;padding:6px 10px;margin-bottom:10px;display:inline-block;}
-.mdoc-quit{font-size:1.35rem;font-weight:900;color:#b91c1c;line-height:1.6;white-space:pre-line;margin:6px 0 16px;}
 .mdoc-hz-col{display:flex;flex-direction:column;gap:12px;}
 .mdoc-hz-col .mdoc-ok,.mdoc-hz-col .mdoc-ng{min-height:60px;font-size:1.3rem;}
 .mdoc-hyg-items{margin:12px 0 0;font-size:1rem;}
@@ -10201,6 +10203,13 @@ var MDOC_START_DATE="2026-10-09";
 function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
 var _mdocDevLoading={};
 var _mdocSyncTimer=null,_mdocSyncDays=2;
+// ★ 2026-10-09 ユーザー指示: 出勤は「問題なし」を押した時点で確定（端末保存）し、朝の温度は出勤の保存の後に続けて記録する（出勤の条件にしない）。
+//   温度の画面が開いている間だけ、その出勤レコードの送信を止める（_mdocHold。端末のメモリだけ）。温度を書き足してから1回だけ送る
+//   ＝送信経路（eventId への PUT 1回）・端末保存・再送は従来どおり。アプリが閉じれば次の起動時に温度なしで送られる（出勤は失われない）。
+//   画面を開いてから MDOC_POST_TEMP_IDLE_MS（操作の有無によらない上限）で閉じて送る（出勤がサーバに届かない時間を長くしない）。
+var MDOC_POST_TEMP_IDLE_MS=3*60*1000;
+var _mdocHold={};
+function mdocHeld(id){return !!_mdocHold[id];}
 
 function mdocActive(){
   return TENANT_ID==="honomi"&&tenantFeature("monthlyDocs")&&punchOutboxEnabled();
@@ -10308,7 +10317,7 @@ function mdocDiscardDate(dk){
 function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
 
 // 何を聞くか（聞くものが無ければ null＝従来どおりすぐ打刻）。
-// 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度。
+// 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度（slot 0。出勤の確定後に聞く）。
 // 退勤: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
 //       （日中勤務の人は16時以降に限る。夕方勤務の人が後から来る施設で、昼の退勤を最後と誤らないため）。
 //       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
@@ -10378,12 +10387,13 @@ function mdocCollect(plan){
     var steps=[];
     if(plan.hyg&&!plan.hygNg)steps.push("hyg");
     if(plan.hyg&&plan.hygNg)md.hyg={a:"ng"};
-    if(plan.slot!==null)steps.push("temp");
+    // 出勤の朝の温度は打刻の確定後に別に聞く（plan.post。mdocAfterClockIn）。出勤の確認画面では聞かない。
+    var wantTemp=plan.slot!==null&&(plan.type!=="clockIn"||!!plan.post);
+    if(wantTemp)steps.push("temp");
     if(plan.hozon)steps.push("hozon");
     var temps=null,prevs={},devs=null,view=null,devState="loading";
     var punchAt=null;       // 出勤の時刻（「問題なし」を押した時刻）。null なら打刻ボタンを押した時刻のまま
-    var confirmQuit=false;  // 「記録せずに閉じる」の確認を表示中
-    var idx=0,done=false;
+    var idx=0,done=false,idleTimer=null;
     function useDevices(c){
       devs=(c&&Array.isArray(c.devices))?c.devices.slice().sort(function(a,b){return a.k===b.k?(a.o-b.o):(a.k==="r"?-1:1);}):[];
       // 画面の並び（表示だけ）: 冷蔵庫の番号順、同じ番号は冷蔵→冷凍（例 冷蔵庫1 冷蔵→冷蔵庫1 冷凍→冷蔵庫2 冷蔵→冷蔵庫3 冷凍）。
@@ -10393,7 +10403,7 @@ function mdocCollect(plan){
       temps={};devs.forEach(function(x){temps[x.id]=null;}); // ★ 前回値を今回の値として入れない
       devState=c?"ok":"error";
     }
-    if(plan.slot!==null){
+    if(wantTemp){
       // ★ 控えがあれば（古くても）すぐ使い、取り直しは裏で行う（確認画面を通信で待たせない）。
       //   控えが無いときだけ取得を待つ（_mdocPost の上限時間で必ず終わる。失敗は「このまま打刻できます」）。
       var cached=mdocDevCache(plan.fac);
@@ -10407,7 +10417,9 @@ function mdocCollect(plan){
     ov.appendChild(card);
     document.body.appendChild(ov);
     var verb=plan.type==="clockIn"?"出勤":"退勤";
-    function finish(v){if(done)return;done=true;if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
+    function finish(v){if(done)return;done=true;if(idleTimer)clearTimeout(idleTimer);if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
+    // 打刻後の温度（plan.post）: 開いてから一定時間（操作の有無によらない上限）で閉じる（止めている出勤の送信を再開させる）
+    if(plan.post)idleTimer=setTimeout(function(){finish(null);},MDOC_POST_TEMP_IDLE_MS);
     function next(){
       idx++;
       if(idx>=steps.length){if(punchAt)md._punchAt=punchAt;finish(md);}
@@ -10415,7 +10427,7 @@ function mdocCollect(plan){
     }
     function btn(label,cls,fn){var b=document.createElement("button");b.type="button";b.className="mdoc-btn "+cls;b.textContent=label;b.onclick=fn;return b;}
     function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
-    function cancelLink(){return btn("やめる","mdoc-cancel",function(){finish(null);});}
+    function cancelLink(){return btn(plan.post?"記録しないで閉じる":"やめる","mdoc-cancel",function(){finish(null);});}
     function draw(){
       card.textContent="";
       var s=steps[idx];
@@ -10443,26 +10455,22 @@ function mdocCollect(plan){
         card.appendChild(row);
         card.appendChild(cancelLink());
       } else if(s==="temp"){
+        // 出勤の朝の温度は打刻の確定後（plan.post）。閉じても出勤は取り消されない（出勤はすでに端末に保存済み）。
         var isIn=(plan.type==="clockIn");
-        if(isIn&&confirmQuit){
-          // 閉じる前の確認（出勤は温度の記録で確定するため、閉じると出勤は成立しない）
-          card.appendChild(el("div","mdoc-quit","温度を記録せずに閉じると\n出勤は取り消されます。"));
-          var qrow=el("div","mdoc-hz-col");
-          qrow.appendChild(btn("戻って入力する","mdoc-ok",function(){confirmQuit=false;draw();}));
-          qrow.appendChild(btn("出勤を取り消す","mdoc-ng",function(){finish(null);}));
-          card.appendChild(qrow);
-          return;
+        if(isIn){
+          // 共用の端末で別の人が入れないよう、誰の出勤かを出す
+          card.appendChild(el("div","mdoc-who",plan.staff+" さん"));
+          card.appendChild(el("div","mdoc-done","出勤しました "+fmtTime(plan.punchedAt||new Date())));
         }
-        if(isIn)card.appendChild(el("div","mdoc-done","出勤 "+fmtTime(punchAt||plan.pressedAt||new Date())));
         card.appendChild(el("div","mdoc-hz-head","温度の記録（"+MDOC_SLOT_LABEL[plan.slot]+"）"));
         var isLastStep=(idx===steps.length-1);
         if(devState==="loading"){card.appendChild(el("div","mdoc-note","読み込んでいます…"));card.appendChild(cancelLink());return;}
         if(!devs.length){
           // 測定対象の登録が無い（または読み込めない）施設では温度を記録しない
-          if(devState==="error")card.appendChild(el("div","mdoc-note","いまは温度を記録できません。このまま"+verb+"できます。"));
+          if(devState==="error")card.appendChild(el("div","mdoc-note",isIn?"いまは温度を記録できません。":"いまは温度を記録できません。このまま"+verb+"できます。"));
           else {next();return;}
-          card.appendChild(btn(isLastStep?verb+"する":"次へ","mdoc-ok",function(){next();}));
-          card.appendChild(cancelLink());
+          card.appendChild(btn(isIn?"閉じる":(isLastStep?verb+"する":"次へ"),"mdoc-ok",function(){next();}));
+          if(!isIn)card.appendChild(cancelLink()); // 出勤後は「閉じる」1つ（同じ結果のボタンを並べない）
           return;
         }
         // 温度計を見て数字だけを入れる（テンキー）。冷凍庫のマイナスは画面で固定し、入力させない。
@@ -10474,6 +10482,14 @@ function mdocCollect(plan){
           if(vs.some(function(x){return typeof x.v!=="number";}))return;
           // at = 温度を確定した時刻（出勤の時刻とは別に持つ）
           md.temp={s:plan.slot,d:vs,at:new Date().toISOString()};
+          if(plan.post){
+            // 出勤後の温度: 記録できたことを短く見せてから閉じる（ほかの打刻の「打刻完了」と同じ扱い）
+            if(idleTimer){clearTimeout(idleTimer);idleTimer=null;} // 記録済みを上限時間で捨てない
+            card.textContent="";
+            card.appendChild(el("div","mdoc-alert mdoc-saved","温度を記録しました"));
+            setTimeout(next,1200);
+            return;
+          }
           next();
         });
         function refreshGo(){go.disabled=devs.some(function(x){return typeof temps[x.id]!=="number";});}
@@ -10518,7 +10534,7 @@ function mdocCollect(plan){
         card.appendChild(list);
         card.appendChild(go);
         refreshGo();
-        card.appendChild(isIn?btn("記録せずに閉じる","mdoc-cancel",function(){confirmQuit=true;draw();}):cancelLink());
+        card.appendChild(cancelLink());
         if(inputs[0])setTimeout(function(){try{inputs[0].focus();}catch(e){}},0);
       } else if(s==="hozon"){
         // 1問にまとめた最短の表示（記録は従来どおり 本日分の保存＋15日前の分の廃棄・確認者・日時）
@@ -10542,6 +10558,37 @@ function mdocCollect(plan){
       }
     }
     draw();
+  });
+}
+
+// 確認画面を閉じた時点の二重打刻の見直し（doPunch の検査と同じ規則。手元の records だけ・通信なし）。
+// 出勤＝同じ施設のその日の出勤か、他施設で出勤中。退勤＝その日の退勤（施設を問わない）。該当する打刻を返す。
+function mdocDupPunch(type,staff,dk,fn){
+  return records.find(function(r){return r&&r.staff===staff&&r.date===dk&&!r.deleted&&r.type===type
+      &&(type!=="clockIn"||!r.facilityName||!fn||r.facilityName===fn);})
+    ||(type==="clockIn"?findOpenClockInAcrossFacilities(staff,dk):null)||null;
+}
+
+// 出勤の確定（端末保存・画面の打刻済み）の後に、朝の温度を続けて聞く。
+// 呼ぶ前に _mdocHold[rec.id] を立てておく（送信を止める）。記録したら端末保存の同じエントリ（未送信）の rec.mdoc.temp に書き足し、
+// 閉じても・書き足せなくても出勤はそのまま。最後に必ず止めを外して送る。
+function mdocAfterClockIn(plan,rec){
+  var p=Object.assign({},plan,{hyg:false,hygNg:false,hozon:false,post:true,punchedAt:new Date(rec.timestamp)});
+  return mdocCollect(p).then(function(md){
+    var e=punchOutbox[rec.id];
+    // ★ 送信前（止めている）のエントリだけに書き足す。送信済み・送信中なら書き足さない（サーバの打刻を上書きしない）。
+    if(!md||!md.temp||!e||e.state!=="pending"||e.retryCount||!e.rec)return; // 1回も送っていないエントリだけ
+    if(!e.rec.mdoc||typeof e.rec.mdoc!=="object"){e.rec.mdoc={f:plan.fac};if(plan.sid)e.rec.mdoc.sid=plan.sid;}
+    e.rec.mdoc.temp=md.temp;
+    if(rec!==e.rec)rec.mdoc=e.rec.mdoc;
+    // 画面を開いている間に records が取り直されて別のオブジェクトになっていても、手元の控えに温度をそろえる
+    records.forEach(function(r){if(r&&r.id===rec.id&&r.mdoc!==e.rec.mdoc)r.mdoc=e.rec.mdoc;});
+    _lsSet("tc5_records",JSON.stringify(records));
+    // 端末保存に失敗してもメモリのエントリには温度が入っているので、このまま送られる（出勤には影響しない）
+    return _punchOutboxSave(e).then(function(ok){if(!ok)console.warn("[mdoc] temp persist failed",rec.id);});
+  })["catch"](function(){console.warn("[mdoc] post temp failed",rec.id);}).then(function(){
+    delete _mdocHold[rec.id];
+    punchOutboxFlush("punch");
   });
 }
 // ===== MONTHLY-DOCS-END =====
@@ -10610,6 +10657,7 @@ async function _execPunch(type,d){
   // ⓪-2 月次書類の確認（穂乃味だけ。MONTHLY-DOCS）。聞くものが無ければ何もせず従来どおり進む。
   //      回答は打刻レコードの mdoc に入れ、下の端末保存で打刻と一緒に保存する（打刻と監査記録を分けない）。
   //      「やめる」「問題あり」のときは打刻しない（端末にもサーバにも何も残さない）。
+  var _mdPost=null; // 出勤の確定後に聞く朝の温度（MONTHLY-DOCS）
   if(mdocActive()&&(type==="clockIn"||type==="clockOut")){
     var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(getCurrentWorkFacility(staffName,nr.date)||_effFn);
     var _mdPlan=mdocPlan(type,staffName,_mdFac,d);
@@ -10620,14 +10668,27 @@ async function _execPunch(type,d){
       try{_md=await mdocCollect(_mdPlan);}catch(e){_md=null;}
       _punchSaving=false;
       if(!_md||staffName!==_mdName){render();return;}
-      // ★ 出勤の時刻は「問題なし」を押した時刻（温度の入力にかかった時間を含めない）。
+      // ★ 確認画面を開いている間に同じ人の同じ打刻が届いていたら保存しない（二重打刻の防止。手元の records を見るだけ）
+      //   判定は doPunch の二重打刻チェックと同じ（出勤＝同じ施設の出勤か他施設で出勤中、退勤＝その日の退勤）。
+      var _mdFn=facilityName||"";
+      var _mdDup=mdocDupPunch(type,_mdName,nr.date,_mdFn);
+      if(_mdDup){
+        if(_mdDup.type==="clockIn"&&_mdFn&&_mdDup.facilityName&&_mdDup.facilityName!==_mdFn)
+          showAlert("他施設で出勤中です。\n\n出勤中："+_mdDup.facilityName+" "+_mdDup.time+"\n\n退勤を押してください。");
+        else showAlert("本日の"+TYPE_LABEL[type]+"はすでに打刻済みです。\n\n"+TYPE_LABEL[type]+" "+_mdDup.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
+        render();return;
+      }
+      // 朝の温度（出勤）は打刻の確定後に聞く（出勤の条件にしない）
+      if(type==="clockIn"&&_mdPlan.slot===0)_mdPost=_mdPlan;
+      // ★ 出勤の時刻は「問題なし」を押した時刻（その時点で出勤を確定する）。
       //   それまで打刻はどこにも保存していない（仮）ので、取り消しで消すものは無い。
       if(_md._punchAt){
         d=_md._punchAt;
         nr.date=fmtDateKey(d);nr.time=fmtTime(d);nr.timestamp=d.toISOString();
       }
       delete _md._punchAt;
-      nr.mdoc=_md;
+      // 回答が1つも無い（朝の温度を後で聞くだけの出勤）なら mdoc を付けない（中身の無い転記を起こさない）
+      if(_md.hyg||_md.temp||_md.hozon)nr.mdoc=_md;
     }
   }
   // ① 端末（IndexedDB）へ保存する。サーバ応答は待たない。
@@ -10635,9 +10696,11 @@ async function _execPunch(type,d){
   if(punchOutboxEnabled()){
     _punchSaving=true;
     var _saved=false;
+    if(_mdPost)_mdocHold[nr.id]=1; // 朝の温度を書き足すまで送らない（保存の前に立てる＝保存直後の送信に拾われない）
     try{_saved=await punchOutboxCommit(nr);}catch(e){_saved=false;}
     _punchSaving=false;
     if(!_saved){
+      if(_mdPost)delete _mdocHold[nr.id];
       // ★ 端末に残っていないものを「打刻済み」と見せてはならない。
       //    localStorage やサーバ直送へフォールバックせず、打刻失敗として再操作できる状態を保つ。
       console.error("[punch] local persist failed", type);
@@ -10669,6 +10732,8 @@ async function _execPunch(type,d){
   faceCamAfterPunch(type);
   // ④ サーバ送信は非同期。結果を待たない。
   punchOutboxFlush("punch");
+  // ⑤ 朝の温度（MONTHLY-DOCS・出勤の確定後）。★ 待たない。閉じても出勤はそのまま。終われば止めを外して送る。
+  if(_mdPost)mdocAfterClockIn(_mdPost,nr);
 }
 function doPunch(type){
   // A. 既存チェック
@@ -16805,6 +16870,7 @@ function _appReloadScreenState(){
 // 開いているモーダル（画面全体を覆う固定表示）があるか
 function _appOverlayOpen(){
   var els=document.querySelectorAll('body [style*="fixed"]');
+  if(document.querySelector(".mdoc-ov"))return true; // 月次書類の確認画面（class で配置。出勤後の朝の温度は _punchSaving が立たない）
   for(var i=0;i<els.length;i++){
     var el=els[i],st=el.style;
     if(el.id==="app-update-banner"||st.position!=="fixed"||st.display==="none")continue;
