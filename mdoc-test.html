@@ -53,7 +53,8 @@ var SCENES=[
    steps:["「"+A+"」→ 暗証番号 1234","「出勤」","衛生・感染症「問題なし」（ここで出勤が確定）","朝の温度を入力 →「温度を記録」"]},
   {t:"朝の温度を記録しないで閉じる",at:[7,0],seed:[],
    steps:["「"+A+"」で出勤 →「問題なし」","朝の温度で「記録しないで閉じる」（出勤はそのまま）","「← もどる」でスタッフ一覧へ","「"+B+"」で出勤 →「問題なし」→ 朝の温度がもう一度出る"]},
-  {t:"出勤の確認で「やめる」→ もう一度出勤",at:[7,0],seed:[],
+  // ③ は一覧に出さない（2026-10-10 ユーザー指示。場面は残し、?s=3 で直接開いたときだけ使える）
+  {t:"出勤の確認で「やめる」→ もう一度出勤",at:[7,0],seed:[],hidden:true,
    steps:["「"+A+"」→「出勤」","衛生・感染症で「やめる」（出勤されない）","もう一度「出勤」→「問題なし」→ 朝の温度"]},
   {t:"衛生・感染症で「問題あり」",at:[7,0],seed:[],
    steps:["「"+A+"」→「出勤」","「問題あり」→「責任者に連絡してください」→「閉じる」（出勤されない）","もう一度「出勤」→ 衛生・感染症は聞かれずに出勤 → 朝の温度"]},
@@ -267,7 +268,7 @@ function openSheet(){
   var again=el("button","mt-btn mt-sub","この場面を最初から");again.type="button";again.onclick=function(){location.replace("mdoc-test.html?s="+SN);};c.appendChild(again);
   c.appendChild(el("div","mt-sec","場面を選ぶ"));
   var g=el("div","mt-grid");
-  for(var i=1;i<=9;i++)(function(n){var b=el("button","mt-sc"+(n===SN?" on":""),MARK[n]+" "+SCENES[n].t);b.type="button";
+  for(var i=1;i<=9;i++)(function(n){if(SCENES[n].hidden)return;var b=el("button","mt-sc"+(n===SN?" on":""),MARK[n]+" "+SCENES[n].t);b.type="button";
     b.onclick=function(){location.replace("mdoc-test.html?s="+n);};g.appendChild(b);})(i);
   c.appendChild(g);
   document.body.appendChild(ov);
