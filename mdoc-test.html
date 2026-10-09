@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<!-- ★ 本番へは一切通信させない（同じオリジンの静的ファイルの読み込みだけ許す）。下の模擬が漏らしても、通信・画像・埋め込み・フォームの送信はここでブラウザが止める。 -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; manifest-src 'self'; connect-src 'self'; worker-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>打刻テスト（ミュゲの泉）</title>
+<style>
+  body{margin:0;font-family:system-ui,-apple-system,"Hiragino Sans","Noto Sans JP",sans-serif;background:#f8fafc;color:#0f172a;}
+  .mt-boot{max-width:440px;margin:0 auto;padding:48px 16px;text-align:center;font-size:20px;line-height:1.6;}
+</style>
+</head>
+<body>
+<div class="mt-boot" id="mt-boot">テスト画面を準備しています…</div>
+<script>
+/*
+ * 月次書類連携（衛生・感染症／温度／保存食）の打刻テスト画面（ミュゲの泉）。
+ * docs/features/monthly-docs.md「テスト画面」。
+ *
+ * 本番の打刻画面（同じフォルダの index.html）をそのまま読み込んで動かす。画面・操作・判定は本番のコードそのもの。
+ * ★ 本番データに触れないための仕組み（index.html は変更しない）:
+ *   1. 通信: fetch / XMLHttpRequest / sendBeacon / WebSocket / EventSource をこのページの模擬に置き換える。
+ *      Firebase・Vercel・Google の認証はすべて模擬が答え、未知の宛先は通信エラーにする。
+ *      さらに上の CSP で、外部への通信・画像・埋め込み・フォームの送信をブラウザ自身が止める（画面の移動は止められないが、本番の打刻画面は外部へ移動しない）。
+ *   2. 保存領域: localStorage・sessionStorage はメモリ上の別物に置き換え、IndexedDB は名前に
+ *      「mdoctest.<読み込みごとの番号>.」を付けて本番の未送信の打刻と分ける（読み込み直すと新しい空の領域）。
+ *   3. Service Worker・通知: 登録させない（本番の Service Worker とは通信しない）。Firebase SDK（通知）は読み込まない。
+ *   4. 時刻: 場面ごとの時刻（今日の日付・端末の時刻）へずらす（Date だけ。タイマーは実時間）。
+ *   本番の画面と取り違えないよう、画面の下に「テスト画面」の帯を常に出す（本番の確認画面より奥）。
+ */
+(function(){
+"use strict";
+var FAC="ミュゲの泉";
+var TOKEN="mdoctestMuguet";
+var PIN_HASH_1234="298f00a91e16a69dc0266fbcf3b999f483839c1cdd4b7ae6267cfe2bbd1596ca"; // sha256("honomi_pin_v1:1234")
+var A="テスト 花子",B="テスト 一郎",C="テスト 次郎";
+// 測定対象（見本）。並びと色は本番の画面が決める（冷蔵庫の番号順・冷蔵は緑・冷凍は青）
+var DEVS=[
+  {id:"0d0c0001-0000-4000-8000-000000000001",k:"r",n:"冷蔵庫1 冷蔵",o:1},
+  {id:"0d0c0002-0000-4000-8000-000000000002",k:"r",n:"冷蔵庫2 冷蔵",o:2},
+  {id:"0d0c0003-0000-4000-8000-000000000003",k:"r",n:"冷蔵庫3 冷蔵",o:3},
+  {id:"0d0c0011-0000-4000-8000-000000000011",k:"f",n:"冷蔵庫1 冷凍",o:1},
+  {id:"0d0c0012-0000-4000-8000-000000000012",k:"f",n:"冷蔵庫2 冷凍",o:2}
+];
+
+// ── 場面 ①〜⑨（時刻・その日の打刻・手順）──────────────────────────
+// seed: [氏名, 種別, 時, 分, 朝の温度あり(0)/日中の温度あり(1)]
+var SCENES=[
+  null,
+  {t:"出勤 → 問題なし → 朝の温度を記録",at:[7,0],seed:[],
+   steps:["「"+A+"」→ 暗証番号 1234","「出勤」","衛生・感染症「問題なし」（ここで出勤が確定）","朝の温度を入力 →「温度を記録」"]},
+  {t:"朝の温度を記録しないで閉じる",at:[7,0],seed:[],
+   steps:["「"+A+"」で出勤 →「問題なし」","朝の温度で「記録しないで閉じる」（出勤はそのまま）","「← もどる」でスタッフ一覧へ","「"+B+"」で出勤 →「問題なし」→ 朝の温度がもう一度出る"]},
+  {t:"出勤の確認で「やめる」→ もう一度出勤",at:[7,0],seed:[],
+   steps:["「"+A+"」→「出勤」","衛生・感染症で「やめる」（出勤されない）","もう一度「出勤」→「問題なし」→ 朝の温度"]},
+  {t:"衛生・感染症で「問題あり」",at:[7,0],seed:[],
+   steps:["「"+A+"」→「出勤」","「問題あり」→「責任者に連絡してください」→「閉じる」（出勤されない）","もう一度「出勤」→ 衛生・感染症は聞かれずに出勤 → 朝の温度"]},
+  {t:"朝の温度が記録済みの日の出勤",at:[7,30],seed:[[A,"clockIn",7,0,0]],
+   steps:["「"+B+"」→「出勤」","「問題なし」→ そのまま出勤完了（温度は聞かれない）"]},
+  {t:"日中の退勤 → 日中の温度",at:[13,30],seed:[[A,"clockIn",7,0,0],[B,"clockIn",7,15]],
+   steps:["「"+A+"」→「退勤」","日中の温度を入力 →「記録して退勤」"]},
+  {t:"退勤の温度で「やめる」→ もう一度退勤",at:[13,30],seed:[[A,"clockIn",7,0,0],[B,"clockIn",7,15]],
+   steps:["「"+A+"」→「退勤」","温度の画面で「やめる」（退勤されない）","もう一度「退勤」→ 温度を入力 →「記録して退勤」"]},
+  {t:"最後の退勤 → 夕方の温度 → 保存食「はい」",at:[17,30],seed:[[A,"clockIn",7,0,0],[B,"clockIn",7,15],[A,"clockOut",13,30,1]],
+   steps:["「"+B+"」→「退勤」","夕方の温度を入力 →「次へ」","保存食「はい」→ 退勤完了（確認者として記録）"]},
+  {t:"最後の退勤 → 保存食「いいえ」",at:[17,30],seed:[[A,"clockIn",7,0,0],[B,"clockIn",7,15],[A,"clockOut",13,30,1]],
+   steps:["「"+B+"」→「退勤」","夕方の温度を入力 →「次へ」","保存食「いいえ」→「責任者に連絡してください」→「退勤する」"]}
+];
+var MARK=["","①","②","③","④","⑤","⑥","⑦","⑧","⑨"];
+var qs=new URLSearchParams(location.search);
+var SN=Math.min(9,Math.max(1,parseInt(qs.get("s"),10)||1));
+var SC=SCENES[SN];
+
+// ── 時刻（場面の時刻へずらす。日付は今日）─────────────────────────
+var RealDate=Date;
+// 本番は端末の時刻（getHours 等）で判定するので、場面の時刻も端末の時刻で作る
+var _now=new RealDate();
+function pad(n){return String(n).padStart(2,"0");}
+var todayJst=_now.getFullYear()+"-"+pad(_now.getMonth()+1)+"-"+pad(_now.getDate());
+function jst(h,m){return new RealDate(_now.getFullYear(),_now.getMonth(),_now.getDate(),h,m,0);}
+var OFF=jst(SC.at[0],SC.at[1]).getTime()-RealDate.now();
+function FakeDate(){
+  if(!new.target)return new RealDate(RealDate.now()+OFF).toString();
+  var a=Array.prototype.slice.call(arguments);
+  return a.length?new (Function.prototype.bind.apply(RealDate,[null].concat(a)))():new RealDate(RealDate.now()+OFF);
+}
+FakeDate.prototype=RealDate.prototype;
+FakeDate.now=function(){return RealDate.now()+OFF;};
+FakeDate.parse=RealDate.parse;FakeDate.UTC=RealDate.UTC;
+window.Date=FakeDate;
+
+// ── 模擬のデータ（メモリ上だけ）────────────────────────────────
+function ST(name,last,first,id){return {name:name,lastName:last,firstName:first,yomi:"",yomiLast:"",yomiFirst:"",location:FAC,status:"在籍",employeeId:id,employmentType:"パート"};}
+function tempOf(s,h,m){return {s:s,d:DEVS.map(function(x,i){return {id:x.id,k:x.k,n:x.n,o:x.o,v:x.k==="r"?3+i*0.5:-19-i};}),at:jst(h,m).toISOString()};}
+var STAFF=[ST(A,"テスト","花子","T901"),ST(B,"テスト","一郎","T902"),ST(C,"テスト","次郎","T903")];
+var recs={};
+SC.seed.forEach(function(s,i){
+  var id="mdoctest-seed-"+i,t=jst(s[2],s[3]);
+  var so=STAFF.filter(function(x){return x.name===s[0];})[0];
+  var md={f:FAC,sid:so.employeeId};
+  if(s[1]==="clockIn")md.hyg={a:"ok"};
+  if(s[4]!==undefined)md.temp=tempOf(s[4],s[2],s[3]);
+  recs[id]={id:id,eventId:id,staff:s[0],type:s[1],date:todayJst,time:String(s[2]).padStart(2,"0")+":"+String(s[3]).padStart(2,"0"),
+    timestamp:t.toISOString(),facilityName:FAC,workFacility:FAC,homeFacility:FAC,mdoc:md};
+});
+var pins={};STAFF.forEach(function(s){pins[s.name]={hash:PIN_HASH_1234};});
+var DB={tc5_staff:STAFF,tc5_pins:pins,tc_master_depts:["厨房"],master:{locations:[{name:FAC,token:TOKEN}]},
+  tc5_records:recs,tc5_approvals:{},tc5_correction_requests:{},tc5_paid_leave_requests:{},tc5_paid_leave_balances:{},
+  tc5_monthly_days_import:{},tc5_monthly_review_status:{},tc5_meals:{},tc5_meal_confirmations:{},tc5_staff_notifications:{},
+  documents:{},config:{adminTokenSet:true},viewerTokens:{},demoTokens:{},staffDemoTokens:{}};
+var LOG=[];      // 本番なら送られていた記録（画面で確認する）
+var BLOCKED=0;   // 止めた通信の件数
+
+// ── 模擬の応答 ──────────────────────────────────────────────
+var claims={};
+function b64u(o){return btoa(unescape(encodeURIComponent(JSON.stringify(o)))).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");}
+function idTok(){var n=Math.floor(FakeDate.now()/1000);return b64u({alg:"RS256",kid:"x"})+"."+b64u(Object.assign({iat:n,exp:n+3600,sub:"mdoctest"},claims))+".sig";}
+function json(v,st,h){return new Response(JSON.stringify(v===undefined?null:v),{status:st||200,headers:Object.assign({"Content-Type":"application/json"},h||{})});}
+function getPath(o,parts){var c=o;for(var i=0;i<parts.length;i++){if(c==null||typeof c!=="object")return null;c=c[parts[i]];}return c===undefined?null:c;}
+function setPath(o,parts,v){var c=o;for(var i=0;i<parts.length-1;i++){if(c[parts[i]]==null||typeof c[parts[i]]!=="object")c[parts[i]]={};c=c[parts[i]];}
+  if(v===null)delete c[parts[parts.length-1]];else c[parts[parts.length-1]]=v;}
+function clone(v){return v==null?v:JSON.parse(JSON.stringify(v));}
+var realFetch=window.fetch.bind(window);
+
+function mock(url,method,body,headers){
+  var u=new URL(url,location.href);
+  // 同じフォルダの静的ファイル（index.html・画像・manifest）の読み取りだけは本物を使う
+  if(u.origin===location.origin&&u.pathname.indexOf("/timecard/")===0&&(method==="GET"||method==="HEAD"))return null;
+  var data={};try{data=body?JSON.parse(body):{};}catch(e){data={};}
+  if(u.host==="identitytoolkit.googleapis.com")return json({idToken:idTok(),refreshToken:"r",expiresIn:"3600",localId:"mdoctest"});
+  if(u.host==="securetoken.googleapis.com")return json({id_token:idTok(),refresh_token:"r",expires_in:"3600",user_id:"mdoctest"});
+  if(u.host==="timecard-rho.vercel.app"){
+    if(method==="OPTIONS")return new Response("",{status:204});
+    var p=u.pathname,n=Math.floor(FakeDate.now()/1000);
+    if(p==="/api/auth/staff"){claims={r:"s"};return json({customToken:"ct",role:"s"});}
+    if(p==="/api/auth/share"){var role=data.kind==="kiosk"?"k":"x";claims={r:role,sx:n+43200};return json({customToken:"ct",role:role,sessionExpiresAt:n+43200});}
+    if(p==="/api/monthly-docs"){
+      if(data.action==="devices")return json({ok:true,devices:DEVS,last:null});
+      if(data.action==="sync")LOG.push({sync:true});
+      return json({ok:true});
+    }
+    return json({ok:true});
+  }
+  if(/\.firebasedatabase\.app$/.test(u.host)){
+    var parts=u.pathname.replace(/\.json$/,"").split("/").filter(Boolean).map(decodeURIComponent);
+    if(parts[0]==="honomi")parts=parts.slice(1);
+    var eh=(headers&&String(headers["x-firebase-etag"]||"").toLowerCase()==="true")?{"ETag":"mdoctest"}:null;
+    if(method==="PUT"||method==="PATCH"){
+      var v=null;try{v=JSON.parse(body||"null");}catch(e){v=null;}
+      if(parts[0]==="tc5_records"&&parts.length===2&&v){delete v.serverReceivedAt;LOG.push({rec:clone(v)});}
+      if(parts[0]==="tc5_records"&&parts.length===4&&parts[2]==="mdoc"&&parts[3]==="temp"&&v)LOG.push({temp:clone(v),parent:parts[1]});
+      if(method==="PATCH"&&v&&typeof v==="object"){Object.keys(v).forEach(function(k){setPath(DB,parts.concat(k.split("/")),clone(v[k]));});}
+      else if(parts.length)setPath(DB,parts,clone(v));
+      return json(v,200,eh);
+    }
+    if(method==="DELETE"){if(parts.length)setPath(DB,parts,null);return json(null);}
+    if(method!=="GET")return json(null);
+    var val=getPath(DB,parts);
+    if(parts[0]==="tc5_records"&&parts.length===1&&u.searchParams.get("orderBy")){
+      var st=(u.searchParams.get("startAt")||'""').replace(/"/g,""),en=(u.searchParams.get("endAt")||'""').replace(/"/g,"");
+      val={};Object.keys(DB.tc5_records).forEach(function(k){var r=DB.tc5_records[k];if(r&&r.date>=st&&r.date<=en)val[k]=r;});
+    }
+    return json(clone(val),200,eh);
+  }
+  BLOCKED++;
+  return "block";
+}
+function hdrs(h){var o={};if(!h)return o;if(typeof Headers!=="undefined"&&h instanceof Headers){h.forEach(function(v,k){o[k.toLowerCase()]=v;});return o;}
+  Object.keys(h).forEach(function(k){o[k.toLowerCase()]=String(h[k]);});return o;}
+window.fetch=function(input,init){
+  init=init||{};
+  var isReq=(typeof Request!=="undefined"&&input instanceof Request);
+  var url=isReq?input.url:String(input);
+  var method=String(init.method||(isReq?input.method:"GET")).toUpperCase();
+  var r;
+  try{r=mock(url,method,typeof init.body==="string"?init.body:null,hdrs(init.headers||(isReq?input.headers:null)));}
+  catch(e){return Promise.reject(new TypeError("mdoctest: mock error"));}
+  if(r===null)return realFetch(input,init);
+  if(r==="block")return Promise.reject(new TypeError("mdoctest: blocked"));
+  return new Promise(function(res){setTimeout(function(){res(r);},30);});
+};
+// 送信の別経路はすべて止める（打刻・確認の経路では使っていない。使われたら通信エラーにする）
+window.XMLHttpRequest=function(){var x={readyState:0,status:0,upload:{},open:function(){},setRequestHeader:function(){},abort:function(){},
+  send:function(){BLOCKED++;var s=this;setTimeout(function(){s.readyState=4;if(s.onerror)s.onerror(new Error("blocked"));},0);}};return x;};
+try{navigator.sendBeacon=function(){BLOCKED++;return false;};}catch(e){}
+window.WebSocket=function(){BLOCKED++;throw new Error("mdoctest: blocked");};
+window.EventSource=function(){BLOCKED++;throw new Error("mdoctest: blocked");};
+try{delete window.Notification;}catch(e){}
+
+// ── 保存領域の分離 ────────────────────────────────────────────
+function MemStorage(){var m=new Map();return {
+  getItem:function(k){k=String(k);return m.has(k)?m.get(k):null;},
+  setItem:function(k,v){m.set(String(k),String(v));},
+  removeItem:function(k){m["delete"](String(k));},
+  clear:function(){m.clear();},
+  key:function(i){return Array.from(m.keys())[i]||null;},
+  get length(){return m.size;}
+};}
+var memLS=MemStorage(),memSS=MemStorage();
+var RUN="mdoctest."+RealDate.now().toString(36)+Math.random().toString(36).slice(2,6)+".";
+var swFake={controller:null,ready:new Promise(function(){}),register:function(){return new Promise(function(){});},
+  getRegistration:function(){return Promise.resolve(undefined);},getRegistrations:function(){return Promise.resolve([]);},
+  addEventListener:function(){},removeEventListener:function(){},startMessages:function(){}};
+function isolate(){
+  Object.defineProperty(window,"localStorage",{configurable:true,get:function(){return memLS;}});
+  Object.defineProperty(window,"sessionStorage",{configurable:true,get:function(){return memSS;}});
+  Object.defineProperty(navigator,"serviceWorker",{configurable:true,get:function(){return swFake;}});
+  var F=IDBFactory.prototype,open=F.open,del=F.deleteDatabase;
+  F.open=function(name,ver){return ver===undefined?open.call(this,RUN+name):open.call(this,RUN+name,ver);};
+  F.deleteDatabase=function(name){return del.call(this,RUN+name);};
+  // 置き換えが効いていなければ起動しない（本番の保存領域へ書かせない）
+  if(window.localStorage!==memLS||window.sessionStorage!==memSS||navigator.serviceWorker!==swFake||indexedDB.open===open)throw new Error("isolate");
+  // 前に開いたテスト画面の領域を片付ける（本番の領域には触れない）
+  try{if(indexedDB.databases)indexedDB.databases().then(function(l){(l||[]).forEach(function(d){
+    if(d&&typeof d.name==="string"&&d.name.indexOf("mdoctest.")===0&&d.name.indexOf(RUN)!==0)del.call(indexedDB,d.name);});}).catch(function(){});}catch(e){}
+}
+
+// ── テストの操作パネル ─────────────────────────────────────────
+// 下の帯は本番の確認画面（.mdoc-ov z-index 10000）より奥。帯の分だけ下に余白を足し、本番の部品を隠さない
+var CSS="body{padding-bottom:76px!important;}"
+ +".mt-bar{position:fixed;left:0;right:0;bottom:0;z-index:9000;display:flex;align-items:center;gap:10px;padding:8px 10px calc(8px + env(safe-area-inset-bottom));background:#fef3c7;border-top:3px solid #b45309;color:#78350f;font-weight:900;font-size:16px;line-height:1.3;}"
+ +".mt-bar span{flex:1;}"
+ +".mt-fab{font:inherit;font-size:18px;font-weight:900;padding:8px 14px;min-height:52px;border-radius:10px;border:2px solid #b45309;background:#fff;color:#78350f;}"
+ +".mt-sheet{position:fixed;inset:0;z-index:9500;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;justify-content:center;}"
+ +".mt-card{background:#fff;width:100%;max-width:520px;max-height:92vh;max-height:92dvh;overflow-y:auto;border-radius:14px 14px 0 0;padding:16px 16px 24px;box-sizing:border-box;font-size:18px;line-height:1.55;color:#0f172a;}"
+ +".mt-h{font-size:21px;font-weight:900;margin:0 0 4px;}.mt-warn{color:#b45309;font-weight:800;font-size:17px;margin-bottom:10px;}"
+ +".mt-steps{margin:8px 0 12px;padding-left:1.6em;}.mt-steps li{margin:6px 0;}"
+ +".mt-btn{display:block;width:100%;font:inherit;font-size:19px;font-weight:900;min-height:56px;border-radius:10px;border:none;background:#1976d2;color:#fff;margin-top:10px;}"
+ +".mt-sub{background:#e2e8f0;color:#0f172a;}"
+ +".mt-grid{display:flex;flex-direction:column;gap:8px;margin-top:8px;}"
+ +".mt-sc{font:inherit;font-size:18px;font-weight:800;text-align:left;min-height:56px;padding:8px 12px;border-radius:10px;border:2px solid #94a3b8;background:#f8fafc;color:#0f172a;}"
+ +".mt-sc.on{background:#1976d2;border-color:#1976d2;color:#fff;}"
+ +".mt-sec{margin-top:18px;font-weight:900;font-size:19px;}"
+ +".mt-log{font-size:16px;background:#f1f5f9;border-radius:8px;padding:8px 10px;margin-top:6px;white-space:pre-wrap;}";
+function el(tag,cls,text){var e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
+function hhmm(iso){var d=new RealDate(iso);return isNaN(d)?"":pad(d.getHours())+":"+pad(d.getMinutes());}
+function slotName(s){return s===0?"朝":s===1?"日中":s===2?"夕方":"?";}
+function tempText(t){return (t.d||[]).map(function(x){return x.n+" "+x.v+"℃";}).join("、");}
+function logLines(){
+  var out=[];
+  LOG.forEach(function(e){
+    if(e.rec){var r=e.rec,m=r.mdoc||{},s=(r.type==="clockIn"?"出勤":r.type==="clockOut"?"退勤":r.type)+" "+r.time+" "+r.staff;
+      if(m.hyg)s+="\n　衛生・感染症: "+(m.hyg.a==="ok"?"問題なし":"問題あり");
+      if(m.temp)s+="\n　"+slotName(m.temp.s)+"の温度: "+tempText(m.temp);
+      if(m.hozon)s+="\n　保存食: "+(m.hozon.a==="yes"?"はい（確認者 "+r.staff+"）":"いいえ");
+      out.push(s);}
+    else if(e.temp)out.push(slotName(e.temp.s)+"の温度（出勤の後に記録 "+hhmm(e.temp.at)+"）: "+tempText(e.temp));
+  });
+  return out;
+}
+function openSheet(){
+  var ov=el("div","mt-sheet"),c=el("div","mt-card");ov.appendChild(c);
+  ov.addEventListener("click",function(e){if(e.target===ov)close();});
+  function close(){if(ov.parentNode)ov.parentNode.removeChild(ov);}
+  c.appendChild(el("div","mt-h",MARK[SN]+" "+SC.t));
+  var lines=logLines();
+  if(lines.length){ // 操作の後に開いたら、結果をいちばん上に出す
+    c.appendChild(el("div","mt-sec","記録された内容（本番には送っていません）"));
+    c.appendChild(el("div","mt-log",lines.join("\n")));
+  }
+  if(BLOCKED)c.appendChild(el("div","mt-log","止めた通信: "+BLOCKED+"件"));
+  c.appendChild(el("div","mt-warn","テスト画面です。本番には記録されません。時刻 "+pad(SC.at[0])+":"+pad(SC.at[1])+"・暗証番号はすべて 1234"));
+  var ol=el("ol","mt-steps");SC.steps.forEach(function(s){ol.appendChild(el("li",null,s));});c.appendChild(ol);
+  var go=el("button","mt-btn","閉じて操作する");go.type="button";go.onclick=close;c.appendChild(go);
+  var again=el("button","mt-btn mt-sub","この場面を最初から");again.type="button";again.onclick=function(){location.replace("mdoc-test.html?s="+SN);};c.appendChild(again);
+  c.appendChild(el("div","mt-sec","場面を選ぶ"));
+  var g=el("div","mt-grid");
+  for(var i=1;i<=9;i++)(function(n){var b=el("button","mt-sc"+(n===SN?" on":""),MARK[n]+" "+SCENES[n].t);b.type="button";
+    b.onclick=function(){location.replace("mdoc-test.html?s="+n);};g.appendChild(b);})(i);
+  c.appendChild(g);
+  document.body.appendChild(ov);
+}
+window.__mdocTestReady=function(){
+  var st=document.createElement("style");st.textContent=CSS;document.head.appendChild(st);
+  var bar=el("div","mt-bar");bar.appendChild(el("span",null,"テスト画面 "+MARK[SN]+"（本番には記録されません）"));
+  var fab=el("button","mt-fab","手順・記録");fab.type="button";fab.onclick=openSheet;bar.appendChild(fab);
+  document.body.appendChild(bar);
+  openSheet();
+};
+
+// ── 起動 ─────────────────────────────────────────────────────
+function fail(msg){var b=document.getElementById("mt-boot");if(b)b.textContent=msg;}
+try{isolate();}catch(e){fail("このブラウザではテスト画面を開けません（本番の保存領域と分けられないため）。");return;}
+realFetch("index.html",{cache:"no-store"}).then(function(r){
+  if(!r.ok)throw new Error("http "+r.status);
+  return r.text();
+}).then(function(html){
+  // Firebase SDK（通知）・JSZip（書き出し）は読み込まない。通信・Service Worker を持ち込まないため。
+  html=html.replace(/<script[^>]+src="https:\/\/(www\.gstatic\.com|cdnjs\.cloudflare\.com)\/[^"]*"[^>]*><\/script>/g,"");
+  // 外せなかった（書き方が変わった）ときは起動しない
+  if(html.indexOf("</head>")<0||/https:\/\/(www\.gstatic\.com|cdnjs\.cloudflare\.com)\//.test(html.slice(0,html.indexOf("</head>")))){fail("打刻画面の形が変わったため、テスト画面を開けません。");return;}
+  html=html.replace(/<\/body>/i,"<script>window.__mdocTestReady&&window.__mdocTestReady();<\/script></body>");
+  history.replaceState(null,"","mdoc-test.html?s="+SN+"&token="+TOKEN);
+  document.open();document.write(html);document.close();
+}).catch(function(){fail("打刻画面を読み込めませんでした。通信を確認して、開き直してください。");});
+})();
+</script>
+</body>
+</html>
