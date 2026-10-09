@@ -78,6 +78,12 @@ async function open(browser, now, records) {
         const v = JSON.parse(req.postData() || "null"); if (v) { delete v.serverReceivedAt; db.tc5_records[decodeURIComponent(rest[1])] = v; page.__puts.push(v); }
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(v) });
       }
+      // 出勤の後に記録した朝の温度（出勤レコードの mdoc/temp だけへの PUT）
+      if (req.method() === "PUT" && rest[0] === "tc5_records" && rest.length === 4 && rest[2] === "mdoc" && rest[3] === "temp") {
+        const v = JSON.parse(req.postData() || "null"); const r = db.tc5_records[decodeURIComponent(rest[1])];
+        if (r && v) { r.mdoc = Object.assign({}, r.mdoc, { temp: v }); page.__puts.push({ tempOnly: true, parent: rest[1], s: v.s }); }
+        return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(v) });
+      }
       if (req.method() !== "GET") return route.fulfill({ status: 200, contentType: "application/json", body: "null" });
       let v = getPath(db, rest);
       if (rest[0] === "tc5_records" && rest.length === 1 && url.searchParams.get("orderBy")) {
@@ -160,7 +166,7 @@ const ovBtn = (page, text) => page.locator(".mdoc-ov button", { hasText: new Reg
     await shot(page, "07-saved", [{ n: 3, sel: ".mdoc-card" }]);
     console.log("puts while saved screen:", page.__puts.length);
     await settle(page, 3);
-    console.log("puts after record:", page.__puts.length, JSON.stringify(page.__puts.map((p) => ({ type: p.type, time: p.time, hyg: p.mdoc && p.mdoc.hyg, temp: !!(p.mdoc && p.mdoc.temp) }))));
+    console.log("puts after record:", page.__puts.length, JSON.stringify(page.__puts.map((p) => (p.tempOnly ? { tempOnly: true, slot: p.s } : { type: p.type, time: p.time, hyg: p.mdoc && p.mdoc.hyg && p.mdoc.hyg.a }))));
     await shot(page, "07-after", []);
     await ctx.close();
   }

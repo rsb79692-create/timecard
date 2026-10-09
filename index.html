@@ -1561,6 +1561,19 @@ function _punchOutboxIdbAll(){
 // 旧実装（localStorage 併用版）の {queuedAt, attempts} 形もここで吸収する。
 function _punchOutboxNormalize(e){
   if(!e||!e.eventId||!e.rec)return null;
+  // 出勤の後に記録した朝の温度（MONTHLY-DOCS）。打刻ではなく、送信済みの出勤レコードの mdoc/temp だけを書く付属のエントリ
+  if(e.kind==="mdocTemp"){
+    if(!e.parentId||!e.value||typeof e.value!=="object")return null;
+    return {
+      eventId:String(e.eventId),kind:"mdocTemp",parentId:String(e.parentId),fac:String(e.fac||""),value:e.value,
+      rec:{timestamp:e.rec.timestamp,date:e.rec.date}, // 並び順（出勤と同じ時刻）と転記の日付のためだけ
+      state:(e.state==="syncing")?"syncing":"pending",
+      createdAt:e.createdAt||new Date().toISOString(),
+      retryCount:(typeof e.retryCount==="number")?e.retryCount:0,
+      lastAttemptAt:e.lastAttemptAt||null,
+      lastError:e.lastError||""
+    };
+  }
   return {
     eventId:String(e.eventId),
     rec:e.rec,
@@ -1617,7 +1630,8 @@ function punchOutboxBackoffMs(retryCount,isAuth){
 }
 function _punchOutboxDue(e,nowMs,force){
   if(e.state==="syncing")return false;      // 送信中は重ねて送らない
-  if(typeof mdocHeld==="function"&&mdocHeld(e.eventId))return false; // 朝の温度を書き足すまで送らない（MONTHLY-DOCS。画面が開いている間だけ）
+  // 朝の温度（MONTHLY-DOCS）は、その出勤がサーバに届いてから送る（出勤の無いノードに温度だけを作らない）
+  if(e.kind==="mdocTemp"&&punchOutbox[e.parentId])return false;
   if(!e.retryCount)return true;
   var last=Date.parse(e.lastAttemptAt||"");
   if(isNaN(last))return true;
@@ -1628,6 +1642,7 @@ function _punchOutboxDue(e,nowMs,force){
 // 1件送信する。戻り値: {ok:true[,already:true]} / {ok:false,kind:"auth"|"http"|"network"}
 // isRetry: 2回目以降の送信か。★ 初回は存在確認しない（毎回の打刻で通信を2倍にしないため）。
 function _punchOutboxSendOne(entry,isRetry){
+  if(entry.kind==="mdocTemp")return _punchOutboxSendMdocTemp(entry,isRetry);
   var url=FB_URL+"/tc5_records/"+encodeURIComponent(entry.eventId)+".json";
   // 「サーバには保存済みだがクライアントが成功応答を受け取れなかった」場合に備え、
   // 2回目以降は必ず存在確認してから書く。
@@ -1668,6 +1683,40 @@ function _punchOutboxSendOne(entry,isRetry){
       })["catch"](function(){return {ok:false,kind:"network"};});
   })["catch"](function(){return {ok:false,kind:"network"};});
 }
+// 朝の温度（MONTHLY-DOCS）: 送信済みの出勤レコードの mdoc/temp だけを PUT する（出勤の他の項目・管理者の修正には触れない）。
+// 同じ値を同じ場所へ書くので再送しても1件。2回目以降は存在確認し、あれば上書きしない（打刻と同じ扱い）。
+function _punchOutboxSendMdocTemp(entry,isRetry){
+  var url=FB_URL+"/tc5_records/"+encodeURIComponent(entry.parentId)+"/mdoc/temp.json";
+  var pre=isRetry
+    ? authFetch(url).then(function(r){
+        if(!r)return {kind:"network"};
+        if(r.status===401||r.status===403)return {kind:"auth"};
+        if(!r.ok)return {exists:false};
+        return r.json().then(function(j){return {exists:!!(j&&typeof j==="object")};});
+      })["catch"](function(){return {kind:"network"};})
+    : Promise.resolve({exists:false});
+  // 再送のときだけ、出勤のノードがあることも確かめる（無ければ温度だけのノードを作らず、送らずに終える）
+  var parentOk=function(p){
+    if(!isRetry||p.kind||p.exists)return p;
+    return authFetch(FB_URL+"/tc5_records/"+encodeURIComponent(entry.parentId)+"/type.json").then(function(r){
+      if(!r)return {kind:"network"};
+      if(r.status===401||r.status===403)return {kind:"auth"};
+      if(!r.ok)return p;                               // 判断できないので書きにいく（出勤は届いている前提）
+      return r.json().then(function(t){return t?p:{gone:true};});
+    })["catch"](function(){return {kind:"network"};});
+  };
+  return pre.then(parentOk).then(function(p){
+    if(p.kind)return {ok:false,kind:p.kind};
+    if(p.exists)return {ok:true,already:true};
+    if(p.gone){console.warn("[punchOutbox] mdoc temp dropped (no parent)",entry.parentId);return {ok:true,already:true,dropped:true};}
+    return authFetch(url,{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(entry.value)})
+      .then(function(res){
+        if(res&&res.ok)return {ok:true};
+        var st=(res&&res.status)||0;
+        return {ok:false,kind:(st===401||st===403)?"auth":"http",http:st};
+      });
+  })["catch"](function(){return {ok:false,kind:"network"};});
+}
 // 未送信分をまとめて送る。
 // ★ 同時発火しても多重送信しない: グローバルの実行中フラグ＋各エントリの "syncing" 状態。
 // ★ 通信断が出た時点でその回は打ち切る（順序維持・無駄な再試行の抑制）。
@@ -1695,7 +1744,9 @@ function punchOutboxFlush(reason){
     }).then(function(r){
       if(r&&r.ok){
         console.log("[punchOutbox] sent:",e.eventId,r.already?"(already on server)":"",reason||"");
-        if(e.rec&&e.rec.mdoc&&mdocFacilityOn(e.rec.mdoc.f))mdocScheduleSync(mdocSyncDaysFor(e.rec.date)); // 月次書類への転記（穂乃味だけ。MONTHLY-DOCS）
+        // 月次書類への転記（穂乃味だけ。MONTHLY-DOCS）。回答（衛生・温度・保存食）を含む送信のときだけ頼む（施設だけの mdoc では空振りさせない）
+        var _md=(e.kind==="mdocTemp")?(r.dropped?null:{f:e.fac,temp:e.value}):(e.rec&&e.rec.mdoc);
+        if(_md&&(_md.hyg||_md.temp||_md.hozon)&&mdocFacilityOn(_md.f))mdocScheduleSync(mdocSyncDaysFor(e.rec.date));
         return punchOutboxAck(e.eventId).then(step);
       }
       e.state="pending";
@@ -1713,6 +1764,10 @@ function punchOutboxFlush(reason){
   return step()["catch"](function(){}).then(function(){
     _punchOutboxFlushing=false;
     _punchOutboxSyncWarnState();
+    // この回で出勤が届いて送れるようになった朝の温度（MONTHLY-DOCS）は、次の契機を待たずに続けて送る
+    // （この回で一度試したものは含めない＝失敗の連打にならない）
+    if(punchOutboxPending().some(function(e){return e.kind==="mdocTemp"&&list.indexOf(e)<0&&_punchOutboxDue(e,Date.now(),false);}))
+      setTimeout(function(){punchOutboxFlush(reason);},0);
   });
 }
 
@@ -1720,7 +1775,7 @@ function punchOutboxFlush(reason){
 // 通常の一時的な通信断では何も出さない。長時間または繰り返し送れないときだけ出す。
 function punchOutboxWarning(){
   if(punchOutboxStorageBroken())return {kind:"storage"};
-  var list=punchOutboxPending();
+  var list=punchOutboxPending().filter(function(e){return !e.kind;}); // 「未送信の打刻」には打刻だけを数える
   if(!list.length)return null;
   var now=Date.now(),maxRetry=0,oldest=null;
   list.forEach(function(e){
@@ -1803,7 +1858,15 @@ function punchOutboxMergeInto(arr){
   if(!pend.length)return arr;
   var seen={};
   arr.forEach(function(r){if(r&&r.id)seen[r.id]=true;});
-  pend.forEach(function(e){if(!seen[e.eventId])arr.push(e.rec);});
+  pend.forEach(function(e){if(!e.kind&&!seen[e.eventId])arr.push(e.rec);});
+  // 未送信の朝の温度（MONTHLY-DOCS）は打刻として積まず、その出勤レコードの表示にだけ重ねる（他の人に同じ温度をもう一度聞かない）
+  pend.forEach(function(e){
+    if(e.kind!=="mdocTemp")return;
+    for(var i=0;i<arr.length;i++){
+      var r=arr[i];
+      if(r&&r.id===e.parentId&&!(r.mdoc&&r.mdoc.temp)){r.mdoc=Object.assign({f:e.fac},r.mdoc||{},{temp:e.value});break;}
+    }
+  });
   return arr;
 }
 // 再送の契機: 通信復旧・画面復帰・アプリ再表示。起動時・打刻画面表示・ポーリングは呼び出し側。
@@ -10203,13 +10266,9 @@ var MDOC_START_DATE="2026-10-09";
 function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
 var _mdocDevLoading={};
 var _mdocSyncTimer=null,_mdocSyncDays=2;
-// ★ 2026-10-09 ユーザー指示: 出勤は「問題なし」を押した時点で確定（端末保存）し、朝の温度は出勤の保存の後に続けて記録する（出勤の条件にしない）。
-//   温度の画面が開いている間だけ、その出勤レコードの送信を止める（_mdocHold。端末のメモリだけ）。温度を書き足してから1回だけ送る
-//   ＝送信経路（eventId への PUT 1回）・端末保存・再送は従来どおり。アプリが閉じれば次の起動時に温度なしで送られる（出勤は失われない）。
-//   画面を開いてから MDOC_POST_TEMP_IDLE_MS（操作の有無によらない上限）で閉じて送る（出勤がサーバに届かない時間を長くしない）。
+// ★ 2026-10-09 ユーザー指示: 出勤は「問題なし」を押した時点で確定し、すぐ送る（朝出勤確認で未出勤と誤らないため）。
+//   朝の温度は出勤の後に続けて聞く独立した記録（mdocAfterClockIn）。温度の画面は開いてから MDOC_POST_TEMP_IDLE_MS で閉じる（共用端末をふさがない）。
 var MDOC_POST_TEMP_IDLE_MS=3*60*1000;
-var _mdocHold={};
-function mdocHeld(id){return !!_mdocHold[id];}
 
 function mdocActive(){
   return TENANT_ID==="honomi"&&tenantFeature("monthlyDocs")&&punchOutboxEnabled();
@@ -10418,7 +10477,7 @@ function mdocCollect(plan){
     document.body.appendChild(ov);
     var verb=plan.type==="clockIn"?"出勤":"退勤";
     function finish(v){if(done)return;done=true;if(idleTimer)clearTimeout(idleTimer);if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
-    // 打刻後の温度（plan.post）: 開いてから一定時間（操作の有無によらない上限）で閉じる（止めている出勤の送信を再開させる）
+    // 打刻後の温度（plan.post）: 開いてから一定時間（操作の有無によらない上限）で閉じる（共用端末をふさぎ続けない。出勤はすでに送信済み）
     if(plan.post)idleTimer=setTimeout(function(){finish(null);},MDOC_POST_TEMP_IDLE_MS);
     function next(){
       idx++;
@@ -10569,25 +10628,38 @@ function mdocDupPunch(type,staff,dk,fn){
     ||(type==="clockIn"?findOpenClockInAcrossFacilities(staff,dk):null)||null;
 }
 
-// 出勤の確定（端末保存・画面の打刻済み）の後に、朝の温度を続けて聞く。
-// 呼ぶ前に _mdocHold[rec.id] を立てておく（送信を止める）。記録したら端末保存の同じエントリ（未送信）の rec.mdoc.temp に書き足し、
-// 閉じても・書き足せなくても出勤はそのまま。最後に必ず止めを外して送る。
+// 出勤の確定（端末保存・送信開始）の後に、朝の温度を続けて聞く。★ 出勤とは独立した記録（閉じても・失敗しても出勤はそのまま）。
+// 記録した温度は端末保存の付属エントリ（kind:"mdocTemp"）にして、出勤がサーバに届いてから その出勤の mdoc/temp だけへ PUT する
+// （再送・存在確認は打刻と同じ。出勤の他の項目・管理者の修正には触れない）。
+// 出勤がまだ一度も送れていなければ（通信できない等）、出勤レコードへ同梱して送る＝通信を増やさない。
 function mdocAfterClockIn(plan,rec){
   var p=Object.assign({},plan,{hyg:false,hygNg:false,hozon:false,post:true,punchedAt:new Date(rec.timestamp)});
   return mdocCollect(p).then(function(md){
+    if(!md||!md.temp)return;
+    var temp=md.temp;
+    var base=function(m){var o=Object.assign({f:plan.fac},m||{});if(plan.sid&&!o.sid)o.sid=plan.sid;o.temp=temp;return o;};
     var e=punchOutbox[rec.id];
-    // ★ 送信前（止めている）のエントリだけに書き足す。送信済み・送信中なら書き足さない（サーバの打刻を上書きしない）。
-    if(!md||!md.temp||!e||e.state!=="pending"||e.retryCount||!e.rec)return; // 1回も送っていないエントリだけ
-    if(!e.rec.mdoc||typeof e.rec.mdoc!=="object"){e.rec.mdoc={f:plan.fac};if(plan.sid)e.rec.mdoc.sid=plan.sid;}
-    e.rec.mdoc.temp=md.temp;
-    if(rec!==e.rec)rec.mdoc=e.rec.mdoc;
-    // 画面を開いている間に records が取り直されて別のオブジェクトになっていても、手元の控えに温度をそろえる
-    records.forEach(function(r){if(r&&r.id===rec.id&&r.mdoc!==e.rec.mdoc)r.mdoc=e.rec.mdoc;});
-    _lsSet("tc5_records",JSON.stringify(records));
-    // 端末保存に失敗してもメモリのエントリには温度が入っているので、このまま送られる（出勤には影響しない）
-    return _punchOutboxSave(e).then(function(ok){if(!ok)console.warn("[mdoc] temp persist failed",rec.id);});
+    var save;
+    if(e&&!e.kind&&e.state==="pending"&&!e.retryCount&&e.rec){
+      e.rec.mdoc=base(e.rec.mdoc);
+      // 同梱: メモリ上の出勤には温度が入り、このまま送られる。端末への書き直しに失敗しても失敗扱いにしない（再起動すれば温度なしで送られるだけ）
+      save=_punchOutboxSave(e).then(function(ok){if(!ok)console.warn("[mdoc] temp persist (embedded) failed",rec.id);return true;});
+    } else {
+      var te=_punchOutboxNormalize({eventId:rec.id+"~t",kind:"mdocTemp",parentId:rec.id,fac:plan.fac,value:temp,
+        rec:{timestamp:rec.timestamp,date:rec.date},state:"pending",createdAt:new Date().toISOString(),retryCount:0});
+      save=te?_punchOutboxIdbPut(te).then(function(ok){if(ok)punchOutbox[te.eventId]=te;return ok;}):Promise.resolve(false);
+    }
+    return save.then(function(ok){
+      if(!ok){
+        console.warn("[mdoc] temp persist failed",rec.id);
+        showAlert("温度を保存できませんでした。\n\n出勤は記録されています。\n温度は責任者に伝えてください。");
+        return;
+      }
+      // 手元の表示にも重ねる（同じ日の朝の温度を他の人にもう一度聞かない）
+      records.forEach(function(r){if(r&&r.id===rec.id&&!(r.mdoc&&r.mdoc.temp))r.mdoc=base(r.mdoc);});
+      _lsSet("tc5_records",JSON.stringify(records));
+    });
   })["catch"](function(){console.warn("[mdoc] post temp failed",rec.id);}).then(function(){
-    delete _mdocHold[rec.id];
     punchOutboxFlush("punch");
   });
 }
@@ -10688,7 +10760,7 @@ async function _execPunch(type,d){
       }
       delete _md._punchAt;
       // 回答が1つも無い（朝の温度を後で聞くだけの出勤）なら mdoc を付けない（中身の無い転記を起こさない）
-      if(_md.hyg||_md.temp||_md.hozon)nr.mdoc=_md;
+      if(_md.hyg||_md.temp||_md.hozon||_mdPost)nr.mdoc=_md; // 朝の温度を後で記録する出勤は施設（f）を持たせておく（温度は mdoc/temp へ書く）
     }
   }
   // ① 端末（IndexedDB）へ保存する。サーバ応答は待たない。
@@ -10696,11 +10768,9 @@ async function _execPunch(type,d){
   if(punchOutboxEnabled()){
     _punchSaving=true;
     var _saved=false;
-    if(_mdPost)_mdocHold[nr.id]=1; // 朝の温度を書き足すまで送らない（保存の前に立てる＝保存直後の送信に拾われない）
     try{_saved=await punchOutboxCommit(nr);}catch(e){_saved=false;}
     _punchSaving=false;
     if(!_saved){
-      if(_mdPost)delete _mdocHold[nr.id];
       // ★ 端末に残っていないものを「打刻済み」と見せてはならない。
       //    localStorage やサーバ直送へフォールバックせず、打刻失敗として再操作できる状態を保つ。
       console.error("[punch] local persist failed", type);
@@ -10732,7 +10802,7 @@ async function _execPunch(type,d){
   faceCamAfterPunch(type);
   // ④ サーバ送信は非同期。結果を待たない。
   punchOutboxFlush("punch");
-  // ⑤ 朝の温度（MONTHLY-DOCS・出勤の確定後）。★ 待たない。閉じても出勤はそのまま。終われば止めを外して送る。
+  // ⑤ 朝の温度（MONTHLY-DOCS・出勤の確定と送信開始の後）。★ 待たない。閉じても出勤はそのまま。
   if(_mdPost)mdocAfterClockIn(_mdPost,nr);
 }
 function doPunch(type){

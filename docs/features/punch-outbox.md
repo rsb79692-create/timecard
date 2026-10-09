@@ -54,6 +54,9 @@
 　★ ただし 2026-08-28 以降、中身は**全件ではなく取得済み区間分だけ**である（`mergeRecordsRange`）。
 ・**送信前に `state:"syncing"` を永続化する。** 送信中にアプリが終了しても、
 　起動時に `pending` へ戻して再送できる（存在確認つきなので二重登録しない）。
+・付属のエントリ（2026-10-09。打刻ではない）: `kind:"mdocTemp"` は穂乃味の月次書類の朝の温度で、`parentId` の出勤レコードの
+　`mdoc/temp` だけへ PUT する（`eventId` = 出勤の `eventId`+`~t`）。出勤のエントリが残っている間は送らない（`_punchOutboxDue`）。
+　`punchOutboxMergeInto` は打刻として積まず、未送信の打刻の警告にも数えない。詳細: [`monthly-docs.md`](monthly-docs.md)。
 
 ### 二重登録が起きない理由
 
