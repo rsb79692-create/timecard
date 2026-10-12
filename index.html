@@ -8101,6 +8101,7 @@ function _renderInner(){
         +'<div class="admin-title" style="margin-bottom:0;">付与予定（未登録）'
         +(_plr.grants.length>0?'<span style="background:#dc2626;color:#fff;font-size:.58rem;font-weight:700;padding:1px 6px;border-radius:8px;margin-left:6px;vertical-align:middle;">'+_plr.grants.length+'件</span>':'')+'</div>'
         +'</div>'
+        +plBulkConsumeBarHtml(_plr.grants)
         +(recordsHistoryReady()?"":'<div style="background:#eef2f7;color:#475569;border-radius:6px;padding:7px 10px;margin-bottom:8px;font-size:.78rem;line-height:1.6;">'+recordsHistoryStatusText()+'完了するまでは自動算出が「判定不可（データ不足）」になることがあります。</div>')
         +'<div style="font-size:.74rem;color:#64748b;margin-bottom:8px;line-height:1.6;">付与日数は<b style="color:var(--brand);">出勤日数からの自動算出</b>です（初回＝入社月から6か月×2、2回目以降＝付与月の前12か月の年間勤務日数で週相当を判定）。<b>判定不可・要確認</b>は自動算出できないため管理者の確認が必要です。登録ボタンを押すまで保存されません。</div>'
         +_dupWarnGr+_noIdWarnGr
@@ -15754,6 +15755,81 @@ function getLeaveDates(req){
   return [];
 }
 
+// ===== PL-BULK-CONSUME-BEGIN =====
+// 「付与予定（未登録）」のうち期限切れの付与回をまとめて「消化済み」として登録する（docs/features/paid-leave-import.md）。
+// ★ 期限内の付与回は対象にしない（消化済みにすると残日数が0で確定し、取り込むはずの残日数が失われる）。
+// ★ 1件ずつの「消化済み」ボタン（openPaidLeaveGrantModal(idx,true)）と同じ形の行を作る:
+//   grantedDays=付与日数（自動算出→手動週所定→不明なら0）, usedDays=grantedDays, remainDays=0。期限切れなので残日数の合計には入らない。
+// ★ 登録直前に最新を取り直し、同じ社員番号・付与日の行が既にあれば書かない（二重登録の防止）。書き込みは1回の PATCH。
+function plBulkConsumeTargets(grants,todayYmd){
+  return (Array.isArray(grants)?grants:[]).filter(function(g){return g&&g.staffId&&g.grantDate&&g.expiresAt&&g.expiresAt<todayYmd;}).map(function(g){
+    var d=(g.auto&&typeof g.auto.autoGrantDays==="number")?g.auto.autoGrantDays:(typeof g.grantDays==="number"?g.grantDays:0);
+    return {staffId:String(g.staffId).trim(),staffName:g.staffName,grantNum:g.grantNum,grantDate:g.grantDate,expiresAt:g.expiresAt,grantedDays:d};
+  });
+}
+// targets: plBulkConsumeTargets の結果／freshStaff: 取り直した tc5_staff の一覧／freshBalStaffIds: 取り直した付与行の [正規化後の社員番号, 付与日] の配列
+function plBulkConsumePatch(targets,freshStaff,freshBalKeys,todayYmd,nowMs,nowIso){
+  var have=Object.create(null);
+  (freshBalKeys||[]).forEach(function(k){have[String(k[0]||"").trim()+"\u0000"+k[1]]=true;});
+  var ok=Object.create(null);
+  (Array.isArray(freshStaff)?freshStaff:[]).forEach(function(s){
+    if(!s||s.status==="退職")return;var id=String(s.employeeId||"").trim();if(id)ok[id+"\u0000"+s.name]=true;
+  });
+  var patch={},skipped=0,seen=Object.create(null);
+  (targets||[]).forEach(function(t){
+    var k=t.staffId+"\u0000"+t.grantDate;
+    // 期限内・登録済み・スタッフが変わった（退職・社員番号変更）・Firebase のキーに使えない社員番号は書かない
+    if(!(t.expiresAt<todayYmd)||have[k]||seen[k]||!ok[t.staffId+"\u0000"+t.staffName]||/[.#$\[\]\/]/.test(t.staffId)){skipped++;return;}
+    seen[k]=true;
+    var id="plb_"+t.staffId+"_"+t.grantDate+"_"+nowMs;
+    patch[id]={id:id,staffId:t.staffId,staffName:t.staffName,grantNum:t.grantNum,grantDate:t.grantDate,expiresAt:t.expiresAt,
+      grantedDays:t.grantedDays,usedDays:t.grantedDays,remainDays:0,createdAt:nowIso,source:"bulkConsumed"};
+  });
+  return {patch:patch,count:Object.keys(patch).length,skipped:skipped};
+}
+// ===== PL-BULK-CONSUME-END =====
+var plBulkConsumeBusy=false;
+function plBulkConsumeBarHtml(grants){
+  if(!csvImpCanWrite())return "";
+  var today=getTodayJSTStr(),t=plBulkConsumeTargets(grants,today),rest=(grants||[]).length-t.length;
+  if(!t.length)return "";
+  var names=Object.create(null);t.forEach(function(x){names[x.staffName]=1;});
+  return '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
+    +'<button onclick="plBulkConsumeExpired()" '+(plBulkConsumeBusy?'disabled ':'')+'style="background:#475569;color:#fff;border:none;padding:9px 14px;border-radius:4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">'
+    +(plBulkConsumeBusy?'登録中…':'期限切れの未登録 '+t.length+'件（'+Object.keys(names).length+'名）をまとめて消化済みにする')+'</button>'
+    +'<div style="font-size:.74rem;color:#64748b;margin-top:6px;line-height:1.6;">期限が過ぎた付与回だけが対象です（残日数0で登録するため、残日数の合計は変わりません）。'
+    +(rest>0?'<b>期限内の'+rest+'件は対象外</b>です（消化済みにすると残日数が0で確定してしまうため、1件ずつ「付与登録」か有給残日数CSVで登録してください）。':'')+'</div></div>';
+}
+function plBulkConsumeExpired(){
+  if(plBulkConsumeBusy)return;
+  if(!csvImpCanWrite()){showAlert("管理者としてログインしているときだけ登録できます");return;}
+  var today=getTodayJSTStr(),targets=plBulkConsumeTargets(getPaidLeaveUnregistered().grants,today);
+  if(!targets.length){showAlert("期限切れの未登録はありません");return;}
+  if(!confirm("期限切れの未登録 "+targets.length+"件を「消化済み（残0日）」として登録します。\n期限内の付与回は登録しません。\n\nよろしいですか？"))return;
+  plBulkConsumeBusy=true;render();
+  (async function(){
+    await afterElevation();
+    function getJson(p){return authFetch(FB_URL+p).then(function(x){if(!x||!x.ok)throw 0;return x.json();});}
+    var got;
+    try{got=await Promise.all([getJson("/tc5_staff.json"),getJson("/tc5_paid_leave_balances.json")]);}
+    catch(e){throw new Error("最新のデータを取得できませんでした。通信状態を確認してもう一度お試しください（何も登録していません）");}
+    var sl=CSVIMP.normalizeList(got[0]);
+    if(!sl.ok||(got[1]!=null&&typeof got[1]!=="object"))throw new Error("データの形式が想定と異なるため中止しました（何も登録していません）");
+    var raw=got[1]?(Array.isArray(got[1])?got[1]:Object.values(got[1])):[];
+    var keys=raw.filter(Boolean).map(function(b){var nb=normalizePaidLeaveBalance(b);return [nb.staffId,nb.grantDate];});
+    var r=plBulkConsumePatch(targets,sl.list,keys,today,Date.now(),new Date().toISOString());
+    if(!r.count)throw new Error("登録する行はありませんでした（他の端末で登録済みの可能性があります）");
+    var w=await authFetch(FB_URL+"/tc5_paid_leave_balances.json",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(r.patch)}).catch(function(){return null;});
+    if(!w)throw new Error("通信に失敗しました。登録されたか分からないため、画面を再読み込みしてから確認してください（登録済みの行は二重に登録されません）");
+    if(!w.ok)throw new Error(w.status===401||w.status===403?"権限が無いため登録できませんでした。管理者PINで入り直してください":"登録に失敗しました（HTTP "+w.status+"）");
+    try{
+      var after=await getJson("/tc5_paid_leave_balances.json");
+      if(after&&typeof after==="object"){var arr=Array.isArray(after)?after:Object.values(after);paidLeaveBalances=arr.filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});}
+    }catch(e2){Object.keys(r.patch).forEach(function(k){paidLeaveBalances.push(normalizePaidLeaveBalance(r.patch[k]));});}
+    showAlert(r.count+"件を消化済みとして登録しました"+(r.skipped?"（"+r.skipped+"件は登録済み等のため登録しませんでした）":""));
+  })().catch(function(e){showAlert(e&&e.message?e.message:"登録に失敗しました");})
+    .then(function(){plBulkConsumeBusy=false;render();});
+}
 // ===== PL-HISTORY-BEGIN =====
 // 有給取得履歴の抽出（表示専用）。
 // ★ 正本を一切書き換えない。remainDays / grantedDays / usedDays / FIFO消化 /

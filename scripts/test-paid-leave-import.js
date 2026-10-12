@@ -299,6 +299,81 @@ const STAFF_OBJ = Object.assign({}, STAFF);
     env.c.csvImp.pl = null;
     check("CSV一括登録画面に ③有給残日数CSV が出る", /③ 有給残日数CSV/.test(env.c.csvImpHtml()));
   }
+  await bulkConsumeTests();
   console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
   process.exit(fail ? 1 : 0);
 })();
+
+// ===== 期限切れの未登録をまとめて消化済みにする（PL-BULK-CONSUME） =====
+async function bulkConsumeTests() {
+  console.log("■ 期限切れの未登録をまとめて消化済みにする");
+  const BULK = slice("// ===== PL-BULK-CONSUME-BEGIN =====", "// ===== PL-HISTORY-BEGIN =====");
+  const T = "2026-10-12";
+  const grants = [
+    { staffId: "1001", staffName: "山田太郎", grantNum: 1, grantDate: "2015-10-01", expiresAt: "2017-09-30", grantDays: 10, auto: { autoGrantDays: null } },
+    { staffId: "1001", staffName: "山田太郎", grantNum: 2, grantDate: "2016-10-01", expiresAt: "2018-09-30", grantDays: null, auto: { autoGrantDays: 11 } },
+    { staffId: "1001", staffName: "山田太郎", grantNum: 3, grantDate: "2017-10-01", expiresAt: "2019-09-30", grantDays: null, auto: null },
+    { staffId: "1002", staffName: "佐藤花子", grantNum: 1, grantDate: "2026-03-15", expiresAt: "2028-03-14", grantDays: 10, auto: null },  // 期限内
+    { staffId: "1003", staffName: "退職次郎", grantNum: 1, grantDate: "2015-01-01", expiresAt: "2016-12-31", grantDays: 10, auto: null },
+    { staffId: "1001", staffName: "山田太郎", grantNum: 4, grantDate: "2024-10-12", expiresAt: "2026-10-12", grantDays: 20, auto: null },  // 期限が今日（まだ有効）
+  ];
+  const freshStaff = [{ name: "山田太郎", employeeId: "1001", status: "在籍" }, { name: "佐藤花子", employeeId: "1002", status: "在籍" }, { name: "退職次郎", employeeId: "1003", status: "退職" }];
+  const c2 = vm.createContext({ Object, Array, String, JSON, Math, Date, console });
+  vm.runInContext(BULK.slice(0, BULK.indexOf("var plBulkConsumeBusy")) + "\nthis.T=plBulkConsumeTargets;this.P=plBulkConsumePatch;", c2);
+  const t = c2.T(grants, T);
+  check("対象は期限切れだけ（期限内・期限が今日の回は対象外）", t.length === 4 && t.every(x => x.expiresAt < T), JSON.stringify(t.map(x => x.grantDate)));
+  check("付与日数は 自動算出 → 手動週所定 → 不明なら0", t[0].grantedDays === 10 && t[1].grantedDays === 11 && t[2].grantedDays === 0);
+  const r = c2.P(t, freshStaff, [["1001", "2016-10-01"]], T, 1700000000000, "2026-10-12T00:00:00.000Z");
+  const rows = Object.values(r.patch);
+  check("登録済み（同じ社員番号・付与日）と退職者は書かない", r.count === 2 && r.skipped === 2 && rows.every(x => x.staffId === "1001") && !rows.some(x => x.grantDate === "2016-10-01"));
+  check("1件ずつの「消化済み」と同じ形（usedDays=付与日数・残0）", rows.every(x => x.remainDays === 0 && x.usedDays === x.grantedDays && x.source === "bulkConsumed"));
+  check("社員番号が変わったスタッフの行は書かない", c2.P(t, [{ name: "山田太郎", employeeId: "9999", status: "在籍" }], [], T, 1, "x").count === 0);
+  check("期限内の回が紛れ込んでも書かない（二重の防御）", c2.P([{ staffId: "1002", staffName: "佐藤花子", grantNum: 1, grantDate: "2026-03-15", expiresAt: "2028-03-14", grantedDays: 10 }], freshStaff, [], T, 1, "x").count === 0);
+
+  // 画面の処理（模擬通信）
+  function env(opts) {
+    const db = { "/tc5_staff.json": opts.staff, "/tc5_paid_leave_balances.json": opts.balances };
+    const calls = [], alerts = [];
+    const e = {
+      csvImpCanWrite: () => opts.admin !== false, getTodayJSTStr: () => T, getPaidLeaveUnregistered: () => ({ grants }),
+      confirm: () => opts.confirm !== false, render() {}, showAlert: m => alerts.push(m), afterElevation: () => Promise.resolve(),
+      FB_URL: "https://x.invalid", CSVIMP: C, normalizePaidLeaveBalance: b => Object.assign({}, b), paidLeaveBalances: [],
+      authFetch: async (url, o) => {
+        const p = url.replace("https://x.invalid", ""), m = (o && o.method) || "GET";
+        calls.push(m + " " + p);
+        if (opts.failGet && m === "GET") return { ok: false, status: 503, json: async () => null };
+        if (m === "PATCH") { db[p] = Object.assign({}, db[p] || {}, JSON.parse(o.body)); return { ok: true, status: 200, json: async () => null }; }
+        return { ok: true, status: 200, json: async () => JSON.parse(JSON.stringify(db[p] == null ? null : db[p])) };
+      },
+      Object, Array, String, JSON, Math, Date, Promise, console,
+    };
+    const c = vm.createContext(e);
+    vm.runInContext(BULK + "\nthis.run=plBulkConsumeExpired;this.bar=plBulkConsumeBarHtml;this.busy=()=>plBulkConsumeBusy;", c);
+    return { c, db, calls, alerts };
+  }
+  async function go(E) { E.c.run(); for (let i = 0; i < 50 && E.c.busy(); i++) await new Promise(r => setImmediate(r)); }
+  {
+    const E = env({ staff: Object.assign({}, freshStaff), balances: { keep: { staffId: "1002", grantDate: "2026-03-15", remainDays: 8 } } });
+    await go(E);
+    const patches = E.calls.filter(x => x.startsWith("PATCH"));
+    check("登録直前に取り直してから1回の PATCH", patches.length === 1 && E.calls.indexOf("GET /tc5_paid_leave_balances.json") < E.calls.indexOf(patches[0]), JSON.stringify(E.calls));
+    check("既存の行（期限内の佐藤さんの残8日）は変わらない", E.db["/tc5_paid_leave_balances.json"].keep.remainDays === 8);
+    check("登録した件数を知らせる", /3件を消化済み/.test(E.alerts.join()), E.alerts.join());
+    check("ボタンに期限内が対象外と出る", /期限内の2件は対象外/.test(E.c.bar(grants)), E.c.bar(grants));
+  }
+  {
+    const E = env({ staff: Object.assign({}, freshStaff), balances: null, failGet: true });
+    await go(E);
+    check("最新を取得できなければ書かない", E.calls.every(x => !x.startsWith("PATCH")) && /何も登録していません/.test(E.alerts.join()));
+  }
+  {
+    const E = env({ staff: Object.assign({}, freshStaff), balances: null, confirm: false });
+    await go(E);
+    check("確認でキャンセルすると通信しない", E.calls.length === 0);
+  }
+  {
+    const E = env({ staff: Object.assign({}, freshStaff), balances: null, admin: false });
+    await go(E);
+    check("管理者以外は通信しない・ボタンも出ない", E.calls.length === 0 && E.c.bar(grants) === "");
+  }
+}
