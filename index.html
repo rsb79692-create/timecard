@@ -15762,11 +15762,12 @@ function getLeaveDates(req){
 // 「付与予定（未登録）」のうち期限切れの付与回をまとめて「消化済み」として登録する（docs/features/paid-leave-import.md）。
 // ★ 期限内の付与回は対象にしない（消化済みにすると残日数が0で確定し、取り込むはずの残日数が失われる）。
 // ★ 1件ずつの「消化済み」ボタン（openPaidLeaveGrantModal(idx,true)）と同じ形の行を作る:
-//   grantedDays=付与日数（自動算出→手動週所定→不明なら0）, usedDays=grantedDays, remainDays=0。期限切れなので残日数の合計には入らない。
+//   grantedDays=手動の週所定労働日数からの付与日数（未設定なら0）, usedDays=grantedDays, remainDays=0。期限切れなので残日数の合計には入らない。
+// ★ 出勤日数からの自動算出は使わない（打刻の過去分の読み込み状況で値が変わり、打刻が無い会社では読み込みが終わらないため）。
 // ★ 登録直前に最新を取り直し、同じ社員番号・付与日の行が既にあれば書かない（二重登録の防止）。書き込みは1回の PATCH。
 function plBulkConsumeTargets(grants,todayYmd){
   return (Array.isArray(grants)?grants:[]).filter(function(g){return g&&g.staffId&&g.grantDate&&g.expiresAt&&g.expiresAt<todayYmd;}).map(function(g){
-    var d=(g.auto&&typeof g.auto.autoGrantDays==="number")?g.auto.autoGrantDays:(typeof g.grantDays==="number"?g.grantDays:0);
+    var d=typeof g.grantDays==="number"?g.grantDays:0;
     return {staffId:String(g.staffId).trim(),staffName:g.staffName,hireDate:g.hireDate,grantNum:g.grantNum,grantDate:g.grantDate,expiresAt:g.expiresAt,grantedDays:d};
   });
 }
@@ -15801,11 +15802,10 @@ function plBulkConsumeBarHtml(grants){
   var today=getTodayJSTStr(),t=plBulkConsumeTargets(grants,today),rest=(grants||[]).length-t.length;
   if(!t.length)return "";
   var names=Object.create(null);t.forEach(function(x){names[x.staffName]=1;});
-  // 打刻の過去分を読み込み中は自動算出が「判定不可」になりやすく、登録する付与日数が変わるため押せなくする
-  var ready=(typeof recordsHistoryReady!=="function")||recordsHistoryReady();
+
   return '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
-    +'<button onclick="plBulkConsumeExpired()" '+((plBulkConsumeBusy||!ready)?'disabled ':'')+'style="background:#475569;color:#fff;border:none;padding:9px 14px;border-radius:4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">'
-    +(plBulkConsumeBusy?'登録中…':!ready?'打刻の過去分を読み込み中です（終わると押せます）':'期限切れの未登録 '+t.length+'件（'+Object.keys(names).length+'名）をまとめて消化済みにする')+'</button>'
+    +'<button onclick="plBulkConsumeExpired()" '+(plBulkConsumeBusy?'disabled ':'')+'style="background:#475569;color:#fff;border:none;padding:9px 14px;border-radius:4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">'
+    +(plBulkConsumeBusy?'登録中…':'期限切れの未登録 '+t.length+'件（'+Object.keys(names).length+'名）をまとめて消化済みにする')+'</button>'
     +'<div style="font-size:.74rem;color:#64748b;margin-top:6px;line-height:1.6;">期限が過ぎた付与回だけが対象です（残日数0で登録するため、残日数の合計は変わりません）。'
     +(rest>0?'<b>期限内の'+rest+'件は対象外</b>です（消化済みにすると残日数が0で確定してしまうため、1件ずつ「付与登録」か有給残日数CSVで登録してください）。':'')+'</div></div>';
 }

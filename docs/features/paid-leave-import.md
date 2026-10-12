@@ -46,7 +46,7 @@
 コード: `index.html` の `PL-BULK-CONSUME-BEGIN/END`（`plBulkConsumeTargets` `plBulkConsumePatch`）と `plBulkConsumeBarHtml` `plBulkConsumeExpired`。テストは `test-paid-leave-import.js`。
 
 - ★ **対象は期限切れ（期限 < 今日 JST）の回だけ。期限内の回は対象外**（消化済みにすると残日数0で確定し、取り込むはずの残日数が失われる。期限内の回は1件ずつの「付与登録」か有給残日数CSVで登録する）。
-- 行の形は1件ずつの「消化済み」と同じ: `grantedDays`＝自動算出→手動週所定→不明なら0、`usedDays=grantedDays`、`remainDays=0`、`source:"bulkConsumed"`。期限切れなので残日数の合計・FIFO の消化対象に入らない。
+- 行の形は1件ずつの「消化済み」と同じ: `grantedDays`＝手動の週所定労働日数からの付与日数（未設定なら0。出勤日数からの自動算出は使わない）、`usedDays=grantedDays`、`remainDays=0`、`source:"bulkConsumed"`。期限切れなので残日数の合計・FIFO の消化対象に入らない。
 - ★ CSV取込の二重登録判定は「期限切れで残0の行」を数えない。そのため、まとめて消化済みにした後でも、その人の期限内の残日数を有給残日数CSVで取り込める（順序はどちらでもよい）。
-- 打刻の過去分の読み込み中（`recordsHistoryReady()` 偽）はボタンを押せない（自動算出が判定不可になり、登録する付与日数が変わるため）。
+- ★ 打刻の過去分の読み込み（`recordsHistoryReady()`）を待たない。自動算出を使わないので値は読み込み状況に左右されない。打刻が1件も無い会社（2026-10-12 時点のマンテール）は運用開始月が決まらず読み込みが終わらないため、待つと永久に押せない。
 - 登録直前に `tc5_staff`・`tc5_paid_leave_balances` を取り直し、同じ社員番号・付与日の行がある回、退職・社員番号が変わった／重複した・入社日が変わったスタッフの回は書かない。書き込みは1回の PATCH。取得できなければ書かない。付与通知は作らない。

@@ -322,7 +322,7 @@ async function bulkConsumeTests() {
   vm.runInContext(BULK.slice(0, BULK.indexOf("var plBulkConsumeBusy")) + "\nthis.T=plBulkConsumeTargets;this.P=plBulkConsumePatch;", c2);
   const t = c2.T(grants, T);
   check("対象は期限切れだけ（期限内・期限が今日の回は対象外）", t.length === 4 && t.every(x => x.expiresAt < T), JSON.stringify(t.map(x => x.grantDate)));
-  check("付与日数は 自動算出 → 手動週所定 → 不明なら0", t[0].grantedDays === 10 && t[1].grantedDays === 11 && t[2].grantedDays === 0);
+  check("付与日数は手動週所定（自動算出は使わない）・不明なら0", t[0].grantedDays === 10 && t[1].grantedDays === 0 && t[2].grantedDays === 0);
   const r = c2.P(t, freshStaff, [["1001", "2016-10-01"]], T, 1700000000000, "2026-10-12T00:00:00.000Z");
   const rows = Object.values(r.patch);
   check("登録済み（同じ社員番号・付与日）と退職者は書かない", r.count === 2 && r.skipped === 2 && rows.every(x => x.staffId === "1001") && !rows.some(x => x.grantDate === "2016-10-01"));
@@ -376,7 +376,7 @@ async function bulkConsumeTests() {
   }
   {
     const E = env({ staff: Object.assign({}, freshStaff), balances: null, ready: false });
-    check("打刻の過去分の読み込み中はボタンを押せない", /disabled/.test(E.c.bar(grants)) && /読み込み中/.test(E.c.bar(grants)));
+    check("打刻の過去分の読み込み状況に関係なく押せる（打刻が無い会社でも使える）", !/disabled/.test(E.c.bar(grants)) && /まとめて消化済み/.test(E.c.bar(grants)));
   }
   {
     const E = env({ staff: Object.assign({}, freshStaff), balances: null, failGet: true });
