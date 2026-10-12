@@ -481,7 +481,10 @@ console.log("\n[6] 空欄プレースホルダの解釈");
 console.log("\n[7] 勤怠一覧（日別）：打刻が無い職員も編集できる（既存挙動の固定）");
 const dailyBlock = slice("      var dRecs=records.filter(function(r){return r.date===selDate;})", "+'<tbody>'+sumRows+", 0);
 check("日別一覧は在籍者全員ぶん行を作る（打刻の有無で絞っていない）",
-  /var allStaffSorted=allActiveStaff;/.test(dailyBlock) && /allStaffSorted\.map/.test(dailyBlock), "sumRows");
+  // 2026-10-12 施設別のまとめ表示：在籍者全員を施設のまとまりへ入れ、まとまりごとに全員ぶんの行を作る
+  /allActiveStaff\.forEach\(function\(s\)\{_facGroup\(s\.location\|\|""\)\.staff\.push\(s\);\}\)/.test(dailyBlock)
+    && /g\.staff\.map\(_recRow\)/.test(dailyBlock)
+    && !/hasPunch[^;]*_facGroup|_facGroup[^;]*hasPunch/.test(dailyBlock), "sumRows");
 check("日別一覧の時刻セルは hasPunch で条件分岐していない",
   !/hasPunch\?tCell/.test(dailyBlock), "tCell");
 check("日別一覧の未打刻セルは data-id 空で描画される（＝新規作成の入口）",
