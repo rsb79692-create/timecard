@@ -11825,7 +11825,12 @@ var CSVIMP=(function(){
     });
     if(dup.length)return {ok:false,error:"見出しに同じ列名が重複しています："+dup.join("、")};
     var missing=spec.cols.filter(function(c){return !has(idx,c);});
-    if(missing.length)return {ok:false,error:"列が不足しています："+missing.join("、")+"（"+spec.label+"CSVの列："+spec.cols.join("、")+"）"};
+    if(missing.length){
+      // 別の欄のCSVを選んだとき（例：従業員CSVを①施設の欄に選んだ）は、どの欄で選ぶかを示す
+      var NO={fac:"①",staff:"②",pl:"③"},other=Object.keys(SPEC).filter(function(k){return k!==kind&&SPEC[k].cols.every(function(c){return has(idx,c);});})[0];
+      if(other)return {ok:false,error:"これは"+SPEC[other].label+"CSVです。"+NO[other]+" "+SPEC[other].label+"CSVの欄の「CSVファイルを選ぶ」から選んでください（何も登録していません）"};
+      return {ok:false,error:"列が不足しています："+missing.join("、")+"（"+spec.label+"CSVの列："+spec.cols.join("、")+"）"};
+    }
     var body=[],fileWarnings=[];
     if(extra.length)fileWarnings.push("想定外の列は取り込みません："+extra.join("、"));
     for(var r=1;r<rows.length;r++){
