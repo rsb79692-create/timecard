@@ -12123,7 +12123,10 @@ var CSVIMP=(function(){
       var hd=parseDate(String(s.hireDate||"").trim());
       if(!hd){add(it,"error",s.hireDate?"入社日「"+s.hireDate+"」を読めません（スタッフ管理で入社日を直してください）":"入社日が未設定です（付与日・期限を決められないため登録しません。スタッフ管理で入社日を設定してください）");return it;}
       // ★ 二重登録の防止: この人の付与行が1件でもあれば取り込まない（既存の残日数に足すと二重になる）
+      // ★ 期限切れで残0の行（古い付与回を「消化済み」にした行）は数えない。CSV は期限内の回しか登録しないので二重にならない。
+      //   これを数えると「期限切れをまとめて消化済み」を先に押した人が、期限内の残日数を取り込めなくなる。
       var mine=bl.filter(function(b){
+        if(b.expiresAt&&String(b.expiresAt)<todayYmd&&Number(b.remainDays)===0)return false;
         var bs=String(b.staffId==null?"":b.staffId).trim();
         if(bs===sid||bs===name||b.staffName===name)return true;
         var ns=null;if(deps.balanceStaffId){try{ns=deps.balanceStaffId(b);}catch(e){ns=null;}}
@@ -15764,22 +15767,26 @@ function getLeaveDates(req){
 function plBulkConsumeTargets(grants,todayYmd){
   return (Array.isArray(grants)?grants:[]).filter(function(g){return g&&g.staffId&&g.grantDate&&g.expiresAt&&g.expiresAt<todayYmd;}).map(function(g){
     var d=(g.auto&&typeof g.auto.autoGrantDays==="number")?g.auto.autoGrantDays:(typeof g.grantDays==="number"?g.grantDays:0);
-    return {staffId:String(g.staffId).trim(),staffName:g.staffName,grantNum:g.grantNum,grantDate:g.grantDate,expiresAt:g.expiresAt,grantedDays:d};
+    return {staffId:String(g.staffId).trim(),staffName:g.staffName,hireDate:g.hireDate,grantNum:g.grantNum,grantDate:g.grantDate,expiresAt:g.expiresAt,grantedDays:d};
   });
 }
 // targets: plBulkConsumeTargets の結果／freshStaff: 取り直した tc5_staff の一覧／freshBalStaffIds: 取り直した付与行の [正規化後の社員番号, 付与日] の配列
 function plBulkConsumePatch(targets,freshStaff,freshBalKeys,todayYmd,nowMs,nowIso){
   var have=Object.create(null);
   (freshBalKeys||[]).forEach(function(k){have[String(k[0]||"").trim()+"\u0000"+k[1]]=true;});
-  var ok=Object.create(null);
+  var ok=Object.create(null),cnt=Object.create(null);
+  (Array.isArray(freshStaff)?freshStaff:[]).forEach(function(s){var id=s&&String(s.employeeId||"").trim();if(id)cnt[id]=(cnt[id]||0)+1;});
   (Array.isArray(freshStaff)?freshStaff:[]).forEach(function(s){
-    if(!s||s.status==="退職")return;var id=String(s.employeeId||"").trim();if(id)ok[id+"\u0000"+s.name]=true;
+    if(!s||s.status==="退職")return;var id=String(s.employeeId||"").trim();
+    // 社員番号が重複していない・入社日が一覧を作ったときと同じ人だけ（入社日が直されていたら付与日が変わる）
+    if(id&&cnt[id]===1)ok[id+"\u0000"+s.name]=String(s.hireDate||"");
   });
   var patch={},skipped=0,seen=Object.create(null);
   (targets||[]).forEach(function(t){
     var k=t.staffId+"\u0000"+t.grantDate;
     // 期限内・登録済み・スタッフが変わった（退職・社員番号変更）・Firebase のキーに使えない社員番号は書かない
-    if(!(t.expiresAt<todayYmd)||have[k]||seen[k]||!ok[t.staffId+"\u0000"+t.staffName]||/[.#$\[\]\/]/.test(t.staffId)){skipped++;return;}
+    var hk=t.staffId+"\u0000"+t.staffName;
+    if(!(t.expiresAt<todayYmd)||have[k]||seen[k]||!(hk in ok)||(t.hireDate!=null&&ok[hk]!==String(t.hireDate))||/[.#$\[\]\/]/.test(t.staffId)){skipped++;return;}
     seen[k]=true;
     var id="plb_"+t.staffId+"_"+t.grantDate+"_"+nowMs;
     patch[id]={id:id,staffId:t.staffId,staffName:t.staffName,grantNum:t.grantNum,grantDate:t.grantDate,expiresAt:t.expiresAt,
@@ -15794,9 +15801,11 @@ function plBulkConsumeBarHtml(grants){
   var today=getTodayJSTStr(),t=plBulkConsumeTargets(grants,today),rest=(grants||[]).length-t.length;
   if(!t.length)return "";
   var names=Object.create(null);t.forEach(function(x){names[x.staffName]=1;});
+  // 打刻の過去分を読み込み中は自動算出が「判定不可」になりやすく、登録する付与日数が変わるため押せなくする
+  var ready=(typeof recordsHistoryReady!=="function")||recordsHistoryReady();
   return '<div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:10px 12px;margin-bottom:10px;">'
-    +'<button onclick="plBulkConsumeExpired()" '+(plBulkConsumeBusy?'disabled ':'')+'style="background:#475569;color:#fff;border:none;padding:9px 14px;border-radius:4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">'
-    +(plBulkConsumeBusy?'登録中…':'期限切れの未登録 '+t.length+'件（'+Object.keys(names).length+'名）をまとめて消化済みにする')+'</button>'
+    +'<button onclick="plBulkConsumeExpired()" '+((plBulkConsumeBusy||!ready)?'disabled ':'')+'style="background:#475569;color:#fff;border:none;padding:9px 14px;border-radius:4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">'
+    +(plBulkConsumeBusy?'登録中…':!ready?'打刻の過去分を読み込み中です（終わると押せます）':'期限切れの未登録 '+t.length+'件（'+Object.keys(names).length+'名）をまとめて消化済みにする')+'</button>'
     +'<div style="font-size:.74rem;color:#64748b;margin-top:6px;line-height:1.6;">期限が過ぎた付与回だけが対象です（残日数0で登録するため、残日数の合計は変わりません）。'
     +(rest>0?'<b>期限内の'+rest+'件は対象外</b>です（消化済みにすると残日数が0で確定してしまうため、1件ずつ「付与登録」か有給残日数CSVで登録してください）。':'')+'</div></div>';
 }

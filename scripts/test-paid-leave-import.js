@@ -327,6 +327,19 @@ async function bulkConsumeTests() {
   const rows = Object.values(r.patch);
   check("登録済み（同じ社員番号・付与日）と退職者は書かない", r.count === 2 && r.skipped === 2 && rows.every(x => x.staffId === "1001") && !rows.some(x => x.grantDate === "2016-10-01"));
   check("1件ずつの「消化済み」と同じ形（usedDays=付与日数・残0）", rows.every(x => x.remainDays === 0 && x.usedDays === x.grantedDays && x.source === "bulkConsumed"));
+  const tH = c2.T([Object.assign({}, grants[0], { hireDate: "2015/04/01" })], T);
+  check("入社日が変わったスタッフの行は書かない", c2.P(tH, [{ name: "山田太郎", employeeId: "1001", status: "在籍", hireDate: "2015/05/01" }], [], T, 1, "x").count === 0 && c2.P(tH, [{ name: "山田太郎", employeeId: "1001", status: "在籍", hireDate: "2015/04/01" }], [], T, 1, "x").count === 1);
+  check("社員番号が重複しているスタッフの行は書かない", c2.P(t, freshStaff.concat([{ name: "別人", employeeId: "1001", status: "在籍" }]), [], T, 1, "x").count === 0);
+  {
+    // 期限切れをまとめて消化済みにした後でも、期限内の残日数は有給残日数CSVで取り込める
+    const consumed = { a: { staffId: "1001", staffName: "山田太郎", grantDate: "2016-04-01", expiresAt: "2018-03-31", grantedDays: 11, usedDays: 11, remainDays: 0, source: "bulkConsumed" } };
+    const rc = run(HEAD + "\r\n,山田太郎,15,265,,\r\n", STAFF, consumed, T);
+    check("期限切れ・残0の行だけの人はCSVで取り込める", item(rc, 2).action === "add", msgs(rc, 2));
+    const left = { a: Object.assign({}, consumed.a, { remainDays: 2 }) };
+    check("期限切れでも残がある行があればスキップ（安全側）", item(run(HEAD + "\r\n,山田太郎,15,265,,\r\n", STAFF, left, T), 2).action === "skip");
+    const valid = { a: { staffId: "1001", grantDate: "2026-10-01", expiresAt: "2028-09-30", remainDays: 0 } };
+    check("期限内の行があればスキップ（残0でも）", item(run(HEAD + "\r\n,山田太郎,15,265,,\r\n", STAFF, valid, T), 2).action === "skip");
+  }
   check("社員番号が変わったスタッフの行は書かない", c2.P(t, [{ name: "山田太郎", employeeId: "9999", status: "在籍" }], [], T, 1, "x").count === 0);
   check("期限内の回が紛れ込んでも書かない（二重の防御）", c2.P([{ staffId: "1002", staffName: "佐藤花子", grantNum: 1, grantDate: "2026-03-15", expiresAt: "2028-03-14", grantedDays: 10 }], freshStaff, [], T, 1, "x").count === 0);
 
@@ -336,7 +349,7 @@ async function bulkConsumeTests() {
     const calls = [], alerts = [];
     const e = {
       csvImpCanWrite: () => opts.admin !== false, getTodayJSTStr: () => T, getPaidLeaveUnregistered: () => ({ grants }),
-      confirm: () => opts.confirm !== false, render() {}, showAlert: m => alerts.push(m), afterElevation: () => Promise.resolve(),
+      confirm: () => opts.confirm !== false, render() {}, recordsHistoryReady: () => opts.ready !== false, showAlert: m => alerts.push(m), afterElevation: () => Promise.resolve(),
       FB_URL: "https://x.invalid", CSVIMP: C, normalizePaidLeaveBalance: b => Object.assign({}, b), paidLeaveBalances: [],
       authFetch: async (url, o) => {
         const p = url.replace("https://x.invalid", ""), m = (o && o.method) || "GET";
@@ -360,6 +373,10 @@ async function bulkConsumeTests() {
     check("既存の行（期限内の佐藤さんの残8日）は変わらない", E.db["/tc5_paid_leave_balances.json"].keep.remainDays === 8);
     check("登録した件数を知らせる", /3件を消化済み/.test(E.alerts.join()), E.alerts.join());
     check("ボタンに期限内が対象外と出る", /期限内の2件は対象外/.test(E.c.bar(grants)), E.c.bar(grants));
+  }
+  {
+    const E = env({ staff: Object.assign({}, freshStaff), balances: null, ready: false });
+    check("打刻の過去分の読み込み中はボタンを押せない", /disabled/.test(E.c.bar(grants)) && /読み込み中/.test(E.c.bar(grants)));
   }
   {
     const E = env({ staff: Object.assign({}, freshStaff), balances: null, failGet: true });
