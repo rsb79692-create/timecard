@@ -133,5 +133,11 @@ check("賄いの記録は保存失敗の return より後", iC > exec.indexOf("�
 check("doPunch は _execPunch を直接呼ばない（必ず賄い確認を通る）", !/_execPunch\(/.test(dp));
 check("doPunch の3か所（短時間警告2つ・通常）が賄い確認を通る", (dp.match(/mealClockOutThenPunch\(type,d\)/g) || []).length === 3);
 
+console.log("■ 打刻画面の賄い入力欄・月初確認は非表示（2026-10-12 ユーザー指示）");
+check("MEAL_PUNCH_CARD_VISIBLE は false", /var MEAL_PUNCH_CARD_VISIBLE=false;/.test(html));
+check("打刻画面は MEAL_PUNCH_CARD_VISIBLE が真のときだけ賄い欄・月初確認を出す", /\+\(MEAL_PUNCH_CARD_VISIBLE\?_mealConfHtml\+_mealHtml:""\)/.test(html));
+check("賄い欄・月初確認をそのまま連結する箇所が残っていない", !/\+_mealConfHtml\s*\n\s*\+_mealHtml/.test(html));
+check("賄いデータは打刻画面で引き続き読む（退勤時の質問に必要）", /fetchJson\(FB_URL\+"\/tc5_meals\.json"\)/.test(fnSrc("function ensureStaffScopedData(", "plTrackFetch(_staffDataPromise);")));
+
 console.log("\n" + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);

@@ -4703,6 +4703,9 @@ var monthlyDaysEditing=false; // 月別出勤日数タブ: セル手入力フォ
 var MD_OVERRIDE_MONTHS={"2026-04":1,"2026-05":1};
 // 賄い（まかない）取得記録: tc5_meals/{employeeId}={staffId,staffName,dates:{"YYYY-MM-DD":{taken:true,updatedAt}}}
 var mealsData={}; // tc5_meals キャッシュ（employeeId→エントリ）。打刻/有給/月別出勤データには一切書き込まない
+// 打刻画面の「賄い入力」カードと「先月の賄い入力は済んでいますか？」（月初確認）を出すか。
+// 2026-10-12 ユーザー指示: 退勤時の質問（MEAL-CLOCKOUT）で毎日登録するため、どちらも非表示にする（処理は残す）。
+var MEAL_PUNCH_CARD_VISIBLE=false;
 var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-MM、render()またぎ保持）
 // 打刻画面 賄いフォームの開閉状態（端末に保存して次回も維持。初期=閉じる）
 var mealFormOpen=(function(){try{return TLS.getItem("tc5_meal_form_open")==="1";}catch(e){return false;}})();
@@ -6322,8 +6325,7 @@ function _renderInner(){
         :'<button onclick="showCorrectionRequestModal(staffName);" style="margin-top:8px;width:100%;background:#f1f5f9;color:#475569;border:1px solid #94a3b8;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">時刻修正申請</button>'
           +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
-      +_mealConfHtml
-      +_mealHtml
+      +(MEAL_PUNCH_CARD_VISIBLE?_mealConfHtml+_mealHtml:"") // 非表示（MEAL_PUNCH_CARD_VISIBLE）。賄いは退勤時に聞く
       +_mileageHtml
       +_monthHtml
       +'</div>';
@@ -8763,7 +8765,7 @@ function _renderInner(){
         +'<button class="btn-export" id="btn-meal-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
         // 見れば分かる説明（合計の意味・要タグの並び順）は削除し、入力先と確認列の意味だけ残す
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。入力・修正はスタッフ本人の打刻画面で行います（過去月も可）。'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。'
         +'<br>「確認」列は<b>'+meY+'年'+meM+'月分</b>についてスタッフが月初に回答した入力完了状況（✅確認済／⏳まだ／—未回答）。</div>'
         +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
         +'<span style="font-size:.8rem;color:#475569;font-weight:700;">'+meM+'月分 月初確認：</span>'
