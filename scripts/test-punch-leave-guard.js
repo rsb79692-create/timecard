@@ -104,7 +104,7 @@ async function runExec(type, leaveApproved, opts) {
     punchOutboxFlush: () => { calls.flush++; },
     saveRecord: () => { calls.save++; },
     showAlert: (m) => { calls.alert.push(m); },
-    render: () => {}, faceCamAfterPunch: () => {}, faceCamClose: () => {},
+    render: () => {}, faceCamAfterPunch: () => {}, mealAskAfterClockOut: () => {}, faceCamClose: () => {},
     generateRecordId: () => "ev-1", fmtDateKey: (d) => d.toISOString().slice(0, 10),
     fmtTime: () => "09:00", fmtTimeSec: () => "09:00:00", getCurrentWorkFacility: () => "本店",
     _lsSet: () => {}, setTimeout: () => 0, clearTimeout: () => {},

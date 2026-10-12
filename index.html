@@ -1053,6 +1053,38 @@ function mealToggleDate(eid,ym,ds){
   render(); // 即時反映
   mealSaveEntry(eid);
 }
+// 退勤の打刻直後に、その日の賄いを取ったかを聞く（「賄い 要」のスタッフだけ）。
+// ★ 退勤の端末保存・画面の打刻済み表示の「後」に呼ぶ。打刻の条件にしない・待たない（閉じても退勤はそのまま）。
+//   「はい」でその日を取得ありにする（既にONなら聞かない）。「いいえ」は何も書かない（後から賄いカードで直せる）。
+//   賄いデータを読めていないときは聞かない（全体PUTで他の日を消さないため。書込みは mealSaveEntry と同じ eid 単位）。
+function mealAskAfterClockOut(name,ds){
+  try{
+    if(viewerMode||!mealsLoaded||!name||!ds)return;
+    var so=staffList.find(function(s){return s&&s.name===name;});
+    if(!so||!so.mealRequired)return;
+    var eid=String(resolveStaffId(name)||"").trim();
+    if(!eid||!/^[A-Za-z0-9_-]+$/.test(eid))return;
+    var ym=ds.substring(0,7);
+    if(!mealEditable(ym))return;
+    var cur=mealsData[eid]&&mealsData[eid].dates&&mealsData[eid].dates[ds];
+    if(cur&&cur.taken)return;
+    var m=parseInt(ds.substring(5,7),10),dd=parseInt(ds.substring(8,10),10);
+    showModal({title:"🍚 賄いの確認",message:name+" さん\n"+m+"月"+dd+"日、賄いを食べましたか？",alertOnly:false,okLabel:"はい",cancelLabel:"いいえ",
+      onOK:function(){
+        if(!mealsLoaded)return;
+        var nm=mealStaffNameById(eid)||name;
+        if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
+        if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
+        if(mealsData[eid].dates[ds]&&mealsData[eid].dates[ds].taken)return;
+        mealsData[eid].dates[ds]={taken:true,updatedAt:new Date().toISOString()};
+        mealsData[eid].staffName=nm;
+        mealSaveEntry(eid);
+        render();
+      },
+      onCancel:function(){}
+    });
+  }catch(e){console.warn("[meal] ask after clockOut failed",e);}
+}
 // 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
 function mealSelectAttendance(eid,ym){
   if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
@@ -3809,7 +3841,7 @@ function showModal(opts){
   var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#0f172a;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
   var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
   function close(){if(ov.parentNode)document.body.removeChild(ov);}
-  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
+  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent=opts.cancelLabel||"キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
   var ok=document.createElement("button");ok.textContent=opts.okLabel||"OK";ok.style.cssText="flex:1;background:var(--brand);color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
   card.appendChild(row);ov.appendChild(card);
   ov.onclick=function(e){if(e.target===ov){close();if(opts.onCancel)opts.onCancel();}};
@@ -10805,6 +10837,8 @@ async function _execPunch(type,d){
   punchOutboxFlush("punch");
   // ⑤ 朝の温度（MONTHLY-DOCS・出勤の確定と送信開始の後）。★ 待たない。閉じても出勤はそのまま。
   if(_mdPost)mdocAfterClockIn(_mdPost,nr);
+  // ⑥ 賄いの確認（退勤の確定後・「賄い 要」のスタッフだけ）。★ 待たない。閉じても退勤はそのまま。
+  if(type==="clockOut")mealAskAfterClockOut(nr.staff,nr.date);
 }
 function doPunch(type){
   // A. 既存チェック
