@@ -5859,7 +5859,8 @@ function _renderInner(){
       +(firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
       :(firebaseReady?'':''));
-    app.innerHTML=((!urlToken||isAllToken)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()">管理者メニュー</button>':'')
+    // 穂乃味は施設URLでは出さない（従来どおり）。他社は施設URLの打刻トップにも出す（2026-10-13 ユーザー指示）。
+    app.innerHTML=((!urlToken||isAllToken||!TENANT.legacy)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()"'+(TENANT.legacy?'':' style="margin-bottom:10px;"')+'>管理者メニュー</button>':'')
       +tenantBrandHeaderHtml()
       // 穂乃味はロゴと日付・時計を横に並べる（縦に積まないので画面の高さはほぼ変わらない）
       +(TENANT.legacy
@@ -8868,7 +8869,7 @@ function _renderInner(){
       +'<div class="admin-title" style="font-size:1.1rem;font-weight:900;">管理者メニュー'+(demoMode?' <span style="background:#f59e0b;color:#fff;font-size:.62rem;padding:2px 8px;border-radius:10px;vertical-align:middle;font-weight:700;">デモ</span>':"")+'</div></div>'
       +(demoMode
         ?'<button class="admin-close-btn" data-demo-allow="1" style="background:#ede9fe;color:#5b21b6;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #c4b5fd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="openStaffDemoPicker()">🧪 スタッフ画面をテスト</button>'
-        :'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="screen=\'home\';render();">← 閉じる</button>')
+        :'<button class="admin-close-btn" style="background:#dde1e7;color:#8796a7;font-size:.82rem;padding:7px 14px;border-radius:2px;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;font-weight:700;" onclick="closeAdminMenu()">← 閉じる</button>')
       +'</div>'
       +_installHTML
       +_unapvHTML
@@ -10238,6 +10239,21 @@ function goHome(){
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
   staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
+  screen="home";render();
+}
+// ★ 新会社の施設端末では、管理者セッションを共用端末に残さない。管理者トークンは端末に保存していない
+//   （_saveAnonSession は k だけ）ので、再読み込みで保存済みの施設端末トークン（k）へ戻る。
+//   残すと、次の人の「PIN新規登録」が管理者権限で送られ、登録済みの他人のPINを上書きできてしまう。
+function closeAdminMenu(){
+  //   管理者URLで入った画面は再読み込みすると管理画面へ戻るだけなので、従来どおりホームへ戻す。
+  //   保存の通信・承認の保留書込みの途中は再読み込みで失われるため、閉じずに待ってもらう（ホームへも戻さない）。
+  if(!TENANT.legacy&&!adminTokenValid&&tenantKioskCredential()){
+    var _busy=true;
+    //   承認の結果不明（_apvHasUnknown）は既存の案内どおり再読み込みで解消する状態なので待たない（待つと閉じられなくなる）。
+    try{_busy=_appWritesInFlight>0||savingCount>0||_apvBusyCount>0||_apvPutInFlight>0||(_apvPutDeferred&&!_apvHasUnknown());}catch(e){_busy=true;}
+    if(_busy){showAlert("保存中です。\n少し待ってから、もう一度「閉じる」を押してください。");return;}
+    location.reload();return;
+  }
   screen="home";render();
 }
 function cancelPin(){
