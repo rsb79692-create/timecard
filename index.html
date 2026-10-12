@@ -3751,6 +3751,11 @@ body.has-mode-banner{padding-top:var(--mode-banner-h,56px);}
 body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .records-th{position:sticky;z-index:2;background:var(--head-bg);box-shadow:0 2px 4px rgba(0,0,0,.08);}
 .records-th.sticky-name-col{z-index:3;}
+/* 勤怠一覧の操作行（日付送り・年月日・人数・休憩表示・一括承認）。管理者バーの直下に固定し、表の見出しはさらにその下へ固定する。
+   top は描画後に _recStickyTops() が実測して入れる。下の余白は margin ではなく padding（固定中に表が透けて見えないように）。 */
+.rec-toolbar{position:sticky;z-index:4;background:var(--card-bg);padding:4px 0 10px;}
+/* 高さの低い画面（スマホ横向き等）は管理者バーだけで画面の大半を使うため、操作行は固定しない（一覧が見えなくなるのを防ぐ） */
+@media (max-height:500px){.rec-toolbar{position:static;}}
 /* テーブル共通 */
 .time-cell:hover{background:rgba(30,64,175,.09);border-radius:1px;}
 /* 勤怠一覧テーブル */
@@ -5193,6 +5198,16 @@ function _modeBannerH(){
   var el=document.getElementById("mode-banner");
   return el?el.offsetHeight:0;
 }
+// 勤怠一覧：管理者バー → 操作行（.rec-toolbar）→ 表の見出し（.records-th）の順に積んで固定する top を実測で入れる。
+// 画面幅が変わると折り返しで高さが変わるため、resize でも測り直す（登録はモジュールスコープで1回だけ）。
+function _recStickyTops(){
+  var sBar=document.querySelector('.admin-sticky-bar');
+  var top=(sBar?sBar.offsetHeight:0)+_modeBannerH();
+  var tb=document.querySelector('.rec-toolbar');
+  if(tb){tb.style.top=top+'px';if(getComputedStyle(tb).position==="sticky")top+=tb.offsetHeight;}
+  document.querySelectorAll('.records-th').forEach(function(th){th.style.top=top+'px';});
+}
+window.addEventListener("resize",function(){if(document.querySelector('.rec-toolbar'))_recStickyTops();});
 // 管理者デモ: 「本番データを書き換える操作」だけを無効化する。
 // 閲覧・画面遷移・絞り込み・日付移動・プレビュー・再取得・CSVは通常どおり操作できる。
 // これはUI前段ガードであり、認可の正本ではない（最終防波堤は authFetch）。
@@ -6867,7 +6882,7 @@ function _renderInner(){
       if(showUnapprovedOnly){
         var unapvRows=unapvList.map(function(p){var dt=p.date,nm=p.staff;var sr=records.filter(function(r){return r.date===dt&&r.staff===nm&&!r.deleted;});var cin=sr.find(function(r){return r.type==="clockIn";});var cout=sr.find(function(r){return r.type==="clockOut";});var ms=calcMs(sr);var worked=toHM(ms);var hasPunch=sr.length>0;var validation=validateAttendanceRecord(nm,dt,sr);var dtParts=dt.split('-');var dtDisp=parseInt(dtParts[0])+'年'+parseInt(dtParts[1])+'月'+parseInt(dtParts[2])+'日';var dtShort=parseInt(dtParts[1])+'/'+parseInt(dtParts[2]);var warnTxt=(hasPunch&&!validation.valid)?'⚠'+esc(validation.reason):'';var cinEdited=(cin&&cin.editedByAdmin&&cin.editedFields&&cin.editedFields.clockIn);var cinPrev=cinEdited?(cin.editHistory&&cin.editHistory.length?cin.editHistory[0].time:cin.editedFrom)||"":"";var cinHist=cinEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(&#39;'+escJs(nm)+'&#39;,&#39;clockIn&#39;,&#39;'+escJs(cin?cin.id:"")+'&#39;)">修正前 '+esc(cinPrev||"?")+'</div>':"";var coutEdited=(cout&&cout.editedByAdmin&&cout.editedFields&&cout.editedFields.clockOut);var coutPrev=coutEdited?(cout.editHistory&&cout.editHistory.length?cout.editHistory[0].time:cout.editedFrom)||"":"";var coutHist=coutEdited?'<div style="font-size:.74rem;line-height:1.1;color:#92400e;margin-top:1px;cursor:pointer;" onclick="showEditHistoryModal(&#39;'+escJs(nm)+'&#39;,&#39;clockOut&#39;,&#39;'+escJs(cout?cout.id:"")+'&#39;)">修正前 '+esc(coutPrev||"?")+'</div>':"";return'<tr style="border-bottom:1px solid #e9ecef;"><td class="ua-date" style="padding:6px 8px;font-size:.88rem;font-weight:700;white-space:nowrap;color:#374151;">'+dtDisp+'</td><td class="ua-name" style="padding:6px 4px;font-weight:700;font-size:1.08rem;white-space:nowrap;"><div class="ua-date-sp">'+dtShort+'</div><span style="color:var(--brand);cursor:pointer;text-decoration:underline;" onclick="openStaffDetail(&#39;'+escJs(nm)+'&#39;,&#39;admin&#39;,unapvOrderCache)">'+esc(nm).replace(/・/g,"・<wbr>")+'</span>'+(warnTxt?'<div class="ua-warn-sp">'+warnTxt+'</div>':'')+'</td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+esc(cin?cin.id:"")+'" data-nm="'+esc(nm)+'" data-type="clockIn" data-date="'+esc(dt)+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cin?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cin?esc(cin.time):"--:--")+'</span>'+cinHist+'</td><td style="padding:6px 8px;text-align:center;"><span class="time-cell" data-id="'+esc(cout?cout.id:"")+'" data-nm="'+esc(nm)+'" data-type="clockOut" data-date="'+esc(dt)+'" style="font-family:monospace;font-size:1.1rem;font-weight:700;color:'+(cout?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+(cout?esc(cout.time):"--:--")+'</span>'+coutHist+'</td><td class="ua-worked" style="padding:4px 6px;font-family:monospace;font-size:1.1rem;font-weight:700;text-align:center;color:'+(worked?"var(--brand)":"#c8ccd2")+';font-variant-numeric:tabular-nums;">'+(worked||"—")+'</td><td class="ua-act" style="padding:6px 4px;text-align:center;white-space:nowrap;">'+(hasPunch?(warnTxt?'<div class="ua-warn-pc" style="color:#dc2626;font-size:.65rem;font-weight:700;white-space:nowrap;margin-bottom:2px;">'+warnTxt+'</div>':"")+'<button class="btn-approve" data-nm="'+esc(nm)+'" data-dk="'+esc(dt)+'" style="background:#16a34a;color:#fff;border:none;font-size:.72rem;font-weight:700;padding:4px 8px;border-radius:2px;cursor:pointer;font-family:inherit;white-space:nowrap;">承認</button>':"")+'</td></tr>';}).join("");
         tc=_pendingCrqHTML+'<div class="admin-card admin-wrap rec-card">'
-          +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
+          +'<div class="rec-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
           +'<span style="color:#c62828;font-size:.88rem;font-weight:700;">未承認一覧 '+unapvList.length+'件</span>'
           +(recordsHistoryReady()?"":'<span style="color:#64748b;font-size:.78rem;">（全期間を集計中…）</span>')
           +'<button onclick="showUnapprovedOnly=false;render();" style="background:#c62828;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">✕ 未承認フィルター解除</button>'
@@ -6996,7 +7011,7 @@ function _renderInner(){
       var sdMOpts=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMo?' selected':'')+'>'+m+'月</option>';}).join('');
       var sdDOpts='';for(var sdi=1;sdi<=sdMaxDay;sdi++){sdDOpts+='<option value="'+sdi+'"'+(sdi===sdDy?' selected':'')+'>'+sdi+'日</option>';}
       tc=_pendingCrqHTML+'<div class="admin-card admin-wrap rec-card">'
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
+        +'<div class="rec-toolbar" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
         +'<button id="btn-date-prev" style="background:#dde1e7;border:1px solid #adb5bd;border-radius:2px;padding:4px 10px;font-size:1rem;cursor:pointer;line-height:1;">◀</button>'
         +'<select id="sd-y" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdYOpts+'</select>'
         +'<select id="sd-m" style="font-size:.9rem;border:1px solid #adb5bd;border-radius:2px;padding:3px 4px;">'+sdMOpts+'</select>'
@@ -8873,12 +8888,8 @@ function _renderInner(){
     var bdNext=document.getElementById("btn-date-next");
     if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
 
-    // thead sticky: admin-sticky-bar の高さを測って top を設定
-    if(adminTab==="records"){
-      var sBar=document.querySelector('.admin-sticky-bar');
-      var sBarH=(sBar?sBar.offsetHeight:0)+_modeBannerH();
-      document.querySelectorAll('.records-th').forEach(function(th){th.style.top=sBarH+'px';});
-    }
+    // thead sticky: admin-sticky-bar（と勤怠一覧の操作行）の高さを測って top を設定
+    if(adminTab==="records")_recStickyTops();
 
     // 勤怠一覧タブ：時刻セルのインライン編集
     attachTimeCellHandlers();
