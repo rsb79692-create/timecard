@@ -1008,6 +1008,21 @@ function mealStaffNameById(eid){
   for(var i=0;i<staffList.length;i++){if((staffList[i].employeeId||"").trim()===eid)return staffList[i].name||"";}
   return "";
 }
+// 氏名→その日の賄い取得の有無（CSV用。社員番号で tc5_meals を引く。社員番号が無ければ false）
+function mealTakenByName(name,ds){
+  var so=staffList.find(function(s){return s&&s.name===name;});
+  var eid=String((so&&so.employeeId)||"").trim();
+  var e=eid&&mealsData[eid];
+  return !!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);
+}
+// 氏名→その月（YYYY-MM）の賄い回数（CSV用）
+function mealCountByName(name,ym){
+  var so=staffList.find(function(s){return s&&s.name===name;});
+  var eid=String((so&&so.employeeId)||"").trim();
+  var e=eid&&mealsData[eid];
+  if(!e||!e.dates)return 0;
+  return Object.keys(e.dates).filter(function(ds){return ds.substring(0,7)===ym&&e.dates[ds]&&e.dates[ds].taken;}).length;
+}
 // employeeId 単位で tc5_meals/{eid} を全量PUT（他スタッフ・他keyに影響させない）
 function mealSaveEntry(eid){
   if(demoWriteBlocked())return;
@@ -6663,6 +6678,7 @@ function _renderInner(){
         +'<th style="'+thS+'text-align:right;">勤務日数</th>'
         +'<th style="'+thS+'text-align:right;">総労働時間</th>'
         +'<th style="'+thS+'text-align:right;">残業時間</th>'
+        +'<th style="'+thS+'text-align:right;">賄い回数</th>'
         +'</tr>';
       tbodyHtmlP=activeStaffP.map(function(s,i){
         var nm=s.name;
@@ -6678,6 +6694,7 @@ function _renderInner(){
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;">'+days.length+'日</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:var(--brand);">'+(toHM(ms)||"0:00")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:'+(ot>0?"#dc2626":"#8796a7")+'">'+(ot>0?toHM(ot):"—")+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:right;font-family:monospace;color:#15803d;">'+(mealsLoaded?mealCountByName(nm,selMonth):"…")+'</td>'
           +'</tr>';
       }).join("");
     } else {
@@ -6689,6 +6706,7 @@ function _renderInner(){
         +'<th style="'+thS+'">退勤時刻</th>'
         +'<th style="'+thS+'text-align:right;">労働時間</th>'
         +'<th style="'+thS+'">拠点</th>'
+        +'<th style="'+thS+'text-align:center;">賄い</th>'
         +'</tr>';
       var DAYS_P=["日","月","火","水","木","金","土"];
       var dRowsP=[];
@@ -6718,6 +6736,7 @@ function _renderInner(){
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;color:#dc2626;">'+esc(r.cout)+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;font-family:monospace;text-align:right;color:var(--brand);">'+(r.ms>0?toHM(r.ms):"—")+'</td>'
           +'<td style="padding:8px 12px;font-size:.85rem;color:#475569;">'+esc(r.loc)+'</td>'
+          +'<td style="padding:8px 12px;font-size:.85rem;text-align:center;color:#15803d;font-weight:700;">'+(!mealsLoaded?"…":mealTakenByName(r.name,r.date)?"●":"")+'</td>'
           +'</tr>';
       }).join("");
     }
@@ -6753,12 +6772,14 @@ function _renderInner(){
       var chkKeys={};var unapproved=0;
       chkRecs.forEach(function(r){var k=r.date+"__"+r.staff;if(!chkKeys[k]){chkKeys[k]=true;if(!approvals[k])unapproved++;}});
       if(unapproved>0){showAlert("未承認のデータが"+unapproved+"件あります。すべて承認してからCSVを出力してください。");return;}
+      // ★ 賄いの列（日次「賄い」・月次「賄い回数」）は tc5_meals から作る。読めていないまま出すと全員0になるため出力しない。
+      if(!mealsLoaded){showAlert("賄いのデータを読み込んでいます。\n\n数秒お待ちのうえ、もう一度お試しください。");if(typeof ensureAdminData==="function")ensureAdminData();return;}
       if(csvPreviewType==="daily"){
         var mRe2=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs2=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
         var DAYS2=["日","月","火","水","木","金","土"];
-        var hdr2="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,休憩2開始_打刻_,休憩2終了_打刻_,休憩回数,休憩回数超過,休憩合計,実働時間,登録施設,出勤先施設,応援勤務,賃金種別";
+        var hdr2="氏名,年月,日付,曜日,出勤時刻_打刻_,退勤時刻_打刻_,休憩1開始_打刻_,休憩1終了_打刻_,休憩2開始_打刻_,休憩2終了_打刻_,休憩回数,休憩回数超過,休憩合計,実働時間,登録施設,出勤先施設,応援勤務,賃金種別,賄い";
         var rows2=[];
         activeNs2.forEach(function(nm){
           var sr2=mRe2.filter(function(r){return r.staff===nm;});
@@ -6778,7 +6799,7 @@ function _renderInner(){
               cp2?cp2.start.time:"",cp2&&cp2.end?cp2.end.time:"",
               brkCount>0?brkCount:"",brkOver,
               brkTot>0?toHM(brkTot):"",toHM(calcMs(dr2)),
-              (cin2&&cin2.homeFacility)||"",(cin2&&cin2.workFacility)||"",(cin2&&cin2.isSupportWork)?"応援":"通常",(cin2&&cin2.wageType)||""].join(","));
+              (cin2&&cin2.homeFacility)||"",(cin2&&cin2.workFacility)||"",(cin2&&cin2.isSupportWork)?"応援":"通常",(cin2&&cin2.wageType)||"",mealTakenByName(nm,dk)?"1":""].join(","));
           });
         });
         dlCSV(hdr2+"\n"+rows2.join("\n"),TENANT.csvPrefix+"_日次勤怠_"+selMonth+".csv");
@@ -6786,7 +6807,7 @@ function _renderInner(){
         var mRe3=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
         var activeNs3=staffList.filter(function(s){return !s.status||s.status==="在籍";})
           .sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");}).map(function(s){return s.name;});
-        var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数";
+        var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数,賄い回数";
         var rows3=activeNs3.map(function(nm){
           var sr3=mRe3.filter(function(r){return r.staff===nm;});
           var cinRecs3=sr3.filter(function(r){return r.type==="clockIn";});
@@ -6794,7 +6815,7 @@ function _renderInner(){
           var ms3=dys.reduce(function(s,dk){return s+calcMs(sr3.filter(function(r){return r.date===dk;}));},0);
           // 応援日数は応援集計タブ／応援CSVと同じ定義（施設変更で他施設へ移った日も含む）
           var supDys=countSupportDays(sr3,nm);
-          return[nm,selMonth,toHM(ms3)||"0:00",dys.length,supDys].join(",");
+          return[nm,selMonth,toHM(ms3)||"0:00",dys.length,supDys,mealCountByName(nm,selMonth)].join(",");
         });
         dlCSV(hdr3+"\n"+rows3.join("\n"),TENANT.csvPrefix+"_月次勤怠_"+selMonth+".csv");
       }
@@ -7052,7 +7073,6 @@ function _renderInner(){
         +'<button class="btn-export" id="btn-csv-daily" style="width:auto;padding:10px 24px;">📥 日次CSV</button>'
         +'<button class="btn-export" id="btn-csv-monthly" style="width:auto;padding:10px 24px;">📥 月次CSV</button>'
         +'<button class="btn-export" id="btn-csv-staff-detail" style="width:auto;padding:10px 24px;">📥 人別明細CSV</button>'
-        +'<button class="btn-export" id="btn-csv-meal" style="width:auto;padding:10px 24px;">📥 賄いCSV</button>'
         +'</div>'
         +'</div>'
         +reviewCardHTML
@@ -8755,7 +8775,7 @@ function _renderInner(){
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
         +'</div>'
         // 2026-10-12: 月初確認（確認列・集計）を削除。CSVは「CSV出力」タブの「賄いCSV」へ移した。
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは「CSV出力」タブから出力できます。</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは「CSV出力」タブの日次CSV（賄い）・月次CSV（賄い回数）に入ります。</div>'
         +meTableHtml
         +'</div>';
     }
@@ -9312,33 +9332,7 @@ function _renderInner(){
     if(meMonthSel)meMonthSel.onchange=function(){mealAdminMonth=meMonthSel.value;render();};
     var meNotReqChk=document.getElementById("chk-meal-notreq");
     if(meNotReqChk)meNotReqChk.onchange=function(){mealShowNotRequired=meNotReqChk.checked;render();};
-    // 賄いCSV（「CSV出力」タブ。対象月は同タブの月セレクタ selMonth）。2026-10-12 賄い一覧タブから移設・月初確認の列を削除。
-    // 対象: 在籍の「賄い 要」のスタッフ ＋ その月に賄いの記録がある在籍スタッフ（区分が「不要」でも記録は出す）。
-    var meCsvBtn=document.getElementById("btn-csv-meal");
-    if(meCsvBtn)meCsvBtn.onclick=function(){
-      if(!mealsLoaded){showAlert("賄いのデータを読み込んでいます。\n\n数秒お待ちのうえ、もう一度お試しください。");if(typeof ensureAdminData==="function")ensureAdminData();return;}
-      var ym=selMonth;
-      if(!/^\d{4}-\d{2}$/.test(ym||""))return;
-      var cy=parseInt(ym.split("-")[0],10);
-      var cm=parseInt(ym.split("-")[1],10);
-      var cLast=new Date(cy,cm,0).getDate();
-      function _tk(eid,d){var e=mealsData[eid];var ds=cy+"-"+pad(cm)+"-"+pad(d);return !!(eid&&e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);}
-      var cStaff=staffList.filter(function(s){
-          if(s.status==="退職")return false;
-          if(s.mealRequired)return true;
-          var eid=(s.employeeId||"").trim();for(var d=1;d<=cLast;d++){if(_tk(eid,d))return true;}return false;
-        })
-        .sort(function(a,b){var ar=a.mealRequired?0:1,br=b.mealRequired?0:1;if(ar!==br)return ar-br;return (a.yomi||"").localeCompare(b.yomi||"","ja");});
-      var days=[];for(var d=1;d<=cLast;d++)days.push(d+"日");
-      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計";
-      var rowsMeal=cStaff.map(function(s){
-        var eid=(s.employeeId||"").trim();
-        var tot=0;var cells=[];
-        for(var d=1;d<=cLast;d++){var tk=_tk(eid,d);if(tk)tot++;cells.push(tk?"1":"");}
-        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot]).join(",");
-      });
-      dlCSV(hdrMeal+"\n"+rowsMeal.join("\n"),TENANT.csvPrefix+"_賄い一覧_"+ym+".csv");
-    };
+    // 賄いは「CSV出力」タブの日次CSV（「賄い」列）・月次CSV（「賄い回数」列）に含める（2026-10-12 ユーザー指示。単独の賄いCSVは廃止）。
 
     // 朝出勤確認 — 最新状態に更新
     var mRefBtn=document.getElementById("btn-morning-refresh");

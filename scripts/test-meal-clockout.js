@@ -144,12 +144,25 @@ const MEALS_TAB = fnSrc('if(adminTab==="meals"){', "// 移動距離申請（独�
 check("賄い一覧に「確認」列が無い", !/>確認<\/th>/.test(MEALS_TAB) && !/meConfStatus/.test(MEALS_TAB));
 check("賄い一覧に月初確認の集計が無い", !/月初確認：/.test(MEALS_TAB));
 check("賄い一覧に CSV ボタンが無い", !/btn-meal-csv/.test(html));
-const EXPORT_TAB = fnSrc('if(adminTab==="export"){', 'if(adminTab==="edit"){');
-check("CSV出力タブに「賄いCSV」ボタンがある", /id="btn-csv-meal"[^>]*>📥 賄いCSV</.test(EXPORT_TAB));
-const MEAL_CSV = fnSrc('var meCsvBtn=document.getElementById("btn-csv-meal");', "// 朝出勤確認 — 最新状態に更新");
-check("賄いCSVの見出しに月初確認が無い", /hdrMeal="氏名,賄い区分,社員番号,"\+days\.join\(","\)\+",合計";/.test(MEAL_CSV) && !/月初確認/.test(MEAL_CSV.replace(/\/\/.*$/mg, "")));
-check("賄いCSVの対象月は CSV出力タブの月（selMonth）", /var ym=selMonth;/.test(MEAL_CSV));
-check("賄いデータ未取得なら出力しない", /if\(!mealsLoaded\)\{showAlert/.test(MEAL_CSV));
+console.log("■ 賄いは日次・月次CSVに入れる（単独の賄いCSVは廃止。2026-10-12 ユーザー指示）");
+check("単独の賄いCSVボタンが無い", !/btn-csv-meal/.test(html));
+const DL = fnSrc('if(dlBtn)dlBtn.onclick=function(){', 'if(screen==="admin"){');
+check("日次CSVの見出しの最後が「賄い」", /,賃金種別,賄い";/.test(DL));
+check("日次CSVの行に賄い（1/空）", /mealTakenByName\(nm,dk\)\?"1":""\]\.join/.test(DL));
+check("月次CSVの見出しの最後が「賄い回数」", /var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数,賄い回数";/.test(DL));
+check("月次CSVの行に賄い回数", /supDys,mealCountByName\(nm,selMonth\)\]\.join/.test(DL));
+check("賄いデータ未取得なら日次・月次CSVを出さない", DL.indexOf("if(!mealsLoaded){showAlert") > 0 && DL.indexOf("if(!mealsLoaded){showAlert") < DL.indexOf('if(csvPreviewType==="daily"){'));
+{
+  const H = fnSrc("function mealTakenByName(", "// employeeId 単位で tc5_meals/{eid} を全量PUT");
+  const c2 = { staffList: [{ name: "山田", employeeId: "E1" }, { name: "番号なし", employeeId: "" }],
+    mealsData: { E1: { dates: { "2026-10-01": { taken: true }, "2026-10-05": { taken: true }, "2026-09-30": { taken: true }, "2026-10-06": { taken: false } } } } };
+  vm.createContext(c2); vm.runInContext(H, c2);
+  check("mealTakenByName：取得ありの日は true", c2.mealTakenByName("山田", "2026-10-01") === true);
+  check("mealTakenByName：記録の無い日・taken:false は false", c2.mealTakenByName("山田", "2026-10-02") === false && c2.mealTakenByName("山田", "2026-10-06") === false);
+  check("mealTakenByName：社員番号なし・未登録は false", c2.mealTakenByName("番号なし", "2026-10-01") === false && c2.mealTakenByName("誰か", "2026-10-01") === false);
+  check("mealCountByName：その月の取得ありだけ数える", c2.mealCountByName("山田", "2026-10") === 2 && c2.mealCountByName("山田", "2026-09") === 1);
+  check("mealCountByName：記録が無ければ 0", c2.mealCountByName("番号なし", "2026-10") === 0);
+}
 
 console.log("\n" + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);
