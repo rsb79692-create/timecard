@@ -7052,6 +7052,7 @@ function _renderInner(){
         +'<button class="btn-export" id="btn-csv-daily" style="width:auto;padding:10px 24px;">📥 日次CSV</button>'
         +'<button class="btn-export" id="btn-csv-monthly" style="width:auto;padding:10px 24px;">📥 月次CSV</button>'
         +'<button class="btn-export" id="btn-csv-staff-detail" style="width:auto;padding:10px 24px;">📥 人別明細CSV</button>'
+        +'<button class="btn-export" id="btn-csv-meal" style="width:auto;padding:10px 24px;">📥 賄いCSV</button>'
         +'</div>'
         +'</div>'
         +reviewCardHTML
@@ -8690,16 +8691,9 @@ function _renderInner(){
         var e=mealsData[eid];
         return !!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);
       }
-      // 月初確認の状態（対象月＝表示中の月 mealAdminMonth）。賄い要スタッフのみ意味を持つ。
-      function meConfStatus(s){var eid=(s.employeeId||"").trim();if(!eid)return "none";return mealConfStatusOf(eid,mealAdminMonth);}
-      // 確認状況サマリは「賄い要・在籍」のみ集計（不要スタッフはバナー非表示のため除外）
-      var meReqStaffForConf=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;});
-      var meCD=0,meCP=0,meCN=0;
-      meReqStaffForConf.forEach(function(s){var _cst=meConfStatus(s);if(_cst==="done")meCD++;else if(_cst==="pending")meCP++;else meCN++;});
       // スタイルは有給申請一覧（_plTh/_plTd/_plName）・有給取得計画（_lpTh/_lpTd/_lpName）と同一値に統一
       // （th padding 7px 8px / td padding 8px 8px / font-size .82rem / 氏名は太字にしない）
       // 日別セルだけは31列あるため左右paddingを4pxに詰める（縦paddingと文字サイズは共通値）
-      var _meConfTd='padding:8px 8px;font-size:.82rem;text-align:center;white-space:nowrap;border-left:1px solid #e5e7eb;';
       var _meTh='padding:7px 4px;font-weight:700;font-size:.82rem;color:#334155;white-space:nowrap;background:var(--head-bg2);border-bottom:2px solid var(--head-line2);';
       var _meTd='padding:8px 4px;font-size:.82rem;text-align:center;';
       var _meName='padding:8px 8px;font-size:.82rem;font-weight:400;white-space:nowrap;min-width:110px;'; // 氏名は太字にしない（有給申請一覧の _plName と同じ）
@@ -8729,30 +8723,27 @@ function _renderInner(){
           +'<td style="'+_meName+meStickyCell+'background:'+rowBg+';color:#0f172a;">'+esc(s.name)+' '+reqTag+noIdTag+'</td>'
           +tds
           +'<td style="'+_meTot+'">'+(rowTotal>0?rowTotal:'')+'</td>'
-          +'<td style="'+_meConfTd+'">'+(!s.mealRequired?'<span style="color:#cbd5e1;">—</span>':(function(){var _cst=meConfStatus(s);return _cst==="done"?'<span style="color:#15803d;font-weight:700;">✅ 確認済</span>':_cst==="pending"?'<span style="color:#b91c1c;font-weight:700;">⏳ まだ</span>':'<span style="color:#94a3b8;">— 未回答</span>';})())+'</td>'
           +'</tr>';
       }).join("");
       var meDayHead='';
       for(var hd=1;hd<=meLastDay;hd++){var _hdow=new Date(meY,meM-1,hd).getDay();meDayHead+='<th style="'+_meTh+_medcol+'text-align:center;color:'+(_hdow===0?"#dc2626":_hdow===6?"#1e40af":"#334155")+';">'+hd+'</th>';}
       var meFoot='';
       for(var fd=1;fd<=meLastDay;fd++){meFoot+='<td style="'+_meTd+_medcol+'font-weight:700;color:#334155;background:#eef1f5;border-top:2px solid #94a3b8;">'+(meDayTotals[fd]>0?meDayTotals[fd]:'')+'</td>';}
-      var meMinW=110+meLastDay*26+140; // 氏名110 + 日別26/列 + 合計/確認140（文字サイズ縮小に合わせて下限も縮小）
+      var meMinW=110+meLastDay*26+60; // 氏名110 + 日別26/列 + 合計60（2026-10-12 月初確認の列を削除）
       var meTableHtml=meStaff.length
         ?'<div style="overflow-x:auto;border:1px solid #cbd5e1;border-radius:8px;">'
           +'<table style="width:100%;border-collapse:collapse;min-width:'+meMinW+'px;">'
           +'<thead><tr>'
-          // 氏名・合計・確認の各列は本文セルと同じ左右padding 8px に揃える（日別セルの4pxは適用しない）
+          // 氏名・合計の各列は本文セルと同じ左右padding 8px に揃える（日別セルの4pxは適用しない）
           +'<th style="'+_meTh+'text-align:left;padding:7px 8px;'+meStickyHead+'">氏名</th>'
           +meDayHead
           +'<th style="'+_meTh+'text-align:right;padding:7px 8px;background:#bbf7d0;color:#15803d;border-left:2px solid #86efac;">合計</th>'
-          +'<th style="'+_meTh+'text-align:center;padding:7px 8px;border-left:1px solid #cbd5e1;">確認</th>'
           +'</tr></thead>'
           +'<tbody>'+meRows+'</tbody>'
           +'<tfoot><tr>'
           +'<td style="'+_meName+meStickyCell+'background:#eef1f5;border-top:2px solid #94a3b8;color:#334155;">日別計</td>'
           +meFoot
           +'<td style="'+_meTot+'border-top:2px solid #94a3b8;">'+(meGrand>0?meGrand:'')+'</td>'
-          +'<td style="'+_meConfTd+'border-top:2px solid #94a3b8;background:#eef1f5;"></td>'
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません'+(meReqCount===0?'（「賄い 要」のスタッフが未設定です。スタッフ管理で設定してください）':'')+'</div>';
@@ -8762,17 +8753,9 @@ function _renderInner(){
         +'<select id="sel-meal-month" style="width:auto;min-width:130px;padding:9px 12px;font-size:15px;">'+meMonthOpts+'</select>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
-        +'<button class="btn-export" id="btn-meal-csv" style="width:auto;padding:9px 20px;margin-left:auto;">📥 CSV出力</button>'
         +'</div>'
-        // 見れば分かる説明（合計の意味・要タグの並び順）は削除し、入力先と確認列の意味だけ残す
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。'
-        +'<br>「確認」列は<b>'+meY+'年'+meM+'月分</b>についてスタッフが月初に回答した入力完了状況（✅確認済／⏳まだ／—未回答）。</div>'
-        +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px;align-items:center;">'
-        +'<span style="font-size:.8rem;color:#475569;font-weight:700;">'+meM+'月分 月初確認：</span>'
-        +'<span style="font-size:.78rem;background:#dcfce7;color:#15803d;font-weight:700;border-radius:10px;padding:2px 10px;">✅ 確認済 '+meCD+'</span>'
-        +'<span style="font-size:.78rem;background:#fee2e2;color:#b91c1c;font-weight:700;border-radius:10px;padding:2px 10px;">⏳ まだ '+meCP+'</span>'
-        +'<span style="font-size:.78rem;background:#f1f5f9;color:#64748b;font-weight:700;border-radius:10px;padding:2px 10px;">— 未回答 '+meCN+'</span>'
-        +'</div>'
+        // 2026-10-12: 月初確認（確認列・集計）を削除。CSVは「CSV出力」タブの「賄いCSV」へ移した。
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは「CSV出力」タブから出力できます。</div>'
         +meTableHtml
         +'</div>';
     }
@@ -9329,25 +9312,32 @@ function _renderInner(){
     if(meMonthSel)meMonthSel.onchange=function(){mealAdminMonth=meMonthSel.value;render();};
     var meNotReqChk=document.getElementById("chk-meal-notreq");
     if(meNotReqChk)meNotReqChk.onchange=function(){mealShowNotRequired=meNotReqChk.checked;render();};
-    var meCsvBtn=document.getElementById("btn-meal-csv");
+    // 賄いCSV（「CSV出力」タブ。対象月は同タブの月セレクタ selMonth）。2026-10-12 賄い一覧タブから移設・月初確認の列を削除。
+    // 対象: 在籍の「賄い 要」のスタッフ ＋ その月に賄いの記録がある在籍スタッフ（区分が「不要」でも記録は出す）。
+    var meCsvBtn=document.getElementById("btn-csv-meal");
     if(meCsvBtn)meCsvBtn.onclick=function(){
-      if(!mealAdminMonth)mealAdminMonth=selMonth;
-      var cy=parseInt(mealAdminMonth.split("-")[0],10);
-      var cm=parseInt(mealAdminMonth.split("-")[1],10);
+      if(!mealsLoaded){showAlert("賄いのデータを読み込んでいます。\n\n数秒お待ちのうえ、もう一度お試しください。");if(typeof ensureAdminData==="function")ensureAdminData();return;}
+      var ym=selMonth;
+      if(!/^\d{4}-\d{2}$/.test(ym||""))return;
+      var cy=parseInt(ym.split("-")[0],10);
+      var cm=parseInt(ym.split("-")[1],10);
       var cLast=new Date(cy,cm,0).getDate();
-      var cStaff=staffList.filter(function(s){return s.status!=="退職"&&(mealShowNotRequired?true:!!s.mealRequired);})
+      function _tk(eid,d){var e=mealsData[eid];var ds=cy+"-"+pad(cm)+"-"+pad(d);return !!(eid&&e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);}
+      var cStaff=staffList.filter(function(s){
+          if(s.status==="退職")return false;
+          if(s.mealRequired)return true;
+          var eid=(s.employeeId||"").trim();for(var d=1;d<=cLast;d++){if(_tk(eid,d))return true;}return false;
+        })
         .sort(function(a,b){var ar=a.mealRequired?0:1,br=b.mealRequired?0:1;if(ar!==br)return ar-br;return (a.yomi||"").localeCompare(b.yomi||"","ja");});
       var days=[];for(var d=1;d<=cLast;d++)days.push(d+"日");
-      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計,月初確認";
+      var hdrMeal="氏名,賄い区分,社員番号,"+days.join(",")+",合計";
       var rowsMeal=cStaff.map(function(s){
         var eid=(s.employeeId||"").trim();
-        var e=mealsData[eid];var tot=0;var cells=[];
-        for(var d=1;d<=cLast;d++){var ds=cy+"-"+pad(cm)+"-"+pad(d);var tk=!!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);if(tk)tot++;cells.push(tk?"1":"");}
-        // 月初確認状況（賄い要のみ。不要は「対象外」）
-        var _conf=!s.mealRequired?"対象外":(function(){var _cs=mealConfStatusOf(eid,mealAdminMonth);return _cs==="done"?"確認済":_cs==="pending"?"まだ":"未回答";})();
-        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot,_conf]).join(",");
+        var tot=0;var cells=[];
+        for(var d=1;d<=cLast;d++){var tk=_tk(eid,d);if(tk)tot++;cells.push(tk?"1":"");}
+        return [s.name,(s.mealRequired?"要":"不要"),eid].concat(cells).concat([tot]).join(",");
       });
-      dlCSV(hdrMeal+"\n"+rowsMeal.join("\n"),TENANT.csvPrefix+"_賄い一覧_"+mealAdminMonth+".csv");
+      dlCSV(hdrMeal+"\n"+rowsMeal.join("\n"),TENANT.csvPrefix+"_賄い一覧_"+ym+".csv");
     };
 
     // 朝出勤確認 — 最新状態に更新

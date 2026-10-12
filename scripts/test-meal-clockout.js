@@ -139,5 +139,17 @@ check("打刻画面は MEAL_PUNCH_CARD_VISIBLE が真のときだけ賄い欄・
 check("賄い欄・月初確認をそのまま連結する箇所が残っていない", !/\+_mealConfHtml\s*\n\s*\+_mealHtml/.test(html));
 check("賄いデータは打刻画面で引き続き読む（退勤時の質問に必要）", /fetchJson\(FB_URL\+"\/tc5_meals\.json"\)/.test(fnSrc("function ensureStaffScopedData(", "plTrackFetch(_staffDataPromise);")));
 
+console.log("■ 管理画面：月初確認の列を削除・賄いCSVは「CSV出力」タブ（2026-10-12 ユーザー指示）");
+const MEALS_TAB = fnSrc('if(adminTab==="meals"){', "// 移動距離申請（独立モジュール");
+check("賄い一覧に「確認」列が無い", !/>確認<\/th>/.test(MEALS_TAB) && !/meConfStatus/.test(MEALS_TAB));
+check("賄い一覧に月初確認の集計が無い", !/月初確認：/.test(MEALS_TAB));
+check("賄い一覧に CSV ボタンが無い", !/btn-meal-csv/.test(html));
+const EXPORT_TAB = fnSrc('if(adminTab==="export"){', 'if(adminTab==="edit"){');
+check("CSV出力タブに「賄いCSV」ボタンがある", /id="btn-csv-meal"[^>]*>📥 賄いCSV</.test(EXPORT_TAB));
+const MEAL_CSV = fnSrc('var meCsvBtn=document.getElementById("btn-csv-meal");', "// 朝出勤確認 — 最新状態に更新");
+check("賄いCSVの見出しに月初確認が無い", /hdrMeal="氏名,賄い区分,社員番号,"\+days\.join\(","\)\+",合計";/.test(MEAL_CSV) && !/月初確認/.test(MEAL_CSV.replace(/\/\/.*$/mg, "")));
+check("賄いCSVの対象月は CSV出力タブの月（selMonth）", /var ym=selMonth;/.test(MEAL_CSV));
+check("賄いデータ未取得なら出力しない", /if\(!mealsLoaded\)\{showAlert/.test(MEAL_CSV));
+
 console.log("\n" + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);
