@@ -140,7 +140,7 @@ check("賄い欄・月初確認をそのまま連結する箇所が残ってい�
 check("賄いデータは打刻画面で引き続き読む（退勤時の質問に必要）", /fetchJson\(FB_URL\+"\/tc5_meals\.json"\)/.test(fnSrc("function ensureStaffScopedData(", "plTrackFetch(_staffDataPromise);")));
 
 console.log("■ 管理画面：月初確認の列を削除・賄いCSVは「CSV出力」タブ（2026-10-12 ユーザー指示）");
-const MEALS_TAB = fnSrc('if(adminTab==="meals"){', "// 移動距離申請（独立モジュール");
+const MEALS_TAB = fnSrc('if(adminTab==="export"&&mealListOpen){', "// 移動距離申請（独立モジュール");
 check("賄い一覧に「確認」列が無い", !/>確認<\/th>/.test(MEALS_TAB) && !/meConfStatus/.test(MEALS_TAB));
 check("賄い一覧に月初確認の集計が無い", !/月初確認：/.test(MEALS_TAB));
 check("賄い一覧に CSV ボタンが無い", !/btn-meal-csv/.test(html));
@@ -162,6 +162,26 @@ check("賄いデータ未取得なら日次・月次CSVを出さない", DL.inde
   check("mealTakenByName：社員番号なし・未登録は false", c2.mealTakenByName("番号なし", "2026-10-01") === false && c2.mealTakenByName("誰か", "2026-10-01") === false);
   check("mealCountByName：その月の取得ありだけ数える", c2.mealCountByName("山田", "2026-10") === 2 && c2.mealCountByName("山田", "2026-09") === 1);
   check("mealCountByName：記録が無ければ 0", c2.mealCountByName("番号なし", "2026-10") === 0);
+}
+
+console.log("■ 賄い一覧は「CSV出力」タブ内で開閉する・スタッフ別サマリーは非表示（2026-10-12 ユーザー指示）");
+{
+  check("上部メニューに「賄い一覧」タブが無い", !/setTab\(\\'meals\\'\)/.test(html) && !/tab-btn[^\n]*>賄い一覧<\/button>/.test(html));
+  check("賄い一覧は初期状態で閉じる", /var mealListOpen=false;/.test(html));
+  check("賄い一覧の描画は CSV出力タブで開いているときだけ", MEALS_TAB.length > 0 && !/if\(adminTab==="meals"\)\{/.test(html));
+  check("賄い一覧は CSV出力の内容の後ろに足す（上書きしない）", /tc\+='<div class="admin-card" id="meal-list-card">'/.test(MEALS_TAB));
+  const EXP = fnSrc('if(adminTab==="export"){', 'if(adminTab==="edit"){');
+  const iReview = EXP.indexOf("+reviewCardHTML"), iToggle = EXP.indexOf('id="btn-meal-toggle"');
+  check("開閉ボタンは勤怠精査ステータスの下", iReview > 0 && iToggle > iReview);
+  check("ボタンの文言は開閉で切り替わる", /mealListOpen\?"賄い一覧を非表示":"賄い一覧を表示"/.test(EXP));
+  check("開閉は再描画だけ（再読み込みしない）", /meToggle\.onclick=function\(\)\{\s*mealListOpen=!mealListOpen;render\(\);/.test(html) && !/location\.reload/.test(fnSrc("meToggle.onclick=", "var meMonthSel=")));
+  check("閉じている間は賄いの定期取得をしない", /if\(screen==="admin"&&adminTab==="export"&&mealListOpen\)\{\s*\n\s*authFetch\(FB_URL\+"\/tc5_meals\.json"\)/.test(html));
+  check("閉じている間は表示月の打刻を取りに行かない", /if\(adminTab==="export"&&mealListOpen\)addMonth\(mealAdminMonth\|\|selMonth\);/.test(html));
+  check("旧タブ名 meals は CSV出力の賄い一覧を開く", /if\(v==="meals"\)\{v="export";mealListOpen=true;\}/.test(html));
+  check("月の切り替え・賄い不要の表示切り替えは残す", /id="sel-meal-month"/.test(MEALS_TAB) && /id="chk-meal-notreq"/.test(MEALS_TAB) && /meMonthSel\.onchange=/.test(html) && /meNotReqChk\.onchange=/.test(html));
+  check("サマリーを出さない間は当月の集計もしない", /var mRecsClean=EXPORT_STAFF_SUMMARY_VISIBLE\?records\.filter/.test(EXP));
+  check("スタッフ別サマリーは非表示", /var EXPORT_STAFF_SUMMARY_VISIBLE=false;/.test(html) && /\+\(EXPORT_STAFF_SUMMARY_VISIBLE\?'<div class="admin-card"><div class="admin-title">スタッフ別サマリー<\/div>'/.test(EXP));
+  check("CSVボタン（日次・月次・人別明細）は残す", /id="btn-csv-daily"/.test(EXP) && /id="btn-csv-monthly"/.test(EXP) && /id="btn-csv-staff-detail"/.test(EXP));
 }
 
 console.log("\n" + pass + " PASS / " + fail + " FAIL");

@@ -66,7 +66,7 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 | タブ | 範囲 |
 |---|---|
 | 勤怠一覧 / CSV出力 / 応援集計 / スタッフ管理 / マスター管理 | `selMonth` ＋ `selDate` ＋ 当日 |
-| 賄い一覧 | ＋ `mealAdminMonth` |
+| CSV出力で賄い一覧を開いているとき | ＋ `mealAdminMonth` |
 | 修正履歴 | ＋ `adjLogMonth` |
 | 月別出勤日数 | ＋ `monthlyDaysYear` の 1/1〜`recYearEnd()`（当年は当日まで） |
 | 移動距離 | ＋ `mileage.adminYm` |

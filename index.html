@@ -3216,7 +3216,7 @@ function ensureAdminRecordRanges(){
     addMonth(selMonth);
     if(selDate)need.push([selDate,selDate]);
     need.push([today,today]);                                   // 朝出勤確認・当日状況
-    if(adminTab==="meals")addMonth(mealAdminMonth||selMonth);
+    if(adminTab==="export"&&mealListOpen)addMonth(mealAdminMonth||selMonth);
     if(adminTab==="adjustlog")addMonth(adjLogMonth||monthKey(today));
     if(adminTab==="monthlyDays"&&monthlyDaysYear)need.push([monthlyDaysYear+"-01-01",recYearEnd(monthlyDaysYear)]);
     if(adminTab==="mileage"&&typeof mileage==="object"&&mileage&&mileage.adminYm)addMonth(mileage.adminYm);
@@ -3564,8 +3564,8 @@ function listenFirebase() {
           }).catch(function(){});
       }
     }
-    // 賄い一覧タブ表示中は tc5_meals を同期（スタッフ本人の打刻画面で入力された分を反映。read-only表示のため再描画は安全）
-    if(screen==="admin"&&adminTab==="meals"){
+    // 賄い一覧を開いている間は tc5_meals を同期（スタッフ本人の打刻画面で入力された分を反映。read-only表示のため再描画は安全）
+    if(screen==="admin"&&adminTab==="export"&&mealListOpen){
       authFetch(FB_URL+"/tc5_meals.json")
         .then(function(r){return r.json();})
         .then(function(val){
@@ -4737,10 +4737,15 @@ var mealFormMonth=""; // 打刻画面 賄いカレンダーの表示月（YYYY-M
 var mealFormOpen=(function(){try{return TLS.getItem("tc5_meal_form_open")==="1";}catch(e){return false;}})();
 // 打刻画面「今月の打刻状況」カードの開閉状態（端末に保存・初期は折りたたみ）
 var monthPunchOpen=(function(){try{return TLS.getItem("tc5_month_punch_open")==="1";}catch(e){return false;}})();
-var mealAdminMonth=""; // 管理者「賄い一覧」タブの表示月（YYYY-MM）
+var mealAdminMonth=""; // 管理者「CSV出力」タブ内の賄い一覧の表示月（YYYY-MM）
 // 管理者「修正履歴」タブの表示月（YYYY-MM）。初期値は当月(JST)。selMonth/reviewMonth とは独立に管理し、他画面へ影響させない。
 var adjLogMonth="";
-var mealShowNotRequired=false; // 管理者「賄い一覧」: 賄い不要スタッフも表示するか
+var mealShowNotRequired=false; // 管理者「CSV出力」タブ内の賄い一覧: 賄い不要スタッフも表示するか
+// 賄い一覧は「CSV出力」タブの中で開閉する（2026-10-12 ユーザー指示で独立タブを廃止）。初期は閉じる。
+// ★ 閉じている間は賄い一覧を描画せず、賄いの定期取得（10秒ポーリング）と表示月の打刻取得もしない。
+var mealListOpen=false;
+// 「CSV出力」タブのスタッフ別サマリー（在籍者の勤務日数・総実働時間）。2026-10-12 ユーザー指示で非表示（コードは残し、非表示の間は集計もしない。true で再表示）。
+var EXPORT_STAFF_SUMMARY_VISIBLE=false;
 // 賄い月初確認: tc5_meal_confirmations/{employeeId}/{YYYY-MM}={staffId,staffName,targetMonth,status,updatedAt}
 var mealConfData={}; // tc5_meal_confirmations キャッシュ（employeeId→{"YYYY-MM":エントリ}）。打刻/有給/月別/賄いデータには書き込まない
 // 月次精査完了フラグ: tc5_monthly_review_status/{YYYY-MM}={reviewed,reviewedAt,reviewedBy}
@@ -7049,11 +7054,11 @@ function _renderInner(){
     }
 
     if(adminTab==="export"){
-      var mRecsClean=records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;});
+      var mRecsClean=EXPORT_STAFF_SUMMARY_VISIBLE?records.filter(function(r){return monthKey(r.date)===selMonth&&!r.deleted;}):[];
       // staffListを基準に（よみがな順・在籍者のみ）
       var activeStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
         .sort(function(a,b){return a.yomi.localeCompare(b.yomi,"ja");});
-      var sumHTML=activeStaff.length?activeStaff.map(function(s){
+      var sumHTML=!EXPORT_STAFF_SUMMARY_VISIBLE?"":activeStaff.length?activeStaff.map(function(s){
         var nm=s.name;
         var sr=mRecsClean.filter(function(r){return r.staff===nm;});
         var days=[...new Set(sr.filter(function(r){return r.type==="clockIn";}).map(function(r){return r.date;}))];
@@ -7098,7 +7103,9 @@ function _renderInner(){
         +'</div>'
         +'</div>'
         +reviewCardHTML
-        +'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHeader+sumHTML+'</div>';
+        // 賄い一覧の開閉（中身は下の「賄い一覧」ブロックが開いているときだけ描画して足す）
+        +'<div style="margin-bottom:10px;"><button id="btn-meal-toggle" class="btn-export" aria-expanded="'+(mealListOpen?"true":"false")+'" style="width:auto;padding:10px 24px;'+(mealListOpen?'background:#dde1e7;color:#334155;border:1px solid #adb5bd;':'')+'">🍚 '+(mealListOpen?"賄い一覧を非表示":"賄い一覧を表示")+'</button></div>'
+        +(EXPORT_STAFF_SUMMARY_VISIBLE?'<div class="admin-card"><div class="admin-title">スタッフ別サマリー</div>'+sumHeader+sumHTML+'</div>':"");
     }
 
     if(adminTab==="edit"){
@@ -8707,7 +8714,7 @@ function _renderInner(){
         +'</div>';
     }
 
-    if(adminTab==="meals"){
+    if(adminTab==="export"&&mealListOpen){
       // ===== 賄い（まかない）一覧（管理者・労務士向け閲覧。月別・スタッフ別・日別の取得状況＋月合計） =====
       // 賄いデータ(tc5_meals)を読むだけ。打刻・有給・月別出勤データには一切書き込まない。
       if(!mealAdminMonth)mealAdminMonth=selMonth;
@@ -8789,15 +8796,15 @@ function _renderInner(){
           +'</tr></tfoot>'
           +'</table></div>'
         :'<div class="empty" style="padding:24px 0;text-align:center;color:#8496a7;">対象スタッフがいません'+(meReqCount===0?'（「賄い 要」のスタッフが未設定です。スタッフ管理で設定してください）':'')+'</div>';
-      tc='<div class="admin-card admin-wrap">'
+      tc+='<div class="admin-card" id="meal-list-card">'
         +'<div class="admin-title">🍚 賄い一覧（'+meY+'年'+meM+'月）</div>'
         +'<div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">'
         +'<select id="sel-meal-month" style="width:auto;min-width:130px;padding:9px 12px;font-size:15px;">'+meMonthOpts+'</select>'
         +'<label style="display:flex;align-items:center;gap:6px;font-size:.9rem;color:#475569;cursor:pointer;user-select:none;">'
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
         +'</div>'
-        // 2026-10-12: 月初確認（確認列・集計）を削除。CSVは「CSV出力」タブの「賄いCSV」へ移した。
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは「CSV出力」タブの日次CSV（賄い）・月次CSV（賄い回数）に入ります。</div>'
+        // 2026-10-12: 月初確認（確認列・集計）を削除。賄いは日次CSV（賄い）・月次CSV（賄い回数）に入る。
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは上の日次CSV（賄い）・月次CSV（賄い回数）に入ります。</div>'
         +meTableHtml
         +'</div>';
     }
@@ -8861,7 +8868,7 @@ function _renderInner(){
       +'<button class="tab-btn '+(adminTab==="adjustlog"?"tab-on":"tab-off")+'" onclick="setTab(\'adjustlog\')">修正履歴</button>'
       +'<button class="tab-btn '+(adminTab==="monthlyDays"?"tab-on":"tab-off")+'" onclick="setTab(\'monthlyDays\')">月別出勤日数</button>'
       +'<button class="tab-btn '+(adminTab==="leavePlan"?"tab-on":"tab-off")+'" onclick="setTab(\'leavePlan\')">有給取得計画</button>'
-      +'<button class="tab-btn '+(adminTab==="meals"?"tab-on":"tab-off")+'" onclick="setTab(\'meals\')">賄い一覧</button>'
+      // 賄い一覧は「CSV出力」タブの中へ移した（2026-10-12）
       // 会社ごとの機能フラグ（TENANT_CONFIGS.features）。無効な会社ではタブ自体を出さない（サーバも拒否する）
       +(tenantFeature("mileage")?'<button class="tab-btn '+(adminTab==="mileage"?"tab-on":"tab-off")+'" onclick="setTab(\'mileage\')">移動距離</button>':'')
       +(demoMode?'':'<button class="tab-btn '+(adminTab==="csvImport"?"tab-on":"tab-off")+'" onclick="setTab(\'csvImport\')">CSV一括登録</button>')
@@ -9345,7 +9352,14 @@ function _renderInner(){
       _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
     };
 
-    // 賄い一覧
+    // 賄い一覧（CSV出力タブ内で開閉。再読み込みせず描画し直すだけ）
+    var meToggle=document.getElementById("btn-meal-toggle");
+    if(meToggle)meToggle.onclick=function(){
+      mealListOpen=!mealListOpen;render();
+      var mc=mealListOpen&&document.getElementById("meal-list-card");
+      if(mc){var mb=document.querySelector(".admin-sticky-bar");var mbH=(mb&&getComputedStyle(mb).position==="sticky")?mb.offsetHeight:0;
+        window.scrollTo(0,Math.max(0,mc.getBoundingClientRect().top+window.scrollY-mbH-_modeBannerH()-8));}
+    };
     var meMonthSel=document.getElementById("sel-meal-month");
     if(meMonthSel)meMonthSel.onchange=function(){mealAdminMonth=meMonthSel.value;render();};
     var meNotReqChk=document.getElementById("chk-meal-notreq");
@@ -10223,6 +10237,7 @@ function goPin(){
 function setYomi(v){yomiTab=v;render();}
 function setTab(v){
   if(v==="documents"){v="records";} // 資料管理は非表示化中。要求されたら勤怠一覧へ戻す
+  if(v==="meals"){v="export";mealListOpen=true;} // 賄い一覧タブは廃止。CSV出力タブ内の賄い一覧を開く
   adminTab=v;
   // タブ切り替え時は残日数フォームのdirtyフラグをリセット
   if(v!=="paidleave"){
