@@ -579,7 +579,7 @@ async function run() {
   {
     const wired = [
       ["_execPunch が eventId を採番する", /nr\.eventId=nr\.id;/],
-      ["_execPunch が async である", /async function _execPunch\(type,d\)\{/],
+      ["_execPunch が async である", /async function _execPunch\(type,d,meal\)\{/],
       ["端末保存の成功を待ってから画面を更新する", /_saved=await punchOutboxCommit\(nr\);/],
       ["保存できなければ records へ積まない（打刻失敗にする）", /if\(!_saved\)\{[\s\S]{0,400}?return;\s*\n\s*\}/],
       ["保存成功後に records へ積む", /records\.push\(nr\);\s*\n\s*_lsSet\("tc5_records"/],

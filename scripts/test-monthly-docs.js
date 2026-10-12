@@ -426,7 +426,7 @@ const uiTests = (async () => {
   }
   {
     // _execPunch の順序（ソース上の確認）: 確認 → 二重打刻の再確認 → 端末保存 → 画面 → 送信 → 打刻後の温度（出勤の送信は止めない）
-    const EP = fnSrc("async function _execPunch(type,d){", "function doPunch(type){");
+    const EP = fnSrc("async function _execPunch(type,d,meal){", "function doPunch(type){");
     const iCollect = EP.indexOf("await mdocCollect(_mdPlan)"), iDup = EP.indexOf("var _mdDup"),
       iCommit = EP.indexOf("await punchOutboxCommit(nr)"), iPush = EP.indexOf("records.push(nr)"), iFlush = EP.indexOf('punchOutboxFlush("punch")'),
       iAfter = EP.indexOf("mdocAfterClockIn(_mdPost,nr)");

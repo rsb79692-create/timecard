@@ -1053,38 +1053,76 @@ function mealToggleDate(eid,ym,ds){
   render(); // 即時反映
   mealSaveEntry(eid);
 }
-// 退勤の打刻直後に、その日の賄いを取ったかを聞く（「賄い 要」のスタッフだけ）。
-// ★ 退勤の端末保存・画面の打刻済み表示の「後」に呼ぶ。打刻の条件にしない・待たない（閉じても退勤はそのまま）。
-//   「はい」でその日を取得ありにする（既にONなら聞かない）。「いいえ」は何も書かない（後から賄いカードで直せる）。
-//   賄いデータを読めていないときは聞かない（全体PUTで他の日を消さないため。書込みは mealSaveEntry と同じ eid 単位）。
-function mealAskAfterClockOut(name,ds){
-  try{
-    if(viewerMode||!mealsLoaded||!name||!ds)return;
-    var so=staffList.find(function(s){return s&&s.name===name;});
-    if(!so||!so.mealRequired)return;
-    var eid=String(resolveStaffId(name)||"").trim();
-    if(!eid||!/^[A-Za-z0-9_-]+$/.test(eid))return;
-    var ym=ds.substring(0,7);
-    if(!mealEditable(ym))return;
-    var cur=mealsData[eid]&&mealsData[eid].dates&&mealsData[eid].dates[ds];
-    if(cur&&cur.taken)return;
-    var m=parseInt(ds.substring(5,7),10),dd=parseInt(ds.substring(8,10),10);
-    showModal({title:"🍚 賄いの確認",message:name+" さん\n"+m+"月"+dd+"日、賄いを食べましたか？",alertOnly:false,okLabel:"はい",cancelLabel:"いいえ",
-      onOK:function(){
-        if(!mealsLoaded)return;
-        var nm=mealStaffNameById(eid)||name;
-        if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
-        if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
-        if(mealsData[eid].dates[ds]&&mealsData[eid].dates[ds].taken)return;
-        mealsData[eid].dates[ds]={taken:true,updatedAt:new Date().toISOString()};
-        mealsData[eid].staffName=nm;
-        mealSaveEntry(eid);
-        render();
-      },
-      onCancel:function(){}
-    });
-  }catch(e){console.warn("[meal] ask after clockOut failed",e);}
+// ===== 退勤前の賄い確認（MEAL-CLOCKOUT） =====
+// 退勤ボタンを押したら、打刻の前に「賄いを食べましたか？」を聞き、はい／いいえに答えたら退勤を打刻する。
+// ★ 賄いの記録は退勤の端末保存が成功した後に書く（_execPunch の ⑥）。退勤をやめた・保存できなかったときは書かない。
+// ★ 聞けないとき（賄い不要・賄いデータ未取得・社員番号なし/不正・編集不可の月・その日が既に取得あり・閲覧用）は
+//   聞かずに従来どおり打刻する（打刻を止めない）。賄いデータ未取得で書くと tc5_meals/{eid} の全体PUTで他の日が消える。
+// 聞く必要があれば {eid} を返す。
+function mealClockOutNeed(name,ds){
+  if(viewerMode||!mealsLoaded||!name||!ds)return null;
+  var so=staffList.find(function(s){return s&&s.name===name;});
+  if(!so||!so.mealRequired)return null;
+  var eid=String(resolveStaffId(name)||"").trim();
+  if(!eid||!/^[A-Za-z0-9_-]+$/.test(eid))return null;
+  if(!mealEditable(ds.substring(0,7)))return null;
+  var cur=mealsData[eid]&&mealsData[eid].dates&&mealsData[eid].dates[ds];
+  if(cur&&cur.taken)return null;
+  return {eid:eid};
 }
+// 質問の画面。onAnswer(true=はい / false=いいえ) で退勤へ進む。「退勤をやめる」は何もしない。
+// 枠の外のタップでは閉じない（誤タップで「いいえ」として打刻しないため）。
+function mealClockOutModal(name,ds,onAnswer){
+  var ov=document.createElement("div");
+  ov.style.cssText="position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;";
+  var card=document.createElement("div");
+  card.style.cssText="background:#fff;border-radius:2px;padding:24px;max-width:340px;width:100%;border:1px solid #adb5bd;max-height:calc(100vh - 32px);overflow-y:auto;";
+  var m=parseInt(ds.substring(5,7),10),dd=parseInt(ds.substring(8,10),10);
+  var ttl=document.createElement("div");ttl.style.cssText="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;";ttl.textContent="🍚 賄いの確認";card.appendChild(ttl);
+  var msg=document.createElement("div");msg.style.cssText="font-size:.95rem;color:#0f172a;line-height:1.6;margin-bottom:6px;white-space:pre-line;";msg.textContent=name+" さん\n"+m+"月"+dd+"日、賄いを食べましたか？";card.appendChild(msg);
+  var sub=document.createElement("div");sub.style.cssText="font-size:.8rem;color:#64748b;line-height:1.5;margin-bottom:18px;";sub.textContent="答えると退勤を打刻します。";card.appendChild(sub);
+  var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
+  var done=false;
+  function close(){if(ov.parentNode)ov.parentNode.removeChild(ov);}
+  function mk(label,bg,fg,bd,fn){var b=document.createElement("button");b.textContent=label;b.style.cssText="flex:1;background:"+bg+";color:"+fg+";border:"+bd+";padding:13px;border-radius:2px;font-size:1rem;font-weight:700;cursor:pointer;font-family:inherit;";b.onclick=function(){if(done)return;done=true;close();fn();};return b;}
+  row.appendChild(mk("いいえ","#dde1e7","#475569","1px solid #adb5bd",function(){onAnswer(false);}));
+  row.appendChild(mk("はい","var(--brand)","#fff","none",function(){onAnswer(true);}));
+  card.appendChild(row);
+  var cx=document.createElement("button");cx.textContent="退勤をやめる";
+  cx.style.cssText="display:block;margin:14px auto 0;background:none;border:none;color:#64748b;font-size:.82rem;text-decoration:underline;cursor:pointer;font-family:inherit;";
+  cx.onclick=function(){if(done)return;done=true;close();};
+  card.appendChild(cx);
+  ov.appendChild(card);document.body.appendChild(ov);
+  return ov;
+}
+// 退勤の打刻へ進む入口（doPunch から）。聞く必要があれば聞いてから、無ければそのまま _execPunch。
+function mealClockOutThenPunch(type,d){
+  var name=staffName,ds=fmtDateKey(d);
+  var need=(type==="clockOut")?mealClockOutNeed(name,ds):null;
+  if(!need){_execPunch(type,d);return;}
+  mealClockOutModal(name,ds,function(taken){
+    if(staffName!==name)return; // 答えるまでに画面を離れた
+    // ★ 質問を開いている間に同じ人の退勤が届いていたら打刻しない（二重打刻の防止。手元の records だけ）
+    var dup=records.find(function(r){return r&&r.staff===name&&r.date===ds&&!r.deleted&&r.type==="clockOut";});
+    if(dup){showAlert("本日の退勤はすでに打刻済みです。\n\n退勤 "+dup.time+"\n\n修正が必要な場合は管理者へ連絡してください。");return;}
+    _execPunch(type,d,{eid:need.eid,ds:ds,taken:!!taken});
+  });
+}
+// 退勤の端末保存が成功した後に呼ぶ（_execPunch の ⑥）。「はい」ならその日を取得ありにして保存する。
+function mealClockOutCommit(meal,name){
+  try{
+    if(!meal||!meal.taken||!meal.eid||!meal.ds||!mealsLoaded)return;
+    var eid=meal.eid,ds=meal.ds;
+    var nm=mealStaffNameById(eid)||name||"";
+    if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
+    if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
+    if(mealsData[eid].dates[ds]&&mealsData[eid].dates[ds].taken)return;
+    mealsData[eid].dates[ds]={taken:true,updatedAt:new Date().toISOString()};
+    if(nm)mealsData[eid].staffName=nm;
+    mealSaveEntry(eid);
+  }catch(e){console.warn("[meal] commit after clockOut failed",e);}
+}
+// ===== MEAL-CLOCKOUT-END =====
 // 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
 function mealSelectAttendance(eid,ym){
   if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
@@ -3841,7 +3879,7 @@ function showModal(opts){
   var msg=document.createElement("div");msg.style.cssText="font-size:.92rem;color:#0f172a;line-height:1.6;margin-bottom:20px;white-space:pre-line;";msg.textContent=opts.message;card.appendChild(msg);
   var row=document.createElement("div");row.style.cssText="display:flex;gap:10px;";
   function close(){if(ov.parentNode)document.body.removeChild(ov);}
-  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent=opts.cancelLabel||"キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
+  if(!opts.alertOnly){var cnl=document.createElement("button");cnl.textContent="キャンセル";cnl.style.cssText="flex:1;background:#dde1e7;color:#475569;border:1px solid #adb5bd;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";cnl.onclick=function(){close();if(opts.onCancel)opts.onCancel();};row.appendChild(cnl);}
   var ok=document.createElement("button");ok.textContent=opts.okLabel||"OK";ok.style.cssText="flex:1;background:var(--brand);color:#fff;border:none;padding:11px;border-radius:2px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;";ok.onclick=function(){close();if(opts.onOK)opts.onOK();};row.appendChild(ok);
   card.appendChild(row);ov.appendChild(card);
   ov.onclick=function(e){if(e.target===ov){close();if(opts.onCancel)opts.onCancel();}};
@@ -10703,7 +10741,7 @@ function mdocAfterClockIn(plan,rec){
 //   保存できなかった場合は打刻失敗として扱い、records にも積まない。
 var _plChecking=false; // 打刻直前に有給申請の取得を待っている間（ボタン・枠は動かさず画面下に「確認しています…」を重ねる。押下は _punchSaving で受け付けない）
 var _punchSaving=false; // 端末保存中の再入防止（保存完了までの数ミリ秒の連打を弾く）
-async function _execPunch(type,d){
+async function _execPunch(type,d,meal){
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
   if(_punchSaving)return;
   // ⓪ 承認済み有給の日は端末へ保存しない（PUNCH-LEAVE-GUARD）。有給データを取得中なら少しだけ待つ。
@@ -10837,8 +10875,8 @@ async function _execPunch(type,d){
   punchOutboxFlush("punch");
   // ⑤ 朝の温度（MONTHLY-DOCS・出勤の確定と送信開始の後）。★ 待たない。閉じても出勤はそのまま。
   if(_mdPost)mdocAfterClockIn(_mdPost,nr);
-  // ⑥ 賄いの確認（退勤の確定後・「賄い 要」のスタッフだけ）。★ 待たない。閉じても退勤はそのまま。
-  if(type==="clockOut")mealAskAfterClockOut(nr.staff,nr.date);
+  // ⑥ 賄い（退勤ボタンの直後に聞いた回答。MEAL-CLOCKOUT）。退勤の端末保存が成功した後だけ書く。
+  if(type==="clockOut"&&meal)mealClockOutCommit(meal,nr.staff);
 }
 function doPunch(type){
   // A. 既存チェック
@@ -10904,11 +10942,11 @@ function doPunch(type){
       var _em=Math.floor((d-new Date(_lr.timestamp))/60000);
       var _im="前回：出勤 "+_lr.time+"\n現在：退勤 "+fmtTime(d)+"\n経過："+_em+"分";
       if(_em<5){
-        showModal({title:"打刻内容を確認してください",message:_im+"\n\n誤って退勤していませんか？",alertOnly:false,okLabel:"退勤する",onOK:function(){_execPunch(type,d);},onCancel:function(){}});
+        showModal({title:"打刻内容を確認してください",message:_im+"\n\n誤って退勤していませんか？",alertOnly:false,okLabel:"退勤する",onOK:function(){mealClockOutThenPunch(type,d);},onCancel:function(){}});
         return;
       }
       if(_em<10){
-        showAlert("打刻内容を確認してください\n\n"+_im,function(){_execPunch(type,d);});
+        showAlert("打刻内容を確認してください\n\n"+_im,function(){mealClockOutThenPunch(type,d);});
         return;
       }
     }
@@ -10922,8 +10960,8 @@ function doPunch(type){
       return;
     }
   }
-  // F. 通常保存処理
-  _execPunch(type,d);
+  // F. 通常保存処理（退勤は賄いを聞いてから。MEAL-CLOCKOUT）
+  mealClockOutThenPunch(type,d);
 }
 
 // ===== 施設変更 =====

@@ -104,7 +104,7 @@ async function runExec(type, leaveApproved, opts) {
     punchOutboxFlush: () => { calls.flush++; },
     saveRecord: () => { calls.save++; },
     showAlert: (m) => { calls.alert.push(m); },
-    render: () => {}, faceCamAfterPunch: () => {}, mealAskAfterClockOut: () => {}, faceCamClose: () => {},
+    render: () => {}, faceCamAfterPunch: () => {}, mealClockOutCommit: () => {}, faceCamClose: () => {},
     generateRecordId: () => "ev-1", fmtDateKey: (d) => d.toISOString().slice(0, 10),
     fmtTime: () => "09:00", fmtTimeSec: () => "09:00:00", getCurrentWorkFacility: () => "本店",
     _lsSet: () => {}, setTimeout: () => 0, clearTimeout: () => {},
@@ -205,7 +205,7 @@ async function runExec(type, leaveApproved, opts) {
 
   // ── 静的な境界 ───────────────────────────────────────
   console.log("■ 入口と管理者修正の境界");
-  const execBody = fnSrc("async function _execPunch(type,d){", "function doPunch(type){");
+  const execBody = fnSrc("async function _execPunch(type,d,meal){", "function doPunch(type){");
   check("_execPunch は判定を端末保存より前に置く",
     execBody.indexOf("punchLeaveBlocked(") > 0 && execBody.indexOf("punchLeaveBlocked(") < execBody.indexOf("punchOutboxCommit("));
   const doPunchBody = fnSrc("function doPunch(type){", "// ===== 施設変更 =====");
