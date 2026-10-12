@@ -11757,7 +11757,9 @@ var CSVIMP=(function(){
   var MAX_BYTES=1024*1024,MAX_ROWS=3000;
   var SPEC={
     fac:{label:"施設",cols:["施設コード","施設名","正式名称","郵便番号","住所","電話番号","状態"]},
-    staff:{label:"従業員",cols:["社員コード","姓","名","ふりがな","在籍状態","所属部署","役職","施設名","雇用区分","入社日","退職日"]}
+    staff:{label:"従業員",cols:["社員コード","姓","名","ふりがな","在籍状態","所属部署","役職","施設名","雇用区分","入社日","退職日"]},
+    // 有給残日数（paid-leave-import.md）。社員番号・年間出勤日数・付与日数の列は空欄可（列そのものは必須）
+    pl:{label:"有給残日数",cols:["社員番号","氏名","有給残日数","年間出勤日数","直近付与日数","前回付与日数"]}
   };
   var LONG_COLS={"住所":200,"正式名称":150};
   var EMP_TYPES={"正社員":"正社員","社員":"正社員","パート":"パート","アルバイト":"アルバイト","契約社員":"契約社員"};
@@ -12042,6 +12044,138 @@ var CSVIMP=(function(){
     return finish(items,fileWarnings);
   }
 
+  // ===== 有給残日数CSV（paid-leave-import.md） =====
+  // 付与日の一覧。★ index.html の calcPaidLeaveSchedule と同じ式（入社日＋6か月、以後12か月ごと。期限は2年後の前日）で、
+  //   「今日」を引数で受ける（test-paid-leave-import.js が calcPaidLeaveSchedule との一致を検査する）。
+  function plSchedule(hireYmd,todayYmd){
+    var m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(String(hireYmd||""));if(!m)return [];
+    var hy=+m[1],hm=+m[2]-1,hd=+m[3],out=[];
+    function key(d){return d.getFullYear()+"-"+p2(d.getMonth()+1)+"-"+p2(d.getDate());}
+    for(var n=1;n<=30;n++){
+      var gd=new Date(hy,hm+6+(n-1)*12,hd),gs=key(gd);
+      if(gs>todayYmd)break;
+      var ex=new Date(gd.getFullYear(),gd.getMonth()+24,gd.getDate());ex.setDate(ex.getDate()-1);
+      out.push({grantNum:n,grantDate:gs,expiresAt:key(ex)});
+    }
+    return out;
+  }
+  // 日数の欄（0以上・0.5刻み）。空欄は null、不正は NaN。
+  function plNum(s){
+    if(s==="")return null;
+    var t=String(s).normalize("NFKC").replace(/日$/,"").trim();
+    if(!/^\d+(\.\d+)?$/.test(t))return NaN;
+    var x=parseFloat(t);return (x*2===Math.floor(x*2))?x:NaN;
+  }
+  // rows: prepare("pl") の行／staff: tc5_staff の一覧／balances: tc5_paid_leave_balances の値（オブジェクト・配列・null）
+  // deps: {grantDays:calculatePaidLeaveGrantDays, weeklyByAnnual:judgeWeeklyEquivByAnnualDays}（法定の表を複製しないため注入する）
+  //       balanceStaffId（任意）: 付与行 → 正規化後の社員番号（normalizePaidLeaveBalance。改名前の旧形式の行も本人に解決する）
+  // ★ 残日数の正本は remainDays。付与行は「付与日ごと」。Excel の残日数は直近の付与分の残りとして入れ、
+  //   直近の付与日数を超える分だけを前回（まだ有効な）付与分の残りへ入れる（古い付与から消化する FIFO と同じ考え方）。
+  // ★ 有効な付与行（期限内）は全部登録する（登録しないと「付与予定（未登録）」に残り、そこから登録すると残日数が二重になる）。
+  function validatePaidLeave(rows,staff,balances,todayYmd,deps,fileWarnings){
+    var ex=(Array.isArray(staff)?staff:[]).filter(isObj);
+    var byName=D(),byNorm=D(),idCount=D();
+    ex.forEach(function(s){
+      if(typeof s.name!=="string")return;
+      (byName[s.name]=byName[s.name]||[]).push(s);byNorm[norm(s.name)]=s.name;
+      var id=String(s.employeeId||"").trim();if(id)idCount[id]=(idCount[id]||0)+1;
+    });
+    var bl=[];
+    if(Array.isArray(balances))bl=balances.filter(isObj);
+    else if(isObj(balances))bl=Object.keys(balances).map(function(k){return balances[k];}).filter(isObj);
+    var lines=D();
+    rows.forEach(function(row){var n=row.v["氏名"];if(n)(lines[n]=lines[n]||[]).push(row.line);});
+    var items=rows.map(function(row){
+      var v=row.v,name=v["氏名"],it=newItem(row,name||"（氏名なし）");
+      if(row.shape)add(it,"error",row.shape);
+      cellErrors(v,SPEC.pl.cols).forEach(function(e){add(it,"error",e);});
+      if(!name){add(it,"error","氏名が空欄です");return it;}
+      var dl=(lines[name]||[]).filter(function(l){return l!==row.line;});
+      if(dl.length)add(it,"error",dl.join("・")+"行目と同じ氏名です（どちらの残日数か決められないため登録しません）");
+      var remain=plNum(v["有給残日数"]),annual=plNum(v["年間出勤日数"]),gLatest=plNum(v["直近付与日数"]),gPrev=plNum(v["前回付与日数"]);
+      if(remain===null)add(it,"error","有給残日数が空欄です");
+      else if(isNaN(remain))add(it,"error","有給残日数「"+v["有給残日数"]+"」は0以上の数（0.5日刻み）で入力してください");
+      else if(remain>40)add(it,"error","有給残日数が40日を超えています（法定の付与は最大20日×2年分）");
+      if(isNaN(annual)||(annual!==null&&annual!==Math.floor(annual)))add(it,"error","年間出勤日数「"+v["年間出勤日数"]+"」は0以上の整数で入力してください");
+      if(isNaN(gLatest)||(gLatest!==null&&(gLatest<=0||gLatest>20)))add(it,"error","直近付与日数「"+v["直近付与日数"]+"」は1〜20の数で入力してください");
+      if(isNaN(gPrev)||(gPrev!==null&&(gPrev<=0||gPrev>20)))add(it,"error","前回付与日数「"+v["前回付与日数"]+"」は1〜20の数で入力してください");
+      if(hasErr(it))return it;
+      // 本人の特定は氏名の完全一致だけ（表記ゆれを推測で紐付けない）
+      var hits=byName[name]||[];
+      if(!hits.length){
+        add(it,"error",has(byNorm,norm(name))?"登録済みのスタッフ「"+byNorm[norm(name)]+"」と空白・全角半角だけが違います（自動では紐付けません。CSVの氏名を揃えてください）":"スタッフ管理に登録されていません（先に従業員CSVで登録してください）");
+        return it;
+      }
+      if(hits.length>1){add(it,"error","同じ氏名のスタッフが"+hits.length+"人登録されています（本人を特定できません）");return it;}
+      var s=hits[0];
+      if(s.status==="退職"){add(it,"error","退職済みのスタッフです（登録しません）");return it;}
+      var sid=String(s.employeeId||"").trim();
+      if(!sid){add(it,"error","社員番号が未設定です（有給は社員番号に紐付くため登録しません。スタッフ管理で社員番号を設定してください）");return it;}
+      if(idCount[sid]>1){add(it,"error","社員番号「"+sid+"」が他のスタッフと重複しています（有給を正しく紐付けられないため登録しません）");return it;}
+      if(KEY_BAD_RE.test(sid)){add(it,"error","社員番号「"+sid+"」に使えない文字（. # $ [ ] /）が含まれています");return it;}
+      if(v["社員番号"]&&v["社員番号"]!==sid){add(it,"error","CSVの社員番号「"+v["社員番号"]+"」がスタッフ管理の社員番号「"+sid+"」と違います（別人の可能性があるため登録しません）");return it;}
+      var hd=parseDate(String(s.hireDate||"").trim());
+      if(!hd){add(it,"error",s.hireDate?"入社日「"+s.hireDate+"」を読めません（スタッフ管理で入社日を直してください）":"入社日が未設定です（付与日・期限を決められないため登録しません。スタッフ管理で入社日を設定してください）");return it;}
+      // ★ 二重登録の防止: この人の付与行が1件でもあれば取り込まない（既存の残日数に足すと二重になる）
+      var mine=bl.filter(function(b){
+        var bs=String(b.staffId==null?"":b.staffId).trim();
+        if(bs===sid||bs===name||b.staffName===name)return true;
+        var ns=null;if(deps.balanceStaffId){try{ns=deps.balanceStaffId(b);}catch(e){ns=null;}}
+        return ns!=null&&String(ns).trim()===sid;
+      });
+      if(mine.length){it.action="skip";add(it,"info","有給の付与行が既に"+mine.length+"件登録済みのため取り込みません（二重登録の防止。変更は有給管理画面で行ってください）");return it;}
+      var sch=plSchedule(hd.ymd,todayYmd);
+      var valid=sch.filter(function(g){return g.expiresAt>=todayYmd;});
+      if(!valid.length){
+        if(remain===0){it.action="skip";add(it,"info","入社日（"+hd.ymd+"）から見て有給の付与日がまだ来ていないため、登録するものがありません");return it;}
+        add(it,"error","入社日（"+hd.ymd+"）から見て有給の付与日がまだ来ていないのに、残日数が"+remain+"日あります（入社日を確認してください）");return it;
+      }
+      // 付与日数: 列の入力 → 年間出勤日数から週相当 → スタッフ管理の週所定労働日数 の順
+      var wAnnual=annual!==null?deps.weeklyByAnnual(annual):null;
+      var wStaff=parseInt(s.weeklyWorkDays,10)||null;
+      var w=wAnnual!=null?wAnnual:wStaff;
+      if(wAnnual!=null&&wStaff!=null&&Math.min(wAnnual,5)!==Math.min(wStaff,5))add(it,"warn","年間出勤日数（"+annual+"日→週"+wAnnual+"日相当）とスタッフ管理の週所定労働日数（"+weeklyLabel(wStaff)+"）が違います。年間出勤日数で算出しました");
+      function grantOf(g,manual){
+        if(manual!==null)return {days:manual,how:"CSVの入力"};
+        var d=w!=null?deps.grantDays(g.grantNum,w):null;
+        return d==null?null:{days:d,how:(wAnnual!=null?"年間出勤日数"+annual+"日→週"+wAnnual+"日相当":"週所定労働日数（"+weeklyLabel(wStaff)+"）")};
+      }
+      var latest=valid[valid.length-1],prev=valid.length>1?valid[valid.length-2]:null;
+      var gl=grantOf(latest,gLatest);
+      if(!gl){add(it,"error","直近（第"+latest.grantNum+"回 "+latest.grantDate+"）の付与日数を決められません（年間出勤日数が47日以下か空欄で、週所定労働日数も未設定）。「直近付与日数」の列に入力してください");return it;}
+      var gp=prev?grantOf(prev,gPrev):null;
+      if(prev&&!gp){add(it,"error","前回（第"+prev.grantNum+"回 "+prev.grantDate+"）の付与日数を決められません。「前回付与日数」の列に入力してください");return it;}
+      if(!prev&&gPrev!==null)add(it,"warn","前回の付与分は期限切れ（または付与前）のため、前回付与日数は使いません");
+      var rl=Math.min(remain,gl.days),rest=Math.round((remain-rl)*10)/10;
+      if(!prev&&rest>0){add(it,"error","残日数"+remain+"日が直近（第"+latest.grantNum+"回）の付与日数"+gl.days+"日を超えています（期限内の付与はこの1回だけです）");return it;}
+      if(prev&&rest>gp.days){add(it,"error","残日数"+remain+"日が直近"+gl.days+"日＋前回"+gp.days+"日の合計を超えています");return it;}
+      var grants=[];
+      if(prev)grants.push({grantNum:prev.grantNum,grantDate:prev.grantDate,expiresAt:prev.expiresAt,grantedDays:gp.days,remainDays:rest,how:gp.how});
+      grants.push({grantNum:latest.grantNum,grantDate:latest.grantDate,expiresAt:latest.expiresAt,grantedDays:gl.days,remainDays:rl,how:gl.how});
+      if(prev&&gp.how.indexOf("年間出勤日数")===0)add(it,"info","前回付与の日数も同じ年間出勤日数から算出しています（前回の判定期間の実績とは限りません）");
+      it.action="add";
+      it.rec={staffId:sid,staffName:name,hireDate:hd.ymd,remainTotal:remain,grants:grants};
+      return it;
+    });
+    return finish(items,fileWarnings);
+  }
+  function weeklyLabel(n){return n>=5?"週5日以上":"週"+n+"日";}
+  // 1回の PATCH（tc5_paid_leave_balances の付与行 id → 行）。usedDays は 0（このシステムで承認した消化は無い）。
+  // ★ remainDays は CSV から決めた値をそのまま入れる（grantedDays - usedDays で再計算しない）。
+  function buildPaidLeavePatch(res,nowMs,nowIso){
+    var patch={};
+    res.items.forEach(function(it){
+      if(it.action!=="add")return;
+      it.rec.grants.forEach(function(g){
+        var id="plb_"+it.rec.staffId+"_"+g.grantDate+"_"+nowMs;
+        patch[id]={id:id,staffId:it.rec.staffId,staffName:it.rec.staffName,grantNum:g.grantNum,
+          grantDate:g.grantDate,expiresAt:g.expiresAt,grantedDays:g.grantedDays,usedDays:0,remainDays:g.remainDays,
+          createdAt:nowIso,source:"csvImport"};
+      });
+    });
+    return patch;
+  }
+
   // 確認時と登録直前で、登録・更新する内容が同じかを比べるための要約
   function signature(res){
     return JSON.stringify(res.items.filter(function(it){return it.action==="add"||it.action==="update";})
@@ -12063,16 +12197,21 @@ var CSVIMP=(function(){
   }
   return {MAX_BYTES:MAX_BYTES,SPEC:SPEC,decode:decode,parse:parse,prepare:prepare,parseDate:parseDate,
     normalizeList:normalizeList,validateFacilities:validateFacilities,validateStaff:validateStaff,
-    signature:signature,buildFacilityPatch:buildFacilityPatch,buildStaffPatch:buildStaffPatch};
+    signature:signature,buildFacilityPatch:buildFacilityPatch,buildStaffPatch:buildStaffPatch,
+    plSchedule:plSchedule,validatePaidLeave:validatePaidLeave,buildPaidLeavePatch:buildPaidLeavePatch};
 })();
 // ===== CSV一括登録（施設・従業員）: 純粋関数 END =====
 
 // ===== CSV一括登録: 画面と登録処理 =====
 // 流れ: ファイル選択 → 解析・検証 → プレビュー → 「登録する」→ 登録直前に最新を取り直して再検証 → 1回の PATCH。
 // ★ 書き込みは既存の管理画面と同じ経路（authFetch → RTDB。権限は Rules が判定）。別の API・鍵は使わない。
-var csvImp={fac:null,staff:null,busy:""};
+var csvImp={fac:null,staff:null,pl:null,busy:""};
 function csvImpCanWrite(){return isAdminAuthenticated&&!demoMode&&!viewerMode&&writePolicy==="full";}
 function csvImpValidate(kind,prep,freshList,freshFacs,freshDepts){
+  // 有給残日数は照合先（スタッフ・付与行）を必ず取り直してから検証する（csvImpPlLoad）。freshFacs に付与行の値を渡す
+  if(kind==="pl")return CSVIMP.validatePaidLeave(prep.rows,freshList,freshFacs,getTodayJSTStr(),
+    {grantDays:calculatePaidLeaveGrantDays,weeklyByAnnual:judgeWeeklyEquivByAnnualDays,
+     balanceStaffId:function(b){return normalizePaidLeaveBalance(b).staffId;}},prep.fileWarnings);
   if(kind==="fac")return CSVIMP.validateFacilities(prep.rows,freshList||masterFacilities,prep.fileWarnings);
   return CSVIMP.validateStaff(prep.rows,freshList||staffList,freshFacs||masterFacilities,freshDepts||masterDepts,getTodayJSTStr(),prep.fileWarnings);
 }
@@ -12088,8 +12227,66 @@ function csvImpPick(kind,input){
     if(csvImp[kind]!==st)return;
     var d=CSVIMP.decode(buf);if(!d.ok){st.error=d.error;render();return;}
     var p=CSVIMP.prepare(kind,d.text);if(!p.ok){st.error=p.error;render();return;}
-    st.prep=p;st.result=csvImpValidate(kind,p);render();
+    st.prep=p;
+    if(kind==="pl"){
+      // 有給は端末の一覧（有給管理タブを開くまで未取得のことがある）で照合しない。最新を取ってから検証する
+      render();
+      return csvImpPlLoad().then(function(f){if(csvImp[kind]!==st)return;st.result=csvImpValidate("pl",p,f.staff,f.balances);render();})
+        .catch(function(e){if(csvImp[kind]===st){st.error=e.message;render();}});
+    }
+    st.result=csvImpValidate(kind,p);render();
   }).catch(function(){if(csvImp[kind]===st){st.error="ファイルを読み込めませんでした";render();}});
+}
+// 有給残日数の照合先（スタッフ一覧・付与行）を取り直す。取得できない・形式が想定外なら例外（フェイルクローズ）
+function csvImpPlLoad(){
+  function getJson(p){
+    return authFetch(FB_URL+p).then(function(x){if(!x||!x.ok)throw 0;return x.json();})
+      .catch(function(){throw new Error("最新のデータを取得できませんでした。通信状態を確認してもう一度お試しください");});
+  }
+  // ★ 付与行は役割つきの領域。管理者トークンの確立を待ってから読む（待たずに読むと 401 で誤って失敗表示になる）
+  return afterElevation().then(function(){return Promise.all([getJson("/tc5_staff.json"),getJson("/tc5_paid_leave_balances.json")]);}).then(function(got){
+    var sl=CSVIMP.normalizeList(got[0]);
+    if(!sl.ok)throw new Error("スタッフ一覧の形式が想定と異なるため中止しました");
+    var b=got[1];
+    if(b!=null&&(typeof b!=="object"))throw new Error("有給の付与行の形式が想定と異なるため中止しました");
+    return {staff:sl.list,balances:b};
+  });
+}
+// 有給残日数CSVの登録。流れは従業員CSVと同じ（取り直し → 再検証して確認時と同じか → 1回の PATCH → 取り直して確認）
+function csvImpPlCommit(){
+  var st=csvImp.pl;
+  if(!st||!st.result||st.done||csvImp.busy)return;
+  if(!csvImpCanWrite()){showAlert("管理者としてログインしているときだけ登録できます");return;}
+  if(st.result.counts.add===0)return;
+  csvImp.busy="pl";st.failMsg="";render();
+  (async function(){
+    if(_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    var f=await csvImpPlLoad();
+    var fresh=csvImpValidate("pl",st.prep,f.staff,f.balances);
+    if(CSVIMP.signature(fresh)!==CSVIMP.signature(st.result)){
+      st.result=fresh;
+      throw new Error("確認中に他の操作でデータが変わりました。内容を更新したので、もう一度確認してから「登録する」を押してください");
+    }
+    st.result=fresh; // 結果画面の「登録しなかった人」は登録直前の検証結果で出す
+    var patch=CSVIMP.buildPaidLeavePatch(fresh,Date.now(),new Date().toISOString());
+    var ids=Object.keys(patch);
+    var w=await authFetch(FB_URL+"/tc5_paid_leave_balances.json",{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(patch)}).catch(function(){return null;});
+    if(!w)throw new Error("通信に失敗しました。登録されたか分からないため、画面を再読み込みしてから同じCSVをもう一度選んでください（登録済みの人はスキップされます）");
+    if(!w.ok)throw new Error(w.status===401||w.status===403?"権限が無いため登録できませんでした。管理者PINで入り直してください":"登録に失敗しました（HTTP "+w.status+"）");
+    var c=fresh.counts;
+    st.done={add:c.add,update:0,skip:c.skip,error:c.error,rows:ids.length,verified:false,lost:[],pinUnset:[],pinLeft:[]};
+    try{
+      var after=await authFetch(FB_URL+"/tc5_paid_leave_balances.json").then(function(x){return x.ok?x.json():undefined;}).catch(function(){return undefined;});
+      if(after&&typeof after==="object"){
+        st.done.verified=ids.every(function(id){var r=after[id];return r&&r.remainDays===patch[id].remainDays&&r.grantDate===patch[id].grantDate;});
+        var arr=Array.isArray(after)?after:Object.values(after);
+        paidLeaveBalances=arr.filter(Boolean).map(function(x){return normalizePaidLeaveBalance(x);});
+      }
+    }catch(e2){console.error("[csvImp] pl after-write check error",e2);}
+  })().catch(function(e){
+    st.failMsg=(e&&e.message?e.message:"登録に失敗しました")+"（何も登録していません）";
+    if(/登録されたか分からない/.test(st.failMsg))st.failMsg=e.message;
+  }).then(function(){csvImp.busy="";render();});
 }
 function csvImpClear(kind){if(csvImp.busy)return;csvImp[kind]=null;render();}
 // 施設の打刻URL用トークン（英数字32文字。偏りが出ないよう 248 以上のバイトは捨てる）
@@ -12204,6 +12401,7 @@ function csvImpCardHtml(kind,title){
   if(st.error)return h+'<div style="margin-top:12px;background:#fff1f2;color:#b91c1c;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;">'+esc(st.error)+'</div></div>';
   if(!st.result)return h+'<div style="margin-top:12px;font-size:.9rem;color:#475569;">読み込み中…</div></div>';
   var res=st.result,c=res.counts;
+  if(kind==="pl")return h+csvImpPlBodyHtml(st,res,c,busy,tiles,msgLines,btn,sub)+'</div>';
   if(st.done){
     var d=st.done;
     h+='<div style="margin-top:12px;font-size:.95rem;font-weight:700;color:#166534;">登録しました'+(d.verified?'':'（登録後の確認ができませんでした。画面を再読み込みして一覧を確認してください）')+'</div>'
@@ -12237,11 +12435,45 @@ function csvImpCardHtml(kind,title){
   else h+='<div style="font-size:.92rem;color:#475569;margin-bottom:8px;">登録・更新する行はありません。</div><button onclick="csvImpClear(\''+kind+'\')" '+sub+'>閉じる</button>';
   return h+'</div>';
 }
+// 有給残日数CSVのプレビュー・結果（付与行ごとに、付与日・期限・付与日数・残日数と、付与日数の根拠を出す）
+function csvImpPlBodyHtml(st,res,c,busy,tiles,msgLines,btn,sub){
+  var h="";
+  if(st.done){
+    var d=st.done;
+    h+='<div style="margin-top:12px;font-size:.95rem;font-weight:700;color:#166534;">登録しました（'+d.add+'名・付与行'+d.rows+'件）'+(d.verified?'':'（登録後の確認ができませんでした。有給管理画面を開いて確認してください）')+'</div>'
+      +tiles([["登録",d.add,"#f0fdf4"],["スキップ",d.skip],["登録しなかった（エラー）",d.error,d.error?"#fff1f2":""]])
+      +(d.error?'<div style="font-size:.9rem;font-weight:700;color:#b91c1c;">登録しなかった人（理由）</div>'+msgLines(res.items,"error","#b91c1c"):"")
+      +'<div style="font-size:.9rem;color:#475569;margin-bottom:10px;">有給管理画面の「有給残日数管理」で残日数を確認してください。期限切れの古い付与回は「付与予定（未登録）」に残りますが、期限切れのため残日数には数えません（登録は不要です）。</div>'
+      +'<button onclick="csvImpClear(\'pl\')" '+sub+'>閉じる</button>';
+    return h;
+  }
+  h+=tiles([["登録予定",c.add,"#f0fdf4"],["スキップ",c.skip],["警告",c.warn,c.warn?"#fffbeb":""],["エラー",c.error,c.error?"#fff1f2":""]]);
+  if(res.fileWarnings.length)h+='<div style="font-size:.9rem;color:#92400e;margin-bottom:8px;">'+res.fileWarnings.map(esc).join("<br>")+'</div>';
+  if(c.error)h+='<div style="font-size:.92rem;font-weight:700;color:#b91c1c;">エラー（この人は登録されません）</div>'+msgLines(res.items,"error","#b91c1c");
+  if(c.warn)h+='<div style="font-size:.92rem;font-weight:700;color:#92400e;">警告（このまま登録できます）</div>'+msgLines(res.items,"warn","#92400e");
+  if(c.skip)h+='<div style="font-size:.92rem;font-weight:700;color:#475569;">スキップ</div>'+msgLines(res.items.filter(function(it){return it.action==="skip";}),"info","#475569");
+  var planned=res.items.filter(function(it){return it.action==="add";});
+  if(planned.length){
+    h+='<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-top:6px;">登録する内容（残日数は付与日ごとに分けて保存します。古い付与分から消化されます）</div>'
+      +'<div style="font-size:.84rem;color:#475569;line-height:1.6;">残日数は「今日」時点（直近の付与を含む）の値を入れてください。有給残日数管理の一覧の「第N回」は登録済みの行の通し番号のため、ここの付与回と違って表示されることがあります。</div><ul style="margin:6px 0 12px;padding-left:20px;font-size:.9rem;color:#0f172a;line-height:1.7;">'
+      +planned.map(function(it){
+        var r=it.rec;
+        return '<li>'+esc(it.line+"行目　"+r.staffName+"（社員番号 "+r.staffId+"／入社 "+r.hireDate+"）残 計"+r.remainTotal+"日")
+          +'<div style="font-size:.84rem;color:#475569;">'+r.grants.map(function(g){return esc("第"+g.grantNum+"回 付与日 "+g.grantDate+"（期限 "+g.expiresAt+"）付与"+g.grantedDays+"日・残"+g.remainDays+"日［"+g.how+"］");}).join("<br>")+'</div></li>';
+      }).join("")+'</ul>';
+  }
+  if(st.failMsg)h+='<div style="background:#fff1f2;color:#b91c1c;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;margin-bottom:10px;">'+esc(st.failMsg)+'</div>';
+  if(busy)h+='<div style="font-size:.95rem;font-weight:700;color:#475569;">登録中…</div>';
+  else if(planned.length)h+='<button onclick="csvImpPlCommit()" '+btn+'>登録する（'+c.add+'名）</button> <button onclick="csvImpClear(\'pl\')" '+sub+'>やめる</button>';
+  else h+='<div style="font-size:.92rem;color:#475569;margin-bottom:8px;">登録する人はいません。</div><button onclick="csvImpClear(\'pl\')" '+sub+'>閉じる</button>';
+  return h;
+}
 function csvImpHtml(){
   if(!csvImpCanWrite())return '<div class="admin-card"><div class="admin-title">CSV一括登録</div><div style="font-size:.92rem;color:#475569;">この画面では使えません。管理者PINまたは管理者URLで入ってください。</div></div>';
   return '<div class="admin-card"><div class="admin-title">CSV一括登録</div>'
-    +'<div style="font-size:.92rem;color:#475569;line-height:1.7;">①施設 → ②従業員 の順に登録してください。ファイルを選ぶと内容を確認できます（この時点では登録されません）。</div></div>'
-    +csvImpCardHtml("fac","① 施設CSV")+csvImpCardHtml("staff","② 従業員CSV");
+    +'<div style="font-size:.92rem;color:#475569;line-height:1.7;">①施設 → ②従業員 → ③有給残日数 の順に登録してください。ファイルを選ぶと内容を確認できます（この時点では登録されません）。</div></div>'
+    +csvImpCardHtml("fac","① 施設CSV")+csvImpCardHtml("staff","② 従業員CSV")
+    +csvImpCardHtml("pl","③ 有給残日数CSV（列：社員番号・氏名・有給残日数・年間出勤日数・直近付与日数・前回付与日数）");
 }
 // ===== 資料管理 =====
 function viewerDownloadAndDelete(url,fileName,docId){

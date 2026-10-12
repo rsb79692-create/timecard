@@ -59,6 +59,7 @@
 | マルチテナント（会社間分離） | [`multitenant.md`](docs/features/multitenant.md) | `node scripts/test-multitenant.js`（Rules 変更時は `tests/rules`、画面変更時は `tests/visual/*`） |
 | 従業員・施設マスタの保存（1件単位） | [`master-save.md`](docs/features/master-save.md) | `node scripts/test-staff-save.js` |
 | CSV一括登録（施設・従業員） | [`csv-import.md`](docs/features/csv-import.md) | `node scripts/test-csv-import.js` |
+| 有給残日数CSVの一括登録 | [`paid-leave-import.md`](docs/features/paid-leave-import.md) | `node scripts/test-paid-leave-import.js` |
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
 | 打刻と月次書類の連携（穂乃味専用） | [`monthly-docs.md`](docs/features/monthly-docs.md) | `node scripts/test-monthly-docs.js` |
 

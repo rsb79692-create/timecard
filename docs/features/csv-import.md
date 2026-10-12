@@ -3,6 +3,7 @@
 管理者メニューの「CSV一括登録」タブから、施設CSV・従業員CSVを取り込む。**全社共通の機能**（会社ごとの分岐なし）。
 コード: `index.html` の `CSVIMP`（純粋関数。`// ===== CSV一括登録（施設・従業員）: 純粋関数 BEGIN/END =====`）と `csvImp*`（画面・登録処理）。
 回帰テスト: `node scripts/test-csv-import.js`（依存なし・送信なし・合成データのみ）。
+有給残日数CSV（③）は [`paid-leave-import.md`](paid-leave-import.md)。
 
 ## 流れ
 
