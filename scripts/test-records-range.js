@@ -64,7 +64,6 @@ function makeCtx(opts) {
     selMonth: opts.selMonth || "2026-08",
     selDate: opts.selDate || "2026-08-28",
     reviewMonth: opts.reviewMonth || "2026-07",
-    mealAdminMonth: opts.mealAdminMonth || "",
     adjLogMonth: opts.adjLogMonth || "",
     monthlyDaysYear: opts.monthlyDaysYear || 2026,
     mileage: opts.mileage || { adminYm: "", myMonth: "" },

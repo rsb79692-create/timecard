@@ -66,7 +66,6 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 | タブ | 範囲 |
 |---|---|
 | 勤怠一覧 / CSV出力 / 応援集計 / スタッフ管理 / マスター管理 | `selMonth` ＋ `selDate` ＋ 当日 |
-| CSV出力で賄い一覧を開いているとき | ＋ `mealAdminMonth` |
 | 修正履歴 | ＋ `adjLogMonth` |
 | 月別出勤日数 | ＋ `monthlyDaysYear` の 1/1〜`recYearEnd()`（当年は当日まで） |
 | 移動距離 | ＋ `mileage.adminYm` |
@@ -99,7 +98,7 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 候補が減る後退を起こさないため、次を必ず併合する。
 
 ・メモリ上の `records` に存在する月／年（前回セッションの端末キャッシュを含む）
-・呼び出し側が指定した「選択中の月」（`selMonth` / `reviewMonth` / `mealAdminMonth` など）
+・呼び出し側が指定した「選択中の月」（`selMonth` / `reviewMonth` など）
 
 ★ **固定値を根拠なく埋め込んではならない。** 下限は必ず実データ（最古の打刻日）から取る。
 

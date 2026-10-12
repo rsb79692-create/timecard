@@ -75,7 +75,7 @@ function run(profKey, opts) {
       FB_URL: "https://example.invalid/honomi",
       records: [], recordsReady: false, recordsStale: false, monthRecordsReady: false, _recLoadedDay: "",
       _LAZY_RETRY_MS: 5000, screen: "admin", viewerMode: false, writePolicy: "full", adminTab: "records",
-      selMonth: "", selDate: "", reviewMonth: "", mealAdminMonth: "", adjLogMonth: "",
+      selMonth: "", selDate: "", reviewMonth: "", adjLogMonth: "",
       monthlyDaysYear: 0, mileage: { adminYm: "", myMonth: "" },
       showPaidLeaveForm: false, _paidLeaveRenderGuard: false, monthlyDaysEditing: false,
       mileageBlocksRerender: () => false, punchOutboxMergeInto: () => {},
