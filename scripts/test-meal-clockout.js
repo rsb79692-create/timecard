@@ -55,6 +55,7 @@ function mk(opts) {
     document: mkDoc(),
     execs: [], saved: [], alerts: [],
   };
+  ctx.tenantFeature = (n) => (n === "meals" ? opts.meals !== false : false);
   ctx.resolveStaffId = (n) => { const s = ctx.staffList.find((x) => x.name === n); return s ? s.employeeId : ""; };
   ctx.mealStaffNameById = (e) => { const s = ctx.staffList.find((x) => x.employeeId === e); return s ? s.name : ""; };
   ctx.mealEditable = (ym) => ym <= "2026-10";
@@ -109,6 +110,8 @@ for (const t of ["clockIn", "breakStart", "breakEnd"]) {
   c = mk(); c.mealClockOutThenPunch(t, D);
   check(t + " では聞かない", open(c) === 0 && c.execs.length === 1);
 }
+c = mk({ meals: false }); c.mealClockOutThenPunch("clockOut", D);
+check("賄いを使わない会社（機能フラグ meals:false。マンテール）は聞かずにそのまま退勤を打刻", open(c) === 0 && c.execs.length === 1 && !c.execs[0].meal);
 
 console.log("■ 打刻後の記録（mealClockOutCommit）");
 c = mk({ mealsData: { E1: { staffId: "E1", staffName: "山田", dates: { "2026-10-01": { taken: true, updatedAt: "x" } } } } });
@@ -135,23 +138,24 @@ check("doPunch の3か所（短時間警告2つ・通常）が賄い確認を通
 
 console.log("■ 打刻画面の賄い入力欄・月初確認は非表示（2026-10-12 ユーザー指示）");
 check("MEAL_PUNCH_CARD_VISIBLE は false", /var MEAL_PUNCH_CARD_VISIBLE=false;/.test(html));
-check("打刻画面は MEAL_PUNCH_CARD_VISIBLE が真のときだけ賄い欄・月初確認を出す", /\+\(MEAL_PUNCH_CARD_VISIBLE\?_mealConfHtml\+_mealHtml:""\)/.test(html));
+check("打刻画面は MEAL_PUNCH_CARD_VISIBLE が真（かつ賄いを使う会社）のときだけ賄い欄・月初確認を出す", /\+\(MEAL_PUNCH_CARD_VISIBLE&&tenantFeature\("meals"\)\?_mealConfHtml\+_mealHtml:""\)/.test(html));
 check("賄い欄・月初確認をそのまま連結する箇所が残っていない", !/\+_mealConfHtml\s*\n\s*\+_mealHtml/.test(html));
 check("賄いデータは打刻画面で引き続き読む（退勤時の質問に必要）", /fetchJson\(FB_URL\+"\/tc5_meals\.json"\)/.test(fnSrc("function ensureStaffScopedData(", "plTrackFetch(_staffDataPromise);")));
 
 console.log("■ 管理画面：月初確認の列を削除・賄いCSVは「CSV出力」タブ（2026-10-12 ユーザー指示）");
-const MEALS_TAB = fnSrc('if(adminTab==="export"&&mealListOpen){', "// 移動距離申請（独立モジュール");
+const MEALS_TAB = fnSrc('if(adminTab==="export"&&mealListOpen&&tenantFeature("meals")){', "// 移動距離申請（独立モジュール");
 check("賄い一覧に「確認」列が無い", !/>確認<\/th>/.test(MEALS_TAB) && !/meConfStatus/.test(MEALS_TAB));
 check("賄い一覧に月初確認の集計が無い", !/月初確認：/.test(MEALS_TAB));
 check("賄い一覧に CSV ボタンが無い", !/btn-meal-csv/.test(html));
 console.log("■ 賄いは日次・月次CSVに入れる（単独の賄いCSVは廃止。2026-10-12 ユーザー指示）");
 check("単独の賄いCSVボタンが無い", !/btn-csv-meal/.test(html));
 const DL = fnSrc('if(dlBtn)dlBtn.onclick=function(){', 'if(screen==="admin"){');
-check("日次CSVの見出しの最後が「賄い」", /,賃金種別,賄い";/.test(DL));
-check("日次CSVの行に賄い（1/空）", /mealTakenByName\(nm,dk\)\?"1":""\]\.join/.test(DL));
-check("月次CSVの見出しの最後が「賄い回数」", /var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数,賄い回数";/.test(DL));
-check("月次CSVの行に賄い回数", /supDys,mealCountByName\(nm,selMonth\)\]\.join/.test(DL));
-check("賄いデータ未取得なら日次・月次CSVを出さない", DL.indexOf("if(!mealsLoaded){showAlert") > 0 && DL.indexOf("if(!mealsLoaded){showAlert") < DL.indexOf('if(csvPreviewType==="daily"){'));
+check("日次CSVの見出しの最後が「賄い」（賄いを使う会社）", /,賃金種別"\+\(_csvMeals\?",賄い":""\);/.test(DL));
+check("日次CSVの行に賄い（1/空）", /\.concat\(_csvMeals\?\[mealTakenByName\(nm,dk\)\?"1":""\]:\[\]\)\.join/.test(DL));
+check("月次CSVの見出しの最後が「賄い回数」（賄いを使う会社）", /var hdr3="氏名,年月,総実働時間,出勤日数,応援出勤日数"\+\(_csvMeals\?",賄い回数":""\);/.test(DL));
+check("月次CSVの行に賄い回数", /supDys\]\.concat\(_csvMeals\?\[mealCountByName\(nm,selMonth\)\]:\[\]\)\.join/.test(DL));
+check("賄いの列は会社の機能フラグ meals で決める", /var _csvMeals=tenantFeature\("meals"\);/.test(DL));
+check("賄いデータ未取得なら日次・月次CSVを出さない", DL.indexOf("if(_csvMeals&&!mealsLoaded){showAlert") > 0 && DL.indexOf("if(_csvMeals&&!mealsLoaded){showAlert") < DL.indexOf('if(csvPreviewType==="daily"){'));
 {
   const H = fnSrc("function mealTakenByName(", "// employeeId 単位で tc5_meals/{eid} を全量PUT");
   const c2 = { staffList: [{ name: "山田", employeeId: "E1" }, { name: "番号なし", employeeId: "" }],
