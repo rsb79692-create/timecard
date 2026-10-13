@@ -107,7 +107,7 @@ function makeEnv(opts) {
     setTimeout: function (f, ms) { const id = E.nextId++; E.timers.push({ id: id, f: f, ms: ms, repeat: false }); return id; },
     clearTimeout: function (id) { E.timers = E.timers.filter(function (t) { return t.id !== id; }); },
     // 画面・作業の状態（index.html の他の場所で定義されるグローバル）
-    screen: "home", viewerMode: false, adminUrlUsed: false, adminTokenValid: false, demoMode: false,
+    screen: "home", viewerMode: false, adminUrlUsed: false, adminTokenValid: false, adminUrlReleased: false, demoMode: false,
     savingCount: 0, _apvBusyCount: 0, _apvPutDeferred: false, _apvPutInFlight: 0, _apvHasUnknown: function () { return !!ctx._unknown; },
     _punchSaving: false, pinChecking: false, staffPinChecking: false, pinInput: "", staffPinInput: "", staffPinConfirm: "",
     mileageBlocksRerender: function () { return !!ctx._mileageEditing; }, devWatchEditing: function () { return false; }, monthlyDaysEditing: false,

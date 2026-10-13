@@ -164,8 +164,8 @@ function idToken(uid, claims) {
 /** Custom Token（サーバが返したもの）の中身を読む。交換後の ID トークンはこのクレームを持つ。 */
 function decodeCustom(ct) { return JSON.parse(Buffer.from(String(ct).split(".")[1], "base64url").toString("utf8")); }
 /** Custom Token を「交換したことにして」ID トークンを作る（Firebase の signInWithCustomToken と同じクレーム）。 */
-function claimsOfIdToken(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1], "base64url").toString("utf8")); } catch (e) { return {}; } }
 function exchange(ct) { const p = decodeCustom(ct); return idToken(p.uid, p.claims || {}); }
+function claimsOfIdToken(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1], "base64url").toString("utf8")); } catch (e) { return {}; } }
 
 let ipSeq = 1;
 function mkRes() {
@@ -586,6 +586,9 @@ async function main() {
     const a8 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: mantelAdminTok });
     check("失効した管理者セッション（管理者PIN・URLの変更後）からは交換できない", a8.statusCode === 401);
     setAt(["srv", "mantel", "authz", "adminMinAt"], savedMin2);
+    const shortAdmin = idToken("a:mantel:short", { r: "a", c: "mantel", at: Math.floor(Date.now() / 1000), cv: 1, sx: Math.floor(Date.now() / 1000) + 600 });
+    const a9 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: shortAdmin });
+    check("期限の残りが短い管理者セッション（15分以下）からは交換しない", a9.statusCode === 401);
   }
 
   section("7. 機能フラグ（mantel は移動距離・持ち出し監視が無効）");

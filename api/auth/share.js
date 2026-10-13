@@ -121,12 +121,16 @@ module.exports = T.handler(async function handler(req, res) {
       let ac = null;
       try { ac = await G.verifyIdToken(H.str(body.idToken, 4096)); } catch (e) { ac = null; }
       // ★ 管理者の特権を使う経路なので、管理者PIN・管理者URLの変更による失効も検証する（pin-set と同じ）。
-      const okAdmin = !!ac && ac.r === "a" && (await S.adminSessionValid(ac));
+      // 期限（sx）の残りが短い管理者セッションからは出さない（出した直後に期限切れになる）。画面は権限を落として閉じる。
+      const sxLeftOk = !ac || typeof ac.sx !== "number" || ac.sx - Math.floor(Date.now() / 1000) > 15 * 60;
+      const okAdmin = !!ac && ac.r === "a" && sxLeftOk && (await S.adminSessionValid(ac));
       if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
       if (!okAdmin) {
         await H.withMinDuration(startedAt, MIN_MS);
         return H.fail(res, 401, H.INVALID);
       }
+      await S.resetCount("share_ip", ipKey)
+        .catch(function (e) { console.error("[rate] reset failed", cid, e && e.message); });
       const nowA = Math.floor(Date.now() / 1000);
       const tidA = S.tokenHash("adminKiosk\0" + String(ac.sub || "")).slice(0, 16);
       // 施設キー（fk）は載せない（特定の施設の端末ではない）。期限は元の管理者セッションより延ばさない。

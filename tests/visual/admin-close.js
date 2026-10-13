@@ -154,6 +154,17 @@ async function main() {
     await context.close();
   }
 
+  // ---- マンテール: サーバが交換を拒否（失効）したら権限を落として閉じる ----
+  {
+    const L = "マンテール交換拒否: ";
+    const opts = { share: (b) => (b.kind === "adminKiosk" ? { status: 401, body: { error: "invalid_credentials" } } : null) };
+    const { context, page } = await newPage(browser, 390, 844, "?c=mantel&admin=abc", opts);
+    await clickClose(page);
+    const st = await state(page);
+    check(L + "管理者の権限を落として打刻トップへ（失敗を権限を残す側に倒さない）", st.screen === "home" && st.admin === false && st.role !== "a" && (!st.claims || st.claims.r !== "a"), JSON.stringify(st));
+    await context.close();
+  }
+
   // ---- 穂乃味の施設URLの打刻トップには従来どおり管理者メニューを出さない ----
   {
     const { context, page } = await newPage(browser, 390, 844, "?token=tokHonten");

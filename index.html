@@ -721,13 +721,15 @@ function adminSessionDrop(){
 }
 /**
  * 管理者の権限を解除する。解除できたら true。
- * 他社で施設URLの無い端末は、サーバでの交換に失敗したら false（管理者セッションはそのまま。閉じずにもう一度押してもらう）。
- * @return {Promise<boolean>}
+ * 他社で施設URLの無い端末は、通信できずに交換できなければ false（管理者セッションはそのまま。閉じずにもう一度押してもらう）。
+ * ★ サーバが交換を拒否した（401/403＝管理者セッションの失効・期限間近）ときは、権限を落とす側に倒す（adminSessionDrop。戻り値 "revoked"）。
+ * @return {Promise<boolean|string>}
  */
 async function adminSessionRelease(){
   if(TENANT.legacy||(!adminUrlAll&&tenantKioskCredential())){adminSessionDrop();return true;}
   var tok="";try{tok=await getAuthToken();}catch(e){tok="";}
-  var res=tok?await callAuthApi("share",{kind:"adminKiosk",idToken:tok},12000):{ok:false};
+  var res=tok?await callAuthApi("share",{kind:"adminKiosk",idToken:tok},12000):{ok:false,status:0};
+  if(!tok||res.status===401||res.status===403){adminSessionDrop();return "revoked";}
   if(!res.ok||!res.data||!res.data.customToken)return false;
   try{await exchangeCustomToken(res.data.customToken,8000);}catch(e){return false;} // 失敗時は管理者トークンのまま（差し替えていない）
   _adminStateClear();
@@ -10320,6 +10322,17 @@ function goHome(){
 //   管理者の権限を残すと、次の人の「PIN新規登録」が管理者権限で送られ、登録済みの他人のPINを上書きできてしまう。
 //   保存の通信・承認の保留書込みの途中は、解除すると書き込めなくなるため、閉じずに待ってもらう（ホームへも戻さない）。
 var _adminReleasing=false;
+var adminUrlReleased=false; // このタブで管理者URLのセッションを閉じた（自動更新の判定で「URLセッション」とみなさない）
+// 解除の通信の間は画面全体を覆って操作を止める（待つ間に始めた保存が、降格後のトークンで送られて拒否されないように）
+function _adminReleaseOverlay(on){
+  var el=document.getElementById("admin-release-ov");
+  if(!on){if(el)el.remove();return;}
+  if(el)return;
+  el=document.createElement("div");el.id="admin-release-ov";
+  el.style.cssText="position:fixed;inset:0;z-index:9999;background:rgba(255,255,255,.75);display:flex;align-items:center;justify-content:center;font-weight:700;color:#475569;font-size:1rem;";
+  el.textContent="閉じています…";
+  document.body.appendChild(el);
+}
 async function closeAdminMenu(){
   if(_adminReleasing)return;
   var _busy=true;
@@ -10327,15 +10340,19 @@ async function closeAdminMenu(){
   try{_busy=_appWritesInFlight>0||savingCount>0||_apvBusyCount>0||_apvPutInFlight>0||(_apvPutDeferred&&!_apvHasUnknown());}catch(e){_busy=true;}
   if(_busy){showAlert("保存中です。\n少し待ってから、もう一度「閉じる」を押してください。");return;}
   if(isAdminAuthenticated){
-    _adminReleasing=true;
+    _adminReleasing=true;_adminReleaseOverlay(true);
     var ok=false;
     try{ok=await adminSessionRelease();}catch(e){ok=false;}
-    finally{_adminReleasing=false;}
+    finally{_adminReleasing=false;_adminReleaseOverlay(false);}
     if(!ok){
       showAlert("通信できないため、管理者メニューを閉じられませんでした。\n通信状態を確認して、もう一度「閉じる」を押してください。");
       return;
     }
     adminUrlMarkClosed();
+    if(adminUrlUsed)adminUrlReleased=true;
+    screen="home";render();
+    if(ok==="revoked")showAlert("管理者のログインが無効になっていたため（管理者PIN・管理者URLの変更、または期限）、管理者メニューを閉じました。\n打刻できない場合は再読み込みしてください。");
+    return;
   }
   screen="home";render();
 }
@@ -16549,6 +16566,7 @@ async function initFirebase() {
         if(adminUrlReopenedAfterClose()){
           // 閉じた後の再読み込み: 管理者の権限を解除して打刻トップのまま（解除できなければ管理者の状態を残さず打刻トップ）
           if(!(await adminSessionRelease()))adminSessionDrop();
+          adminUrlReleased=true;
           screen="home";
         } else {
           screen="admin";adminTab="records";
@@ -17471,7 +17489,7 @@ function _appAlreadyReloadedFor(target){
 //   表示中は予告なく画面を変えない（"view"）。タブが裏へ回った（非表示の）ときに更新する。
 function _appReloadScreenState(){
   if(screen==="home")return "ok";
-  var urlSession=viewerMode||(adminUrlUsed&&adminTokenValid&&!demoMode
+  var urlSession=viewerMode||(adminUrlUsed&&adminTokenValid&&!adminUrlReleased&&!demoMode
      &&(screen==="admin"||screen==="staffDetail"||screen==="csvPreview"));
   if(urlSession)return document.visibilityState==="hidden"?"ok":"view";
   return "session";
