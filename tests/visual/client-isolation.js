@@ -58,8 +58,8 @@ async function main() {
     check("マンテール: ブランド色はロゴの赤", theme.toUpperCase() === "#B40000", theme);
     const title = await page.evaluate(() => document.title);
     check("マンテール: タイトルがマンテール", title.indexOf("マンテール") >= 0 && title.indexOf("穂乃味") < 0, title);
-    const manifest = await page.evaluate(() => document.querySelector('link[rel="manifest"]').getAttribute("href"));
-    check("マンテール: manifest はマンテール用", manifest === "manifest-mantel.json");
+    const manifest = await page.evaluate(() => { const l = document.querySelector('link[rel="manifest"]'); return l ? l.getAttribute("href") : null; });
+    check("マンテール: 施設URLには manifest を置かない（ホーム画面に追加すると施設URLのまま起動する）", manifest === null, String(manifest));
     await ctx.close();
   }
 

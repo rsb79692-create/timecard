@@ -8,7 +8,25 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="穂乃味打刻">
 <meta name="theme-color" content="#C9A96A">
-<link rel="manifest" href="manifest.json">
+<script>
+// ★ manifest は読み込みの最初に会社ごとに決める（後から href を差し替えても、iPhone の「ホーム画面に追加」は最初に読んだ manifest の start_url を使う＝マンテールでも穂乃味の起動先になっていた）。
+//   穂乃味（?c が無い）は従来どおり manifest.json。マンテールなど他社は会社の manifest。
+//   他社で資格情報つきの URL（施設・管理者・閲覧用・デモ・スタッフテスト・システム管理者）は manifest を置かない＝ホーム画面に追加すると開いている URL のまま起動する
+//   （会社の manifest の start_url は ?c=<会社> だけなので、施設トークン・管理者トークンが落ちる）。
+(function(){
+  var q=null,c="";
+  try{q=new URLSearchParams(location.search);c=q.get("c")||"";
+    if(!c){var h=location.hash.replace(/^#/,"");if(h&&/[&=]/.test(h)){q=new URLSearchParams(h);c=q.get("c")||"";}}}catch(e){c="";}
+  var href="manifest.json";
+  if(c&&c!=="honomi"){
+    var cred=false;
+    try{["token","admin","viewer","demo","staffDemo","sys"].forEach(function(k){if(q.get(k)!==null)cred=true;});}catch(e){cred=false;}
+    // 会社の manifest は manifest-<会社ID>.json（TENANT_CONFIGS の manifest と同じ名前にする）。不正な会社IDには置かない。
+    href=(cred||!/^[a-z][a-z0-9]{1,23}$/.test(c))?"":("manifest-"+c+".json");
+  }
+  if(href)document.write('<link rel="manifest" href="'+href+'">');
+})();
+</script>
 <link rel="apple-touch-icon" href="apple-touch-icon-v2.png">
 <link rel="icon" href="favicon.ico" sizes="any">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
