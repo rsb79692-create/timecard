@@ -26,6 +26,26 @@
   }
   if(href)document.write('<link rel="manifest" href="'+href+'">');
 })();
+// ★ ホーム画面アプリ（standalone）のウィンドウを会社ごとに固定する（WINDOW-TENANT・2026-10-13）。
+//   アプリの画面が別の会社のURLへ移ると、スマホはアイコンを押しても「最後の画面」を再開するため、
+//   穂乃味のアイコンからマンテールの管理画面が開いていた（逆も同じ）。
+//   最初に開いた会社をこのウィンドウ（sessionStorage）に記録し、別の会社のURLが読み込まれたら起動せず止める。
+//   ブラウザのタブ（standalone でない）では何もしない。記録するのは会社IDだけ（URL・トークンは記録しない）。
+var TC_WINDOW_TENANT_OTHER="";  // 別の会社の画面になったとき、このウィンドウの本来の会社ID
+(function(){
+  var standalone=false;
+  try{standalone=!!(window.matchMedia&&window.matchMedia("(display-mode: standalone)").matches)||window.navigator.standalone===true;}catch(e){standalone=false;}
+  if(!standalone)return;
+  var c="";
+  try{c=new URLSearchParams(location.search).get("c")||"";
+    if(!c){var h=location.hash.replace(/^#/,"");if(h&&/[&=]/.test(h))c=new URLSearchParams(h).get("c")||"";}}catch(e){c="";}
+  var cur=(c===""||c==="honomi")?"honomi":c;
+  try{
+    var KEY="tc_window_tenant",saved=window.sessionStorage.getItem(KEY)||"";
+    if(!saved){window.sessionStorage.setItem(KEY,cur);return;}
+    if(saved!==cur&&/^[a-z][a-z0-9]{1,23}$/.test(saved))TC_WINDOW_TENANT_OTHER=saved;
+  }catch(e){}
+})();
 </script>
 <link rel="apple-touch-icon" href="apple-touch-icon-v2.png">
 <link rel="icon" href="favicon.ico" sizes="any">
@@ -139,6 +159,13 @@ var TENANT=(function(){
   return TENANT_CONFIGS[c];
 })();
 var TENANT_ID=TENANT.id;
+/** WINDOW-TENANT: このウィンドウ本来の会社のトップへ戻る（トークンは付けない。施設トークンは端末保存から復元される）。 */
+function windowTenantGoBack(){
+  var id=TC_WINDOW_TENANT_OTHER;
+  var c=Object.prototype.hasOwnProperty.call(TENANT_CONFIGS,id)?TENANT_CONFIGS[id]:null;
+  var url=location.origin+location.pathname+((c&&c.legacy)?"":("?c="+encodeURIComponent(id)));
+  location.replace(url);
+}
 function tenantFeature(name){return !!(TENANT.features&&TENANT.features[name]===true);}
 // ★ 端末の保存領域（localStorage / IndexedDB）を会社ごとに分ける。穂乃味は従来のキー名そのまま。
 //   同じ端末で両社の画面を開いても、スタッフ一覧・打刻キャッシュ・匿名セッション・未送信打刻が混ざらない。
@@ -5402,6 +5429,18 @@ function _renderInner(){
       +'<div style="font-size:.8rem;color:#8496a7;margin-bottom:18px;">自動で再試行します</div>'
       +'<button class="btn-admin" onclick="tenantRetryNow()">今すぐ再試行</button>'
       +'<button class="btn-admin" style="margin-top:8px;" onclick="tenantUseAdminPin()">管理者PINで入る</button>'
+      +'</div>';
+    return;
+  }
+  // ── ホーム画面アプリのウィンドウが別の会社のURLになった（WINDOW-TENANT）。起動せず、本来の会社へ戻す ──
+  if(TC_WINDOW_TENANT_OTHER){
+    var _wo=Object.prototype.hasOwnProperty.call(TENANT_CONFIGS,TC_WINDOW_TENANT_OTHER)?TENANT_CONFIGS[TC_WINDOW_TENANT_OTHER]:null;
+    var _woName=_wo?_wo.displayName:"元の会社";
+    app.className="wrap";
+    app.innerHTML='<div class="center" style="padding-top:60px;">'
+      +'<div style="font-size:1.1rem;font-weight:900;color:#0f172a;margin-bottom:10px;">このアプリは'+esc(_woName)+'用です</div>'
+      +'<div style="font-size:.85rem;color:#8496a7;margin-bottom:18px;">別の会社の画面は、その会社のアイコンまたはブラウザから開いてください。</div>'
+      +'<button class="btn-admin" onclick="windowTenantGoBack()">'+esc(_woName)+'の画面へ戻る</button>'
       +'</div>';
     return;
   }
@@ -11443,7 +11482,8 @@ function sysTenantsHtml(){
       +'<div><div style="font-size:.9rem;font-weight:700;color:#0f172a;">'+esc(t.displayName)+'</div>'
       +'<div style="font-size:.75rem;color:#8496a7;">会社ID: '+esc(t.id)+' ／ '+st+'</div></div>'
       +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">'
-      +'<a href="'+esc(link)+'" style="font-size:12px;font-weight:700;">この会社の管理画面へ</a>'+btn+'</div></div>';
+      // ★ 別ウィンドウで開く。同じ画面のまま移ると、ホーム画面アプリの画面が他社になり、アイコンから開いても他社のまま再開する
+      +'<a href="'+esc(link)+'" target="_blank" rel="noopener" style="font-size:12px;font-weight:700;">この会社の管理画面へ</a>'+btn+'</div></div>';
   }).join("");
   return '<div class="admin-card">'
     +'<div class="admin-title">利用会社の管理（システム管理者）</div>'
@@ -16431,6 +16471,8 @@ async function initFirebase() {
     //   ここで throw すると通信断のたびに「通信エラーです」画面になり、打刻自体ができない。
     // ★ 未知の会社ID（?c=…）では何も読まない。穂乃味へ倒さない。
     if(TENANT_INVALID){firebaseReady=false;firebaseError=false;render();return;}
+    // ★ ホーム画面アプリのウィンドウが別の会社のURLになったときは、認証も読み込みもしない（WINDOW-TENANT）
+    if(TC_WINDOW_TENANT_OTHER){firebaseReady=false;firebaseError=false;render();return;}
     if(TENANT.legacy){
       try{await getAuthToken();}catch(_e){console.warn("[initFirebase] auth token unavailable (offline?)");}
     } else {
