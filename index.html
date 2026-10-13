@@ -86,6 +86,7 @@ var TENANT_CONFIGS={
     logo:{src:"brand/honomi/logo-h108.png",src2x:"brand/honomi/logo-h240.png",w:143,h:108,alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     facilityAdminMenu:false,   // 施設URLの打刻トップに「管理者メニュー」を出すか（穂乃味は出さない。従来どおり）
+    facePhotoDefault:false,    // 打刻時の顔撮影の既定（スタッフに設定が無いとき）。穂乃味は従来どおり OFF
     features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs はミュゲの泉だけ（MDOC_FACILITIES。2026-10-09 再開）
   },
   mantel:{
@@ -114,6 +115,7 @@ var TENANT_CONFIGS={
       "--btn2-bg":"#DDE1E7","--btn2-text":"#475569","--btn-border":"#ADB5BD","--sel-bg":"var(--brand)","--date-text":"#475569"
     },
     facilityAdminMenu:true,    // 施設URLの打刻トップにも「管理者メニュー」を出す（2026-10-13 ユーザー指示）
+    facePhotoDefault:true,     // 打刻時の顔撮影はスタッフ全員を既定で ON（2026-10-13 ユーザー指示）。個別に OFF にしたスタッフ（facePhoto:false）だけ撮らない
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
     features:{mileage:false,deviceWatch:false,monthlyDocs:false,meals:false}
   }
@@ -2085,9 +2087,14 @@ var FACECAM_STRIP_BEFORE="📷 管理者設定により撮影します（保存�
 var FACECAM_STRIP_OK="📷 撮影しました（保存・送信はしません）";
 var FACECAM_STRIP_NG="📷 カメラを使用できませんでした";
 
-/** スタッフ個別の ON/OFF。★ true 以外はすべて OFF。 */
+/** 会社の既定（スタッフに設定が無いときの ON/OFF）。★ 会社設定 facePhotoDefault が true の会社だけ ON（穂乃味は OFF）。 */
+function faceCamTenantDefault(){return TENANT.facePhotoDefault===true;}
+/** スタッフ個別の ON/OFF。★ true は ON・false は OFF。未設定（undefined / null）は会社の既定。それ以外の値はすべて OFF。 */
 function faceCamStaffEnabled(s){
-  return !!(s&&typeof s==="object"&&s.facePhoto===true);
+  if(!s||typeof s!=="object")return false;
+  if(s.facePhoto===true)return true;
+  if(s.facePhoto===undefined||s.facePhoto===null)return faceCamTenantDefault();
+  return false;
 }
 
 /** いまの環境（テストから差し替えられるようにまとめて取る）。 */
@@ -7375,7 +7382,7 @@ function _renderInner(){
         +'<div style="grid-column:1/-1;">'
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-face-photo" style="width:16px;height:16px;cursor:pointer;">'
-        +'打刻時の顔撮影（初期値は撮影しない）</label>'
+        +'打刻時の顔撮影（初期値は'+(TENANT.facePhotoDefault===true?'撮影する':'撮影しない')+'）</label>'
         +'<div style="font-size:11px;color:#8496a7;margin-left:24px;margin-top:2px;">'
         +'ONにすると出勤・退勤の打刻時にインカメラで1枚撮影します。写真は保存も送信もされず、その場で破棄されます（顔認証・本人判定は行いません）。</div></div>'
         // 移動距離申請の利用可否。★ tc5_staff には保存しない（/honomi は誰でも書けるため）。
@@ -9713,7 +9720,8 @@ function _renderInner(){
         // 打刻時の顔撮影。★ チェックが入っているときだけ true を保存する
         //   （判定側は facePhoto===true のみをONとするため、未設定・false はOFF）。
         var fpEl2=document.getElementById("modal-face-photo");
-        if(fpEl2&&fpEl2.checked)s.facePhoto=true; else delete s.facePhoto;
+        //   既定が ON の会社（facePhotoDefault）でチェックを外したときは false を保存して個別に OFF にする。
+        if(fpEl2&&fpEl2.checked)s.facePhoto=true; else if(fpEl2&&faceCamTenantDefault())s.facePhoto=false; else delete s.facePhoto;
         if(stat==="退職")s.retireDate=retireDate; else delete s.retireDate;
       } else {
         if(staffList.find(function(s){return s.name===newN;})){showAlert("同名のスタッフが既に存在します");return;}
@@ -9723,7 +9731,7 @@ function _renderInner(){
         if(wwd)newStaff.weeklyWorkDays=parseInt(wwd,10);
         // ★ 新規登録でも顔撮影の既定は OFF。チェックが入っているときだけキーを持たせる。
         var fpEl3=document.getElementById("modal-face-photo");
-        if(fpEl3&&fpEl3.checked)newStaff.facePhoto=true;
+        if(fpEl3&&fpEl3.checked)newStaff.facePhoto=true; else if(fpEl3&&faceCamTenantDefault())newStaff.facePhoto=false;
         if(stat==="退職")newStaff.retireDate=retireDate;
         staffList.push(newStaff);
       }
@@ -10306,7 +10314,8 @@ function openHrmEdit(nm){
   if(mrEl)mrEl.checked=!!(s&&s.mealRequired); // 既存スタッフ（mealRequired未設定）は初期値=不要
   var fpEl=document.getElementById("modal-face-photo");
   // ★ 既存スタッフ（facePhoto未設定・null・"false" 等）はすべて OFF 表示にする（フェイルセーフ）。
-  if(fpEl)fpEl.checked=faceCamStaffEnabled(s);
+  //   新規登録（s 無し）の初期表示は会社の既定（マンテールは ON・穂乃味は OFF）。
+  if(fpEl)fpEl.checked=s?faceCamStaffEnabled(s):faceCamTenantDefault();
   mileageFillStaffModal(s); // 移動距離申請の利用可否（サーバの値を反映）
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){

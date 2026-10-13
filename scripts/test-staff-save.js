@@ -106,6 +106,7 @@ function makeTerminal(server, name) {
     _apvBusyCount: 0, TENANT: { legacy: true },
     document: { getElementById: (id) => el(id) },
     showAlert(m) { env.alerts.push(m); }, closeHrmModal() { env.closed++; }, render() { env.renders++; },
+    faceCamTenantDefault() { return env.TENANT.facePhotoDefault === true; },
     mileageSaveStaffModal() {}, prompt() { return null; }, getTodayJSTStr() { return "2026-09-30"; },
     apvApprovalBlocked() { return false; }, recordsHistoryReady() { return true; }, ensureRecordsHistory() {},
     renamePinInAuthz() {}, _lsSet() {}, TLS: { setItem() {} }, esc: (s) => String(s),

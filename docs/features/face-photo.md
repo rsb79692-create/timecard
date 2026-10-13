@@ -37,6 +37,17 @@
 ・保存時に `true` を書くのはチェックONの分岐だけ。**勝手に ON へ移行する処理を作ってはならない**
 ・回帰テストが `facePhoto=true` の出現箇所を2か所に固定している（自動ONの混入を検出する）
 
+### 会社の既定（facePhotoDefault）— 2026-10-13 ユーザー指示「マンテールスタッフは全員デフォルトで打刻時撮影」
+
+- 会社設定 `TENANT_CONFIGS.<会社>.facePhotoDefault` が true の会社（マンテール）だけ、`facePhoto` が**未設定（undefined / null）のスタッフを ON** とする。
+  `facePhoto:false`（管理画面でチェックを外して保存したスタッフ）は OFF。`true` は ON。それ以外の値（`"true"`・1・0 など）はどの会社でも OFF。
+- 穂乃味は `facePhotoDefault:false` で、上の「既定は OFF」がそのまま当てはまる（変更なし）。
+- `tc5_staff` は一括で書き換えない（既存スタッフは保存しなくても、会社の既定で ON になる）。CSV一括登録で作ったスタッフも未設定なので ON。
+- 管理画面: 新規登録の初期表示は会社の既定（マンテールはチェック済み）。既定が ON の会社でチェックを外して保存すると `facePhoto:false` を書く（個別に OFF）。
+  見出しは「打刻時の顔撮影（初期値は撮影する／撮影しない）」。判定は `faceCamStaffEnabled`・`faceCamTenantDefault` だけで行う。
+- `facePhoto=true` を書くのは従来どおりチェック ON の2か所だけ（自動で true を書かない）。
+- テスト: `node scripts/test-face-photo.js`（1b）／`node tests/visual/tenant-features.js`。
+
 ### 打刻を止めない（★ここを崩してはならない）
 
 呼び出し位置は `_execPunch` の中、**端末保存（IndexedDB）が成功して画面が打刻済みになった後**、

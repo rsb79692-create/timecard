@@ -8,6 +8,7 @@
  *   ・マンテール（meals:false）: 退勤時の賄いの質問・CSV出力の賄いの列と賄い一覧・スタッフ編集の「賄い 要」・閲覧用の賄い回数を出さない
  *   ・マンテール（monthlyDocs:false）: 打刻時の衛生・感染症の確認（月次書類）を動かさない
  *   ・穂乃味（meals:true）は従来どおり出す
+ *   ・打刻時の顔撮影の既定（facePhotoDefault）: マンテールはスタッフ全員 ON（個別に OFF は撮らない）／穂乃味は OFF
  */
 "use strict";
 
@@ -42,6 +43,11 @@ async function probe(browser, tenant) {
   }
   await page.evaluate(() => window.setTab("staff")); await settle(page);
   out.staffMealField = await page.evaluate(() => !!document.getElementById("modal-meal-required"));
+  out.face = await page.evaluate(() => ({
+    unset: faceCamStaffEnabled({ name: "x" }), off: faceCamStaffEnabled({ name: "x", facePhoto: false }),
+    existing: faceCamStaffEnabled(staffList.find((x) => x.name === "佐藤 花子")),
+  }));
+  out.faceNewChecked = await page.evaluate(() => { openHrmEdit(null); const el = document.getElementById("modal-face-photo"); const v = !!(el && el.checked); try { closeHrmModal(); } catch (e) {} return v; });
   await ctx.close();
   // 閲覧用URL（労務士）
   const v = await openApp(browser, ROOT, mantel ? "?c=mantel&viewer=vtok1" : "?viewer=vtok1");
@@ -58,6 +64,9 @@ async function main() {
   check("穂乃味: CSV出力に賄い一覧ボタン・賄いの列（月次・日次）", h.mealToggle && h.mealList && h.preview_monthly && h.preview_daily, JSON.stringify(h));
   check("穂乃味: スタッフ編集に「賄い 要」", h.staffMealField === true);
   check("穂乃味: 閲覧用に「この月の賄い回数」", h.viewerMeals === true);
+  check("穂乃味: 打刻時の顔撮影は既定 OFF（従来どおり）", h.face.unset === false && h.face.existing === false && h.faceNewChecked === false, JSON.stringify(h.face) + " new=" + h.faceNewChecked);
+  check("マンテール: 打刻時の顔撮影はスタッフ全員を既定で ON（既存・新規とも）", m.face.unset === true && m.face.existing === true && m.faceNewChecked === true, JSON.stringify(m.face) + " new=" + m.faceNewChecked);
+  check("マンテール: 個別に OFF にしたスタッフは撮らない", m.face.off === false);
   check("マンテール: 退勤時に賄いを聞かない", m.clockOutAsk === false, JSON.stringify(m));
   check("マンテール: 衛生・感染症の確認（月次書類）を動かさない", m.mdoc === false);
   check("マンテール: CSV出力に賄い一覧・賄いの列を出さない", !m.mealToggle && !m.mealList && !m.preview_monthly && !m.preview_daily, JSON.stringify(m));

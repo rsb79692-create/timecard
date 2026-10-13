@@ -120,6 +120,7 @@ function makeCtx(opts) {
     FormData: function () { rec.forbidden.push("FormData"); throw new Error("FormData must not be used"); },
     XMLHttpRequest: function () { rec.forbidden.push("XHR"); throw new Error("XHR must not be used"); },
     URL: { createObjectURL: () => { rec.forbidden.push("createObjectURL"); throw new Error("no"); } },
+    TENANT: opts.tenant || { id: "honomi", legacy: true, facePhotoDefault: false },
   };
   if (opts.globals) Object.assign(sandbox, opts.globals);
   vm.createContext(sandbox);
@@ -143,6 +144,18 @@ section("1. 既定は OFF（facePhoto === true だけが ON）");
   check("数値 0 は OFF", F({ name: "a", facePhoto: 0 }) === false);
   check("スタッフ自体が null なら OFF", F(null) === false);
   check("true だけが ON", F({ name: "a", facePhoto: true }) === true);
+}
+section("1b. 会社の既定（facePhotoDefault）。マンテールはスタッフ全員を既定で ON（2026-10-13 ユーザー指示）");
+{
+  const F = makeCtx({ tenant: { id: "mantel", legacy: false, facePhotoDefault: true } }).faceCamStaffEnabled;
+  check("既定 ON の会社: 未設定（undefined）は ON", F({ name: "a" }) === true);
+  check("既定 ON の会社: null は ON（未設定と同じ）", F({ name: "a", facePhoto: null }) === true);
+  check("既定 ON の会社: 個別に false にしたスタッフは OFF", F({ name: "a", facePhoto: false }) === false);
+  check("既定 ON の会社: true は ON", F({ name: "a", facePhoto: true }) === true);
+  check('既定 ON の会社でも真偽値以外（"false"・0・1・"true"）は OFF', F({ facePhoto: "false" }) === false && F({ facePhoto: 0 }) === false && F({ facePhoto: 1 }) === false && F({ facePhoto: "true" }) === false);
+  check("既定 ON の会社でもスタッフ自体が null なら OFF", F(null) === false);
+  const G = makeCtx({ tenant: { id: "honomi", legacy: true } }).faceCamStaffEnabled;
+  check("facePhotoDefault が無い会社は既定 OFF（穂乃味は従来どおり）", G({ name: "a" }) === false);
 }
 
 // ===== 2/3. 撮影条件 =====
@@ -409,11 +422,13 @@ section("4/5/6. 1枚撮影 → 即破棄（保存・送信をしない）");
   check("モーダルに打刻時の顔撮影のチェックボックスがある",
     html.indexOf('id="modal-face-photo"') > 0);
   check("モーダルの表示は faceCamStaffEnabled で判定している",
-    /fpEl\.checked=faceCamStaffEnabled\(s\)/.test(html));
-  check("既存スタッフの保存はチェックON時だけ true を書く",
-    /if\(fpEl2&&fpEl2\.checked\)s\.facePhoto=true; else delete s\.facePhoto;/.test(html));
+    /fpEl\.checked=s\?faceCamStaffEnabled\(s\):faceCamTenantDefault\(\)/.test(html));
+  check("既存スタッフの保存はチェックON時だけ true を書く（既定ONの会社で外したら false、それ以外は削除）",
+    /if\(fpEl2&&fpEl2\.checked\)s\.facePhoto=true; else if\(fpEl2&&faceCamTenantDefault\(\)\)s\.facePhoto=false; else delete s\.facePhoto;/.test(html));
   check("新規スタッフの保存もチェックON時だけ true を書く",
-    /if\(fpEl3&&fpEl3\.checked\)newStaff\.facePhoto=true;/.test(html));
+    /if\(fpEl3&&fpEl3\.checked\)newStaff\.facePhoto=true; else if\(fpEl3&&faceCamTenantDefault\(\)\)newStaff\.facePhoto=false;/.test(html));
+  check("会社の既定は会社設定 facePhotoDefault（穂乃味 false・マンテール true）",
+    /honomi:\{[\s\S]*?facePhotoDefault:false,[\s\S]*?mantel:\{[\s\S]*?facePhotoDefault:true,/.test(html));
   const trueWrites = (html.match(/facePhoto=true/g) || []).length;
   check("facePhoto=true を書くのはその2か所だけ（勝手にONへ移行しない）", trueWrites === 2);
   check("新規スタッフのオブジェクト初期値に facePhoto を入れていない",
