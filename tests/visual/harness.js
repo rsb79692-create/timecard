@@ -140,8 +140,8 @@ async function installRoutes(page, srcDir, opts) {
         }
       }
       if (p === "/api/auth/share") {
-        const role = body.kind === "kiosk" ? "k" : body.kind === "viewer" ? "v" : body.kind === "demo" ? "d" : "x";
-        lastClaims.value = Object.assign({ r: role }, cl, role === "k" ? { sx: sx } : {});
+        const role = (body.kind === "kiosk" || body.kind === "adminKiosk") ? "k" : body.kind === "viewer" ? "v" : body.kind === "demo" ? "d" : "x";
+        lastClaims.value = Object.assign({ r: role }, cl, role === "k" ? { sx: sx } : {}, body.kind === "adminKiosk" ? { ka: true } : {});
         return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ customToken: "ct", role: role, sessionExpiresAt: sx }) });
       }
       return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ok: true }) });

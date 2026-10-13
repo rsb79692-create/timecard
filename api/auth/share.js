@@ -4,6 +4,8 @@
  * 共有URLトークン（労務士閲覧 / 管理者デモ / スタッフテスト）→ 対応する役割の Custom Token。
  *
  * 入力  : { kind: "viewer"|"demo"|"sandbox", token: string }
+ *         { kind: "kiosk", token: 施設トークン }（新会社のみ）
+ *         { kind: "adminKiosk", idToken: 管理者の ID トークン }（新会社のみ。管理画面を閉じたときの降格）
  * 出力  : { customToken, role, sessionExpiresAt }
  * 失敗  : 401 { error: "invalid_credentials" } / 410 { error: "expired" }
  *
@@ -39,6 +41,11 @@ const KINDS = {
   // ★ 施設端末（新会社のみ）。施設URLのトークンを、会社ID付きの端末トークン（r:"k"）へ交換する。
   //   穂乃味は従来どおり匿名サインインで起動するので、この種別は穂乃味では受け付けない。
   kiosk: { node: null, role: "k", requireExpiry: false, tenantOnly: true },
+  // ★ 管理画面を閉じたときの権限の降格（新会社のみ）。正規の管理者セッション（r:"a"・失効していない）を、
+  //   書き込みが一切できない施設端末トークン（r:"k"・施設キー無し）へ交換する。
+  //   施設URLの無い端末（管理者URL・管理者PINで入った端末）でも、管理者の権限を残さずに打刻トップ（スタッフ一覧）を出すため。
+  //   打刻そのものは従来どおり各スタッフのPIN（/api/auth/staff）が要る＝管理者URLだけで打刻できるようにはしない。
+  adminKiosk: { node: null, role: "k", requireExpiry: false, tenantOnly: true, fromAdmin: true },
 };
 
 /** 施設名 → 16桁のキー（将来の facility_manager 用に端末トークンへ載せる。施設名そのものは載せない） */
@@ -88,8 +95,10 @@ module.exports = T.handler(async function handler(req, res) {
     const token = H.str(body.token, 128);
     const spec = Object.prototype.hasOwnProperty.call(KINDS, kind) ? KINDS[kind] : null;
 
-    // ★ 施設端末（kiosk）は新会社だけ。穂乃味では従来どおりレート制限へ触れる前に 401。
-    if (!spec || !token || !safeToken(token) || (spec.role === "k" && T.current().legacy)) {
+    // ★ 施設端末（kiosk / adminKiosk）は新会社だけ。穂乃味では従来どおりレート制限へ触れる前に 401。
+    //   adminKiosk は施設トークンではなく管理者の ID トークン（idToken）で交換する。
+    if (!spec || (spec.role === "k" && T.current().legacy) ||
+        (!spec.fromAdmin && (!token || !safeToken(token)))) {
       await H.withMinDuration(startedAt, MIN_MS);
       return H.fail(res, 401, H.INVALID);
     }
@@ -106,6 +115,32 @@ module.exports = T.handler(async function handler(req, res) {
       return H.fail(res, 429, "rate_limited");
     }
     const throttleMs = Math.max(S.delayMsFor(nIp, SOFT_IP), S.delayMsFor(nAll, SOFT_ALL));
+
+    // ===== 管理者セッション → 施設端末（新会社のみ）=====
+    if (spec.fromAdmin) {
+      let ac = null;
+      try { ac = await G.verifyIdToken(H.str(body.idToken, 4096)); } catch (e) { ac = null; }
+      // ★ 管理者の特権を使う経路なので、管理者PIN・管理者URLの変更による失効も検証する（pin-set と同じ）。
+      const okAdmin = !!ac && ac.r === "a" && (await S.adminSessionValid(ac));
+      if (throttleMs) await new Promise((r) => setTimeout(r, throttleMs));
+      if (!okAdmin) {
+        await H.withMinDuration(startedAt, MIN_MS);
+        return H.fail(res, 401, H.INVALID);
+      }
+      const nowA = Math.floor(Date.now() / 1000);
+      const tidA = S.tokenHash("adminKiosk\0" + String(ac.sub || "")).slice(0, 16);
+      // 施設キー（fk）は載せない（特定の施設の端末ではない）。期限は元の管理者セッションより延ばさない。
+      const baseA = { r: "k", at: nowA, cv: 1, ka: true };
+      if (typeof ac.sx === "number") baseA.sx = ac.sx;
+      const claimsA = T.decorateClaims(baseA, "k");
+      const customTokenA = G.createCustomToken(T.uid("k", tidA), claimsA);
+      await H.withMinDuration(startedAt, MIN_MS);
+      return res.status(200).json({
+        customToken: customTokenA,
+        role: "k",
+        sessionExpiresAt: claimsA.sx || null,
+      });
+    }
 
     // ===== 施設端末（新会社のみ）=====
     if (spec.role === "k") {

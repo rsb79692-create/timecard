@@ -164,6 +164,7 @@ function idToken(uid, claims) {
 /** Custom Token（サーバが返したもの）の中身を読む。交換後の ID トークンはこのクレームを持つ。 */
 function decodeCustom(ct) { return JSON.parse(Buffer.from(String(ct).split(".")[1], "base64url").toString("utf8")); }
 /** Custom Token を「交換したことにして」ID トークンを作る（Firebase の signInWithCustomToken と同じクレーム）。 */
+function claimsOfIdToken(t) { try { return JSON.parse(Buffer.from(String(t).split(".")[1], "base64url").toString("utf8")); } catch (e) { return {}; } }
 function exchange(ct) { const p = decodeCustom(ct); return idToken(p.uid, p.claims || {}); }
 
 let ipSeq = 1;
@@ -547,6 +548,44 @@ async function main() {
     const v3 = await call(H.share, { kind: "viewer", token: "vtHonomi" });
     const v3p = v3.body && v3.body.customToken ? decodeCustom(v3.body.customToken) : {};
     check("穂乃味の閲覧用URLは従来どおり（c なし）", v3.statusCode === 200 && !("c" in (v3p.claims || {})));
+  }
+
+  section("6b. 管理画面を閉じたときの降格（管理者セッション → 施設端末トークン）");
+  {
+    const a1 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: mantelAdminTok });
+    const ap = a1.body && a1.body.customToken ? decodeCustom(a1.body.customToken) : {};
+    const ac = claimsOfIdToken(mantelAdminTok);
+    check("mantel の管理者セッションを施設端末トークンへ交換できる", a1.statusCode === 200 && ap.claims && ap.claims.r === "k" && ap.claims.c === "mantel" && ap.claims.ka === true);
+    check("交換した施設端末トークンは施設キーを持たず、期限は管理者セッション以下", ap.claims && !("fk" in ap.claims) && typeof ap.claims.sx === "number" && ap.claims.sx <= ac.sx);
+    check("交換した施設端末トークンは管理者・スタッフの uid にならない", typeof ap.uid === "string" && /^k:mantel:[0-9a-f]{16}$/.test(ap.uid));
+    const kaTok = ap.uid ? exchange(a1.body.customToken) : "";
+    const st1 = await call(H.staff, { tenant: "mantel", idToken: kaTok, staffName: "山田 太郎", pin: "2222" });
+    check("交換した施設端末トークンからスタッフのPINで打刻ログインできる", st1.statusCode === 200);
+    const st2 = await call(H.staff, { tenant: "mantel", idToken: kaTok, staffName: "山田 太郎", pin: "9999" });
+    check("PIN が違えば打刻ログインできない（管理者の権限で打刻させない）", st2.statusCode === 401);
+    const savedPin = getAt(["srv", "mantel", "authz", "pins"]);
+    const ps1 = await call(H.pinSet, { tenant: "mantel", idToken: kaTok, staffName: "山田 太郎", pin: "4444" });
+    check("交換した施設端末トークンでは登録済みの他人のPINを上書きできない", ps1.statusCode === 403
+      && JSON.stringify(getAt(["srv", "mantel", "authz", "pins"])) === JSON.stringify(savedPin));
+    const rv = await call(H.pinSet, { tenant: "mantel", idToken: kaTok, staffName: "山田 太郎", reveal: true });
+    check("交換した施設端末トークンでは PIN を確認できない", rv.statusCode === 403);
+    const kk = await call(H.share, { tenant: "mantel", kind: "kiosk", token: "tokMantelFacility" });
+    const kkTok = exchange(kk.body.customToken);
+    const a2 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: kkTok });
+    const a3 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: mantelStaffTok });
+    const a4 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: kaTok });
+    const a5 = await call(H.share, { tenant: "mantel", kind: "adminKiosk" });
+    check("管理者以外（施設端末・スタッフ・交換済み・無し）からは交換できない",
+      a2.statusCode === 401 && a3.statusCode === 401 && a4.statusCode === 401 && a5.statusCode === 401);
+    const a6 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: honomiAdminTok });
+    check("穂乃味の管理者トークンで mantel の施設端末トークンは得られない", a6.statusCode === 401);
+    const a7 = await call(H.share, { kind: "adminKiosk", idToken: honomiAdminTok });
+    check("穂乃味では交換しない（従来どおり匿名で起動）", a7.statusCode === 401);
+    const savedMin2 = getAt(["srv", "mantel", "authz", "adminMinAt"]);
+    setAt(["srv", "mantel", "authz", "adminMinAt"], Math.floor(Date.now() / 1000) + 3600);
+    const a8 = await call(H.share, { tenant: "mantel", kind: "adminKiosk", idToken: mantelAdminTok });
+    check("失効した管理者セッション（管理者PIN・URLの変更後）からは交換できない", a8.statusCode === 401);
+    setAt(["srv", "mantel", "authz", "adminMinAt"], savedMin2);
   }
 
   section("7. 機能フラグ（mantel は移動距離・持ち出し監視が無効）");

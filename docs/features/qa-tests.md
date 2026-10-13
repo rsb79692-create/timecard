@@ -61,7 +61,7 @@
 13. **朝出勤未確認の施設別判定時刻の回帰テスト**: `node scripts/test-morning-check.js`（全件 PASS / 0 FAIL を確認）。**朝出勤未確認 LINE通知・施設別の判定時刻・`morning-check.yml` の cron に関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 14. **打刻時の顔撮影の回帰テスト**: `node scripts/test-face-photo.js`（全件 PASS / 0 FAIL を確認）。**顔撮影・スタッフ管理モーダルの当該項目・`_execPunch` の結線に関係する `index.html` の変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
 15. **施設端末の持ち出し検知の回帰テスト**: `node scripts/test-device-watch.js`（全件 PASS / 0 FAIL を確認）。**持ち出し検知・`api/device.js` / `api/device-report.js` / `api/_lib/device.js`・`/devmon`・管理画面の監視UIに関係する変更では実行必須**。1件でも FAIL なら「要修正」とし ship に進まない。関係しない変更では実施不要（その旨を報告する）
-15b. **マルチテナント（会社間分離）の検証**: `node scripts/test-multitenant.js`（全件 PASS / 0 FAIL）。**`api/` 全般・`index.html` の会社設定／認証／端末保存・`database.rules.json`・`storage.rules`・`sw.js`・通知スクリプトに関係する変更では実行必須**。Rules を変えた場合は `tests/rules`（エミュレータ）、画面を変えた場合は `node tests/visual/client-isolation.js` と `node tests/visual/visual-regression.js`（穂乃味が変更前と同一）も実行する
+15b. **マルチテナント（会社間分離）の検証**: `node scripts/test-multitenant.js`（全件 PASS / 0 FAIL）。**`api/` 全般・`index.html` の会社設定／認証／端末保存・`database.rules.json`・`storage.rules`・`sw.js`・通知スクリプトに関係する変更では実行必須**。Rules を変えた場合は `tests/rules`（エミュレータ）、画面を変えた場合は `node tests/visual/client-isolation.js` と `node tests/visual/visual-regression.js`（穂乃味が変更前と同一）も実行する。管理者の認証・管理画面の開閉・打刻トップを変えた場合は `node tests/visual/admin-close.js`（穂乃味・マンテール × スマホ・PC で、閉じた後に管理者の権限が残らないこと・打刻できること）も実行する
 16. **通知スクリプト dryRun**: `DRY_RUN=true node scripts/morning-check.js`（環境変数未設定ならスキップして報告。実送信はしない）。判定時刻ごとに確認する場合は `CHECK_HOUR=6` / `CHECK_HOUR=7` を付ける
 17. **GitHub Actions YAML 確認**: 構文・cron・`secrets` 参照名・`node-version`
 

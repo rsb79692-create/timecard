@@ -67,6 +67,7 @@ var TENANT_CONFIGS={
     // 公式ロゴ（元画像の白い余白だけを詰めて縮小。図柄は変えない）。表示は honomiLogoHtml() だけで行う
     logo:{src:"brand/honomi/logo-h108.png",src2x:"brand/honomi/logo-h240.png",w:143,h:108,alt:"株式会社 穂乃味"},
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
+    facilityAdminMenu:false,   // 施設URLの打刻トップに「管理者メニュー」を出すか（穂乃味は出さない。従来どおり）
     features:{mileage:true,deviceWatch:true,monthlyDocs:true}  // monthlyDocs はミュゲの泉だけ（MDOC_FACILITIES。2026-10-09 再開）
   },
   mantel:{
@@ -94,6 +95,7 @@ var TENANT_CONFIGS={
       "--head-bg2":"#E8EDF3","--head-line2":"#94A3B8","--muted":"#8496A7",
       "--btn2-bg":"#DDE1E7","--btn2-text":"#475569","--btn-border":"#ADB5BD","--sel-bg":"var(--brand)","--date-text":"#475569"
     },
+    facilityAdminMenu:true,    // 施設URLの打刻トップにも「管理者メニュー」を出す（2026-10-13 ユーザー指示）
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
     features:{mileage:false,deviceWatch:false,monthlyDocs:false}
   }
@@ -671,10 +673,12 @@ function _saveAnonSession(){
   //   保存先は会社ごとに分かれている（saveRaw → TLS）。
   if(TENANT.legacy?(_authRole!=="anon"):(_authRole!=="k"))return;
   if(!_fbIdToken||!_fbRefreshToken)return;
+  // ★ 管理者セッションから交換した施設端末トークン（ka）は保存しない（管理者が認証したこのページの間だけ使う）
+  if(!TENANT.legacy){var _kc=_jwtClaims(_fbIdToken);if(!_kc||_kc.ka===true)return;}
   saveRaw(_ANON_SESS_KEY,JSON.stringify({v:1,t:_fbIdToken,r:_fbRefreshToken,e:_fbTokenExpiry}));
 }
 function _clearAnonSession(){_anonSessRestored=false;try{TLS.removeItem(_ANON_SESS_KEY);}catch(e){}}
-(function _restoreAnonSession(){
+function _restoreAnonSession(){
   var raw=loadRaw(_ANON_SESS_KEY,"");
   if(!raw)return;
   var o=null;try{o=JSON.parse(raw);}catch(e){o=null;}
@@ -682,12 +686,55 @@ function _clearAnonSession(){_anonSessRestored=false;try{TLS.removeItem(_ANON_SE
   if(!TENANT.legacy){
     // ★ 新会社: 自社の施設端末トークンで、業務上の期限（sx）が十分残っているものだけ復元する。
     var _cl=_jwtClaims(o.t);
-    if(!_cl||_cl.c!==TENANT_ID||_cl.r!=="k"||!_tenantSxOk(_cl)){_clearAnonSession();return;}
+    if(!_cl||_cl.c!==TENANT_ID||_cl.r!=="k"||_cl.ka===true||!_tenantSxOk(_cl)){_clearAnonSession();return;}
     _authRole="k";
   }
   _fbIdToken=o.t;_fbRefreshToken=o.r;_fbTokenExpiry=Number(o.e)||0;
   _anonSessRestored=true;
-})();
+}
+_restoreAnonSession();
+
+// ===== 管理者の権限の解除（穂乃味・他社で共通）=====
+// 管理画面を「閉じる」ときに呼ぶ。管理者トークンをメモリから捨て、その端末の通常のセッションへ戻す。
+//   ・穂乃味                                   → 匿名セッション（従来の起動経路と同じ）
+//   ・他社で施設URL（施設トークン）のある端末    → 施設端末トークン（従来の起動経路と同じ）
+//   ・他社で施設URLの無い端末（管理者URL・管理者PINで入った端末）
+//                                              → 管理者セッションをサーバで交換した施設端末トークン
+//                                                （書き込み不可・施設キー無し・期限は管理者セッション以下・端末に保存しない）
+// ★ どの場合も、打刻と PIN 登録は各スタッフの PIN で行う（管理者の権限では行わせない）。
+// ★ 管理者トークンは端末へ保存していない（_saveAnonSession）ので、メモリから捨てれば残らない。
+/** 管理者の状態だけを落とす（トークンは呼び出し側で差し替える）。 */
+function _adminStateClear(){
+  isAdminAuthenticated=false;isSystemAdmin=false;pinScope="company";
+  _adminElevatePromise=null;
+  // 管理者だけが読む一覧（閲覧用・デモ・スタッフテストURL）を画面のメモリに残さない。次に管理画面へ入ったときに取り直す。
+  viewerTokensList=null;demoTokensList=null;staffDemoTokensList=null;
+}
+/** 管理者トークンと管理者の状態を捨て、端末の通常のセッション（保存済みの匿名／施設端末トークン、無ければ次の取得時に作る）へ戻す。 */
+function adminSessionDrop(){
+  _adminStateClear();
+  _fbIdToken="";_fbRefreshToken="";_fbTokenExpiry=0;
+  _authEpoch++; // 進行中の取得（管理者トークンの更新）が後から書き戻すのを防ぐ
+  _authRole=TENANT.legacy?"anon":"k";_authClaims=null;
+  _restoreAnonSession();
+  getAuthToken().catch(function(){}); // 先に取っておく（失敗しても打刻・ログインの時点で取り直す）
+}
+/**
+ * 管理者の権限を解除する。解除できたら true。
+ * 他社で施設URLの無い端末は、サーバでの交換に失敗したら false（管理者セッションはそのまま。閉じずにもう一度押してもらう）。
+ * @return {Promise<boolean>}
+ */
+async function adminSessionRelease(){
+  if(TENANT.legacy||(!adminUrlAll&&tenantKioskCredential())){adminSessionDrop();return true;}
+  var tok="";try{tok=await getAuthToken();}catch(e){tok="";}
+  var res=tok?await callAuthApi("share",{kind:"adminKiosk",idToken:tok},12000):{ok:false};
+  if(!res.ok||!res.data||!res.data.customToken)return false;
+  try{await exchangeCustomToken(res.data.customToken,8000);}catch(e){return false;} // 失敗時は管理者トークンのまま（差し替えていない）
+  _adminStateClear();
+  _authRole="k";
+  _authClaims={role:"k",expiresAt:null,sessionExpiresAt:res.data.sessionExpiresAt||null};
+  return true;
+}
 
 // ★ single-flight。起動時の一括読込は authFetch を20本以上同時に呼ぶため、
 //   従来は「同じサインイン」が20本以上並列発射されていた（＝毎ロード20個以上の匿名ユーザー生成）。
@@ -706,7 +753,8 @@ async function getAuthToken(){
     if(_fbIdToken&&!_sxOk){
       var _r=_cl&&_cl.r;
       _fbIdToken="";_fbRefreshToken="";_fbTokenExpiry=0;_clearAnonSession();
-      if(_r&&_r!=="k"&&_r!=="s"){tenantSessionExpired();throw new Error("tenant session expired");}
+      // 施設URLの無い端末（管理者URLなど）の施設端末・スタッフは取り直す元が無いので、同じくログインし直してもらう
+      if(_r&&((_r!=="k"&&_r!=="s")||!tenantKioskCredential())){tenantSessionExpired();throw new Error("tenant session expired");}
       if(_r==="s"&&(screen==="punch"||screen==="staffPin")){screen="home";staffName=null;try{faceCamPreviewStop();}catch(e){}}
     }
   }
@@ -4074,6 +4122,7 @@ var urlToken=(new URLSearchParams(location.search).get("token"))||"";
 if(!urlToken){var _h=location.hash.replace(/^#/,"");if(_h){var _hToken=new URLSearchParams(_h).get("token")||"";if(!_hToken&&!/[&=]/.test(_h)){_hToken=_h;}if(_hToken){urlToken=_hToken;}}}
 console.log("[TC]","query token:",(new URLSearchParams(location.search).get("token")?"(set)":"-"),"hash:",(location.hash?"(set)":"-"));
 var isAllToken=(urlToken==="all");
+var urlTokenFromUrl=urlToken; // URL（クエリ・ハッシュ）に書かれていた施設トークン。下の端末保存からの復元分を含まない
 // Persist — all: tc_url_token="all" + facilityToken削除; facility: 両キー保存
 if(isAllToken){TLS.setItem("tc_url_token","all");TLS.removeItem("facilityToken");}
 else if(urlToken&&Object.prototype.hasOwnProperty.call(VALID_TOKENS,urlToken)){TLS.setItem("facilityToken",urlToken);TLS.setItem("tc_url_token",urlToken);}
@@ -4111,6 +4160,30 @@ var adminTokenValid=false;
 var adminTokenInvalid=false;
 var adminTokenErrMsg=""; // 管理者URL認証の失敗理由（トークン不正／サーバ到達不可 等）
 var isAdminAuthenticated=false; // 管理者認証済みフラグ
+// ★ 管理者URL（施設トークン無し）を正規に認証できた端末は、打刻トップに全スタッフを出す（穂乃味の ?token=all と同じ表示）。
+//   穂乃味・他社で共通。端末保存の施設トークンに左右されない（PC とスマホで同じ表示にする）。
+//   端末へは保存しない（管理者URLの認証が通ったこのページの間だけ）。打刻は従来どおり各スタッフのPINが要る。
+var adminUrlAll=false;
+function adminUrlApplyAllScope(){
+  if(!adminUrlUsed||!adminTokenValid||urlTokenFromUrl)return;
+  adminUrlAll=true;isAllToken=true;effectiveToken="";tokenValid=true;facilityName="";
+}
+// ★ 管理者URLで開いた画面を「閉じる」で閉じた後の再読み込み（アプリの自動更新を含む）で、管理画面へ戻さない。
+//   戻すと、閉じて放置した端末が更新のたびに管理者の権限を取り戻し、他人のPINを変えられる状態になる。
+//   管理者URLを新たに開いた（ブックマーク・リンクから移動した）ときは従来どおり管理画面を開く。記録はこのタブの間だけ。
+var _ADMIN_URL_CLOSED_KEY=TENANT_LS_PREFIX+"tc_admin_url_closed";
+function adminUrlMarkClosed(){
+  if(!adminUrlUsed)return;
+  try{sessionStorage.setItem(_ADMIN_URL_CLOSED_KEY,"1");}catch(e){}
+}
+function adminUrlReopenedAfterClose(){
+  var closed=false;try{closed=sessionStorage.getItem(_ADMIN_URL_CLOSED_KEY)==="1";}catch(e){closed=false;}
+  if(!closed)return false;
+  var nav="";
+  try{var _ne=performance.getEntriesByType("navigation");nav=(_ne&&_ne[0]&&_ne[0].type)||"";}catch(e){nav="";}
+  if(nav==="navigate"){try{sessionStorage.removeItem(_ADMIN_URL_CLOSED_KEY);}catch(e){}return false;}
+  return true; // 再読み込み・戻る/進む（種類が分からないときも閉じたままにする）
+}
 
 // ===== 管理者URLトークンの「設定状態」（表示専用。認証には一切使わない）=====
 // ★ 取得できなかったことを「未設定」と表示してはならない。
@@ -5859,9 +5932,11 @@ function _renderInner(){
       +(firebaseError
       ?'<div style="color:#dc2626;font-size:.85rem;font-weight:700;text-align:center;margin-bottom:6px;">通信エラーです。再読み込みしてください</div>'
       :(firebaseReady?'':''));
-    // 穂乃味は施設URLでは出さない（従来どおり）。他社は施設URLの打刻トップにも出す（2026-10-13 ユーザー指示）。
-    app.innerHTML=((!urlToken||isAllToken||!TENANT.legacy)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()"'+(TENANT.legacy?'':' style="margin-bottom:10px;"')+'>管理者メニュー</button>':'')
-      +tenantBrandHeaderHtml()
+    // 施設URLの打刻トップに出すかは会社設定（facilityAdminMenu）で決める（2026-10-13 ユーザー指示。穂乃味は従来どおり出さない）。
+    //   ロゴ見出し（tenantBrandHeaderHtml）を出す会社は、ロゴとの間を空ける。
+    var _brandHead=tenantBrandHeaderHtml();
+    app.innerHTML=((!urlToken||isAllToken||TENANT.facilityAdminMenu===true)&&uiMode==="normal"?'<button class="btn-admin" onclick="goPin()"'+(_brandHead?' style="margin-bottom:10px;"':'')+'>管理者メニュー</button>':'')
+      +_brandHead
       // 穂乃味はロゴと日付・時計を横に並べる（縦に積まないので画面の高さはほぼ変わらない）
       +(TENANT.legacy
         ?'<div class="hn-home-head">'+honomiLogoHtml(78,"hn-logo-home")+'<div class="hn-home-clock">'
@@ -10241,18 +10316,26 @@ function goHome(){
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
   screen="home";render();
 }
-// ★ 新会社の施設端末では、管理者セッションを共用端末に残さない。管理者トークンは端末に保存していない
-//   （_saveAnonSession は k だけ）ので、再読み込みで保存済みの施設端末トークン（k）へ戻る。
-//   残すと、次の人の「PIN新規登録」が管理者権限で送られ、登録済みの他人のPINを上書きできてしまう。
-function closeAdminMenu(){
-  //   管理者URLで入った画面は再読み込みすると管理画面へ戻るだけなので、従来どおりホームへ戻す。
-  //   保存の通信・承認の保留書込みの途中は再読み込みで失われるため、閉じずに待ってもらう（ホームへも戻さない）。
-  if(!TENANT.legacy&&!adminTokenValid&&tenantKioskCredential()){
-    var _busy=true;
-    //   承認の結果不明（_apvHasUnknown）は既存の案内どおり再読み込みで解消する状態なので待たない（待つと閉じられなくなる）。
-    try{_busy=_appWritesInFlight>0||savingCount>0||_apvBusyCount>0||_apvPutInFlight>0||(_apvPutDeferred&&!_apvHasUnknown());}catch(e){_busy=true;}
-    if(_busy){showAlert("保存中です。\n少し待ってから、もう一度「閉じる」を押してください。");return;}
-    location.reload();return;
+// ★ 管理画面を閉じる（穂乃味・他社で共通）。閉じたら管理者の権限を解除して打刻トップへ戻る。
+//   管理者の権限を残すと、次の人の「PIN新規登録」が管理者権限で送られ、登録済みの他人のPINを上書きできてしまう。
+//   保存の通信・承認の保留書込みの途中は、解除すると書き込めなくなるため、閉じずに待ってもらう（ホームへも戻さない）。
+var _adminReleasing=false;
+async function closeAdminMenu(){
+  if(_adminReleasing)return;
+  var _busy=true;
+  //   承認の結果不明（_apvHasUnknown）は既存の案内どおり再読み込みで解消する状態なので待たない（待つと閉じられなくなる）。
+  try{_busy=_appWritesInFlight>0||savingCount>0||_apvBusyCount>0||_apvPutInFlight>0||(_apvPutDeferred&&!_apvHasUnknown());}catch(e){_busy=true;}
+  if(_busy){showAlert("保存中です。\n少し待ってから、もう一度「閉じる」を押してください。");return;}
+  if(isAdminAuthenticated){
+    _adminReleasing=true;
+    var ok=false;
+    try{ok=await adminSessionRelease();}catch(e){ok=false;}
+    finally{_adminReleasing=false;}
+    if(!ok){
+      showAlert("通信できないため、管理者メニューを閉じられませんでした。\n通信状態を確認して、もう一度「閉じる」を押してください。");
+      return;
+    }
+    adminUrlMarkClosed();
   }
   screen="home";render();
 }
@@ -16458,12 +16541,19 @@ async function initFirebase() {
       var _ar=tenantAdminUrlResult||await establishSessionEx("admin",{adminToken:adminParam||""},12000);
       if(_ar&&_ar.ok){
         adminTokenValid=true;adminTokenInvalid=false;isAdminAuthenticated=true;
-        screen="admin";adminTab="records";
+        adminUrlApplyAllScope();
         // establishSessionEx が既に admin ロールを確立済み。
         // 後続の管理系API（PIN変更・トークン変更）と afterElevation() が待てるようにしておく。
         // ★ initFcmForAdmin() より**先に**代入する（PIN経路と順序を揃える）。
         _adminElevatePromise=Promise.resolve(true);
-        initFcmForAdmin();
+        if(adminUrlReopenedAfterClose()){
+          // 閉じた後の再読み込み: 管理者の権限を解除して打刻トップのまま（解除できなければ管理者の状態を残さず打刻トップ）
+          if(!(await adminSessionRelease()))adminSessionDrop();
+          screen="home";
+        } else {
+          screen="admin";adminTab="records";
+          initFcmForAdmin();
+        }
       } else {
         adminTokenValid=false;adminTokenInvalid=true;
         // ★ 失敗理由を区別する。通信障害・準備中・過負荷を「トークンが違う」と
