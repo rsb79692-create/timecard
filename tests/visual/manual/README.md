@@ -12,3 +12,14 @@ NODE_PATH=<playwright のある node_modules> node tests/visual/manual/build-man
 できた PDF は honomi-monthly-docs の `public/manual.pdf`（`/manual` から開く）に置く。撮影の出力・PDF をこのリポジトリに置かない（公開リポジトリ）。
 打刻の画面・流れを変えたら撮り直す。
 ★ 実データ・本番の画面では撮らない（PDF の氏名の隠しは画像の上に重ねているだけで、元の画像は PDF に残る）。
+
+## マンテール（従業員用・管理者用）
+
+- `mantel-shots.js` … `?c=mantel` の施設URL（スマホ幅）と管理者URL（PC幅）を模擬ネットワークで開き、打刻・申請・管理画面の各タブを撮る。押す場所の位置を `<name>.json` に保存する。
+  ★ 本番の Firebase・Vercel へ接続しない。氏名・データは架空。顔撮影のカメラは模擬映像。
+
+```
+node tests/visual/manual/mantel-shots.js <撮影の出力先>
+```
+
+撮影の出力・できたマニュアルをこのリポジトリに置かない（公開リポジトリ）。
