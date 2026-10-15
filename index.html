@@ -1273,6 +1273,48 @@ function mealClockOutMergePending(){
   });
 }
 // ===== MEAL-CLOCKOUT-END =====
+// ===== 管理者による賄いの編集（MEAL-ADMIN-EDIT。2026-10-15 ユーザー指示「まかない編集できるようにして」） =====
+// 「CSV出力」タブの賄い一覧で日のセルを押すと、確認のうえ取得あり／なしを切り替える。
+// ★ 書くのはその日の1件だけ（PATCH。tc5_meals/{eid} の全体PUTをしない）。管理者のみ・本番書き込み可・賄いデータ取得済みのときだけ。
+// ★ 未来の日は編集できない。社員番号が無い・不正なスタッフは編集できない。
+var _mealWriteInFlight=0; // 保存中は賄い一覧の定期取得で表示を戻さない
+function mealAdminCanEdit(){return !!(isAdminAuthenticated&&!demoMode&&!viewerMode&&writePolicy==="full"&&mealsLoaded&&tenantFeature("meals"));}
+function mealAdminCellEditable(eid,ds){
+  return mealAdminCanEdit()&&/^[A-Za-z0-9_-]+$/.test(String(eid||""))&&/^\d{4}-\d{2}-\d{2}$/.test(String(ds||""))&&ds<=getTodayJSTStr();
+}
+function mealAdminToggle(eid,ds,name){
+  if(!mealAdminCellEditable(eid,ds))return;
+  var e=mealsData[eid],cur=!!(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken);
+  var m=parseInt(ds.substring(5,7),10),d=parseInt(ds.substring(8,10),10);
+  showModal({title:"🍚 賄いの編集",message:(name||"")+" さん\n"+m+"月"+d+"日の賄いを「"+(cur?"なし":"取得あり")+"」にしますか？",
+    alertOnly:false,okLabel:cur?"なしにする":"取得ありにする",onOK:function(){mealAdminSetDate(eid,ds,!cur,name);},onCancel:function(){}});
+}
+function mealAdminSetDate(eid,ds,taken,name){
+  if(!mealAdminCellEditable(eid,ds))return;
+  var nm=mealStaffNameById(eid)||name||"";
+  if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
+  if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
+  var prev=mealsData[eid].dates[ds];
+  var ent=taken?{taken:true,updatedAt:new Date().toISOString()}:null;
+  if(ent)mealsData[eid].dates[ds]=ent;else delete mealsData[eid].dates[ds];
+  if(_mealCoPending[eid])delete _mealCoPending[eid][ds]; // 退勤時の「はい」の足し戻しより管理者の編集を優先する
+  var body={staffId:eid};
+  if(nm)body.staffName=nm;
+  body["dates/"+ds]=ent;
+  _mealWriteInFlight++;render();
+  function fail(t){
+    console.error("[mealAdminSetDate]",eid,ds,t);
+    var e2=mealsData[eid];
+    if(e2&&e2.dates){if(prev)e2.dates[ds]=prev;else delete e2.dates[ds];}
+    render();showAlert("賄いの保存に失敗しました。通信状態を確認して再度実行してください。");
+  }
+  authFetch(FB_URL+"/tc5_meals/"+encodeURIComponent(eid)+".json",{
+    method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)
+  }).then(function(res){if(!res.ok)fail("HTTP "+res.status);})
+    .catch(function(e){fail(e);})
+    .then(function(){_mealWriteInFlight--;});
+}
+// ===== MEAL-ADMIN-EDIT-END =====
 // 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
 function mealSelectAttendance(eid,ym){
   if(viewerMode){console.warn("[viewerMode] meal write blocked");return;}
@@ -3708,6 +3750,7 @@ function listenFirebase() {
       authFetch(FB_URL+"/tc5_meals.json")
         .then(function(r){return r.json();})
         .then(function(val){
+          if(_mealWriteInFlight>0)return; // 管理者の編集を保存中は表示を戻さない（次の取得で反映）
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
             mealsData=val;mealClockOutMergePending();
             if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -8928,7 +8971,7 @@ function _renderInner(){
 
     if(adminTab==="export"&&mealListOpen&&tenantFeature("meals")){
       // ===== 賄い（まかない）一覧（管理者・労務士向け閲覧。月別・スタッフ別・日別の取得状況＋月合計） =====
-      // 賄いデータ(tc5_meals)を読むだけ。打刻・有給・月別出勤データには一切書き込まない。
+      // 打刻・有給・月別出勤データには一切書き込まない。管理者は日のセルを押して賄いを編集できる（MEAL-ADMIN-EDIT。その日の1件だけを PATCH）。
       // 表示月は CSV出力の対象月（selMonth）と同じ（2026-10-12 ユーザー指示。賄い一覧の月選択欄は廃止）。
       // 月を変えても tc5_meals は取り直さない（全月分を持っている）。描き直すだけ。
       var meY=parseInt(selMonth.split("-")[0],10);
@@ -8965,7 +9008,9 @@ function _renderInner(){
           if(tk){rowTotal++;meDayTotals[day]++;}
           var _dow=new Date(meY,meM-1,day).getDay();
           var cellBg=tk?'#dcfce7':(_dow===0?'#fef2f2':_dow===6?'#eff6ff':'transparent');
-          tds+='<td style="'+_meTd+_medcol+'background:'+cellBg+';">'+(tk?'<span style="color:#15803d;font-weight:700;">●</span>':'<span style="color:#cbd5e1;">·</span>')+'</td>';
+          var _meDs=meY+"-"+pad(meM)+"-"+pad(day),_meEid=(s.employeeId||"").trim();
+          var _meEd=mealAdminCellEditable(_meEid,_meDs);
+          tds+='<td'+(_meEd?' data-meal-eid="'+esc(_meEid)+'" data-meal-ds="'+_meDs+'" data-meal-name="'+esc(s.name)+'"':'')+' style="'+_meTd+_medcol+'background:'+cellBg+';'+(_meEd?'cursor:pointer;':'')+'">'+(tk?'<span style="color:#15803d;font-weight:700;">●</span>':'<span style="color:#cbd5e1;">·</span>')+'</td>';
         }
         meGrand+=rowTotal;
         // タグの文字サイズは有給取得計画・月別出勤日数のタグ（.66rem）と統一
@@ -9008,7 +9053,7 @@ function _renderInner(){
         +'<input type="checkbox" id="chk-meal-notreq"'+(mealShowNotRequired?" checked":"")+' style="width:17px;height:17px;cursor:pointer;">賄い不要のスタッフも表示'+(meNotReqCount>0?'（'+meNotReqCount+'名）':'')+'</label>'
         +'</div>'
         // 2026-10-12: 月初確認（確認列・集計）を削除。賄いは日次CSV（賄い）・月次CSV（賄い回数）に入る。
-        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。CSVは上の日次CSV（賄い）・月次CSV（賄い回数）に入ります。</div>'
+        +'<div style="font-size:.82rem;color:#64748b;margin-bottom:8px;line-height:1.6;"><span style="color:#15803d;font-weight:700;">●</span> はその日の賄い取得。スタッフが退勤するときの質問（賄いを食べましたか？）で登録されます。'+(mealAdminCanEdit()?'日のマスを押すと取得あり／なしを編集できます（今日まで）。':'')+'CSVは上の日次CSV（賄い）・月次CSV（賄い回数）に入ります。</div>'
         +meTableHtml
         +'</div>';
     }
@@ -9565,6 +9610,12 @@ function _renderInner(){
       var mt=mealListOpen&&document.getElementById("btn-meal-toggle");
       if(mt){var mb=document.querySelector(".admin-sticky-bar");var mbH=(mb&&getComputedStyle(mb).position==="sticky")?mb.offsetHeight:0;
         window.scrollTo(0,Math.max(0,mt.getBoundingClientRect().top+window.scrollY-mbH-_modeBannerH()-8));}
+    };
+    var meCard=document.getElementById("meal-list-card");
+    if(meCard)meCard.onclick=function(ev){
+      var td=ev.target&&ev.target.closest&&ev.target.closest("td[data-meal-ds]");
+      if(!td||!meCard.contains(td))return;
+      mealAdminToggle(td.getAttribute("data-meal-eid"),td.getAttribute("data-meal-ds"),td.getAttribute("data-meal-name"));
     };
     var meNotReqChk=document.getElementById("chk-meal-notreq");
     if(meNotReqChk)meNotReqChk.onchange=function(){mealShowNotRequired=meNotReqChk.checked;render();};

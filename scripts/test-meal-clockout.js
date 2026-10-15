@@ -155,6 +155,56 @@ for (const f of ["function ensureStaffScopedData(", "function ensureAdminData("]
 }
 check("賄い一覧の定期取得も足し戻す", /mealsData=val;mealClockOutMergePending\(\);/.test(html));
 
+console.log("■ 管理者による賄いの編集（MEAL-ADMIN-EDIT。2026-10-15 ユーザー指示）");
+{
+  const ASRC = fnSrc("// ===== 管理者による賄いの編集（MEAL-ADMIN-EDIT", "// ===== MEAL-ADMIN-EDIT-END =====");
+  function mkA(o) {
+    o = o || {};
+    const x = {
+      console: { log() {}, warn() {}, error() {} },
+      isAdminAuthenticated: o.admin !== false, demoMode: !!o.demo, viewerMode: !!o.viewer, writePolicy: o.wp || "full",
+      mealsLoaded: o.loaded !== false, FB_URL: "https://fb.example", saved: [], alerts: [], modals: [], renders: 0,
+      staffList: [{ name: "大城", employeeId: "E1" }],
+      mealsData: o.mealsData || { E1: { staffId: "E1", staffName: "大城", dates: { "2026-10-01": { taken: true, updatedAt: "x" } } } },
+      _mealCoPending: o.pending || {},
+    };
+    x.tenantFeature = (n) => n === "meals" && o.meals !== false;
+    x.getTodayJSTStr = () => "2026-10-15";
+    x.mealStaffNameById = (e) => (e === "E1" ? "大城" : "");
+    x.render = () => { x.renders++; };
+    x.showAlert = (m) => x.alerts.push(m);
+    x.showModal = (m) => x.modals.push(m);
+    x.authFetch = (u, op) => { x.saved.push({ url: u, method: op.method, body: JSON.parse(op.body) }); return Promise.resolve({ ok: o.httpOk !== false, status: o.httpOk === false ? 500 : 200 }); };
+    vm.createContext(x); vm.runInContext(ASRC, x); return x;
+  }
+  let a = mkA(); a.mealAdminToggle("E1", "2026-10-10", "大城");
+  check("セルを押すと確認を出す（すぐには書かない）", a.modals.length === 1 && a.saved.length === 0 && /取得あり/.test(a.modals[0].message));
+  a.modals[0].onOK(); await tick();
+  check("「取得あり」はその日の1件だけを PATCH", a.saved.length === 1 && a.saved[0].method === "PATCH" && a.saved[0].url === "https://fb.example/tc5_meals/E1.json" && a.saved[0].body["dates/2026-10-10"].taken === true && !("dates" in a.saved[0].body));
+  check("他の日は保持する", a.mealsData.E1.dates["2026-10-01"].updatedAt === "x" && a.mealsData.E1.dates["2026-10-10"].taken === true);
+  a = mkA(); a.mealAdminToggle("E1", "2026-10-01", "大城");
+  check("取得ありの日は「なし」にする確認", a.modals.length === 1 && /「なし」/.test(a.modals[0].message));
+  a.modals[0].onOK(); await tick();
+  check("「なし」はその日だけを null で消す", a.saved.length === 1 && a.saved[0].body["dates/2026-10-01"] === null && !a.mealsData.E1.dates["2026-10-01"]);
+  a = mkA({ httpOk: false }); a.mealAdminSetDate("E1", "2026-10-10", true, "大城"); await tick(); await tick();
+  check("保存に失敗したら元に戻して知らせる", !a.mealsData.E1.dates["2026-10-10"] && a.alerts.length === 1 && a._mealWriteInFlight === 0);
+  a = mkA({ httpOk: false }); a.mealAdminSetDate("E1", "2026-10-01", false, "大城"); await tick(); await tick();
+  check("「なし」の保存に失敗したら取得ありに戻す", a.mealsData.E1.dates["2026-10-01"] && a.mealsData.E1.dates["2026-10-01"].updatedAt === "x");
+  a = mkA({ pending: { E1: { "2026-10-12": { taken: true } } } }); a.mealAdminSetDate("E1", "2026-10-12", false, "大城"); await tick();
+  check("退勤時の「はい」の足し戻しより管理者の「なし」を優先", !a._mealCoPending.E1["2026-10-12"]);
+  for (const [nm, o, eid, ds] of [
+    ["未来の日", {}, "E1", "2026-10-16"], ["管理者でない", { admin: false }, "E1", "2026-10-10"], ["閲覧用", { viewer: true }, "E1", "2026-10-10"],
+    ["デモ", { demo: true }, "E1", "2026-10-10"], ["サンドボックス", { wp: "sandbox" }, "E1", "2026-10-10"], ["賄いデータ未取得", { loaded: false }, "E1", "2026-10-10"],
+    ["社員番号なし", {}, "", "2026-10-10"], ["社員番号に不正文字", {}, "E/1", "2026-10-10"], ["賄いを使わない会社", { meals: false }, "E1", "2026-10-10"],
+  ]) {
+    a = mkA(o); a.mealAdminToggle(eid, ds, "大城"); a.mealAdminSetDate(eid, ds, true, "大城"); await tick();
+    check(nm + "は編集できない", a.modals.length === 0 && a.saved.length === 0 && !a.mealAdminCellEditable(eid, ds));
+  }
+  check("編集できるセルだけ押せる印を付ける", /var _meEd=mealAdminCellEditable\(_meEid,_meDs\);/.test(html) && /'<td'\+\(_meEd\?' data-meal-eid="'/.test(html));
+  check("賄い一覧のセルを押すと mealAdminToggle", /closest\("td\[data-meal-ds\]"\)[\s\S]{0,200}mealAdminToggle\(/.test(html));
+  check("保存中は定期取得で表示を戻さない", /if\(_mealWriteInFlight>0\)return;[\s\S]{0,400}mealsData=val;/.test(html));
+}
+
 console.log("■ 結線（doPunch / _execPunch）");
 const exec = fnSrc("async function _execPunch(", "function doPunch(");
 const dp = fnSrc("function doPunch(", "// ===== 施設変更 =====");

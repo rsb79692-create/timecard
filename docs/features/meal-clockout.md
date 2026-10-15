@@ -56,3 +56,12 @@
   日次・月次CSVに要る賄いデータは、従来どおり管理画面の初回取得（`ensureAdminData`）で読む。
 - 旧タブ名で `setTab("meals")` が呼ばれた場合は「CSV出力」タブで賄い一覧を開いた状態にする。
 - 「CSV出力」タブの「スタッフ別サマリー」は `EXPORT_STAFF_SUMMARY_VISIBLE=false` で非表示（`true` に戻せば再表示）。非表示の間は集計もしない。CSV出力と勤怠精査には影響しない。
+
+## 管理画面：賄いの編集（2026-10-15 ユーザー指示「まかない編集できるようにして」）
+
+- 「CSV出力」タブの賄い一覧で、日のマスを押すと確認（「◯月◯日の賄いを『取得あり』／『なし』にしますか？」）のうえ切り替える。
+  実装は `index.html` の `MEAL-ADMIN-EDIT` ブロック（`mealAdminCanEdit` / `mealAdminCellEditable` / `mealAdminToggle` / `mealAdminSetDate`）。
+- ★ 書くのはその日の1件だけ（`tc5_meals/{eid}` へ PATCH。`"dates/{日付}"` に `{taken,updatedAt}`、なしは `null`）。全体PUTしない。
+- ★ 編集できるのは管理者（`isAdminAuthenticated`）・本番書き込み可（`writePolicy==="full"`、デモ・閲覧用でない）・賄いデータ取得済み（`mealsLoaded`）のときだけ。今日より後の日・社員番号なし/不正のスタッフは押せない。
+- 保存に失敗したら表示を元に戻して知らせる。保存中は賄い一覧の10秒ごとの取得で表示を戻さない（`_mealWriteInFlight`）。
+- 管理者が「なし」にした日は、退勤時の「はい」の足し戻し（`_mealCoPending`）から外す。
