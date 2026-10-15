@@ -6,8 +6,10 @@
  *
  * 固定すること:
  *   1. 退勤ボタンを押したら打刻の前に聞き、はい／いいえに答えたら退勤を打刻する。「退勤をやめる」では打刻しない。
- *   2. 聞くのは「賄い 要」のスタッフだけ。賄い不要・閲覧用・賄いデータ未取得・社員番号なし/不正・既にONの日は聞かずにそのまま打刻する。
- *   3. 賄いの記録は退勤の端末保存が成功した後だけ（_execPunch の ⑥）。「はい」でその日だけを取得ありにし他の日を保持する。「いいえ」は書かない。
+ *   2. 聞くのは「賄い 要」のスタッフだけ。賄い不要・閲覧用・社員番号なし/不正・既にONの日は聞かずにそのまま打刻する。
+ *      賄いデータ未取得でも聞く（2026-10-15）。
+ *   3. 賄いの記録は退勤の端末保存が成功した後だけ（_execPunch の ⑥）。「はい」でその日の1件だけを PATCH で足す（全体PUTしない）。「いいえ」は書かない。
+ *      取得中だった tc5_meals の古い応答で「はい」が消えない。
  *   4. 答えるまでに同じ人の退勤が届いていたら打刻しない。画面を離れていたら打刻しない。
  *   5. 出勤・休憩では聞かない。枠外タップで閉じない（誤タップで打刻しない）。
  */
@@ -53,7 +55,7 @@ function mk(opts) {
     mealsData: opts.mealsData || {},
     records: opts.records || [],
     document: mkDoc(),
-    execs: [], saved: [], alerts: [],
+    execs: [], saved: [], puts: [], alerts: [],
   };
   ctx.tenantFeature = (n) => (n === "meals" ? opts.meals !== false : false);
   ctx.resolveStaffId = (n) => { const s = ctx.staffList.find((x) => x.name === n); return s ? s.employeeId : ""; };
@@ -62,7 +64,12 @@ function mk(opts) {
   ctx.fmtDateKey = (d) => d.toISOString().slice(0, 10);
   ctx.showAlert = (m) => ctx.alerts.push(m);
   ctx._execPunch = (t, d, meal) => ctx.execs.push({ t, meal });
-  ctx.mealSaveEntry = (e) => ctx.saved.push(JSON.parse(JSON.stringify({ eid: e, v: ctx.mealsData[e] })));
+  ctx.mealSaveEntry = (e) => ctx.puts.push(e);
+  ctx.demoWriteBlocked = () => !!opts.demo;
+  ctx.FB_URL = "https://fb.example";
+  ctx.elevated = false;
+  ctx.afterElevation = () => { ctx.elevated = true; return Promise.resolve(); };
+  ctx.authFetch = (u, o) => { ctx.saved.push({ url: u, method: o.method, body: JSON.parse(o.body), elevated: ctx.elevated }); return Promise.resolve({ ok: opts.httpOk !== false, status: opts.httpOk === false ? 401 : 200 }); };
   vm.createContext(ctx);
   vm.runInContext(SRC, ctx);
   return ctx;
@@ -98,7 +105,6 @@ console.log("■ 聞かずにそのまま打刻");
 for (const [name, o, staff] of [
   ["賄い不要のスタッフ", {}, "佐藤"],
   ["閲覧用", { viewerMode: true }],
-  ["賄いデータ未取得", { mealsLoaded: false }],
   ["社員番号なし", { staffList: [{ name: "山田", employeeId: "", mealRequired: true }] }],
   ["社員番号に不正文字", { staffList: [{ name: "山田", employeeId: "E/1", mealRequired: true }] }],
   ["その日が既に取得あり", { mealsData: { E1: { dates: { "2026-10-12": { taken: true } } } } }],
@@ -110,20 +116,44 @@ for (const t of ["clockIn", "breakStart", "breakEnd"]) {
   c = mk(); c.mealClockOutThenPunch(t, D);
   check(t + " では聞かない", open(c) === 0 && c.execs.length === 1);
 }
+c = mk({ mealsLoaded: false }); c.mealClockOutThenPunch("clockOut", D);
+check("賄いデータ未取得でも聞く（PIN直後の退勤。2026-10-15）", open(c) === 1 && c.execs.length === 0);
 c = mk({ meals: false }); c.mealClockOutThenPunch("clockOut", D);
 check("賄いを使わない会社（機能フラグ meals:false。マンテール）は聞かずにそのまま退勤を打刻", open(c) === 0 && c.execs.length === 1 && !c.execs[0].meal);
 
+(async () => {
 console.log("■ 打刻後の記録（mealClockOutCommit）");
+const tick = () => new Promise((r) => setImmediate(r));
 c = mk({ mealsData: { E1: { staffId: "E1", staffName: "山田", dates: { "2026-10-01": { taken: true, updatedAt: "x" } } } } });
-c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田");
-check("「はい」でその日を取得ありにして1回保存", c.saved.length === 1 && c.saved[0].v.dates["2026-10-12"].taken === true);
-check("他の日は保持する", c.saved[0] && c.saved[0].v.dates["2026-10-01"].updatedAt === "x");
-c = mk(); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田");
-check("記録の無いスタッフでも作って保存", c.saved.length === 1 && c.saved[0].v.staffId === "E1");
-c = mk(); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: false }, "山田");
+c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("「はい」で1回保存", c.saved.length === 1);
+check("保存は tc5_meals/{eid} への PATCH（全体PUTしない）", c.saved[0] && c.saved[0].method === "PATCH" && c.saved[0].url === "https://fb.example/tc5_meals/E1.json" && c.puts.length === 0);
+check("送るのはその日の1件だけ（他の日を本文に含めない）", c.saved[0] && JSON.stringify(Object.keys(c.saved[0].body).sort()) === JSON.stringify(["dates/2026-10-12", "staffId", "staffName"]) && c.saved[0].body["dates/2026-10-12"].taken === true);
+check("役割トークンの確立を待ってから送る", c.saved[0] && c.saved[0].elevated === true);
+check("手元の他の日は保持する", c.mealsData.E1.dates["2026-10-01"].updatedAt === "x" && c.mealsData.E1.dates["2026-10-12"].taken === true);
+c = mk(); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("記録の無いスタッフでも保存", c.saved.length === 1 && c.saved[0].body.staffId === "E1");
+c = mk(); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: false }, "山田"); await tick();
 check("「いいえ」は書かない", c.saved.length === 0 && !c.mealsData.E1);
-c = mk(); c.mealsLoaded = false; c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田");
-check("賄いデータが無効なら書かない", c.saved.length === 0);
+c = mk({ mealsLoaded: false }); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("賄いデータ未取得でも「はい」を保存する（PATCHなので他の日は消えない）", c.saved.length === 1 && c.saved[0].method === "PATCH");
+c.mealsData = { E1: { staffId: "E1", dates: { "2026-10-01": { taken: true } } } }; c.mealClockOutMergePending();
+check("取得中だった古い応答で「はい」が消えない（足し戻す）", c.mealsData.E1.dates["2026-10-12"] && c.mealsData.E1.dates["2026-10-12"].taken === true && c.mealsData.E1.dates["2026-10-01"].taken === true);
+c.mealsData = {}; c.mealClockOutMergePending();
+check("記録の無い応答でも足し戻す", c.mealsData.E1 && c.mealsData.E1.dates["2026-10-12"].taken === true);
+c.mealClockOutMergePending(); check("反映を確認したら手放す", Object.keys(c._mealCoPending).length === 0);
+c = mk({ mealsData: { E1: { dates: { "2026-10-12": { taken: true } } } } }); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("既に取得ありの日は送らない", c.saved.length === 0);
+c = mk({ demo: true }); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("デモ・サンドボックスでは送らない", c.saved.length === 0);
+c = mk({ httpOk: false }); c.mealClockOutCommit({ eid: "E1", ds: "2026-10-12", taken: true }, "山田"); await tick(); await tick();
+check("保存に失敗したら知らせる（退勤は完了）", c.alerts.length === 1 && /退勤の打刻は完了/.test(c.alerts[0]));
+c = mk(); c.mealClockOutCommit({ eid: "E/1", ds: "2026-10-12", taken: true }, "山田"); await tick();
+check("社員番号に不正文字なら送らない", c.saved.length === 0);
+for (const f of ["function ensureStaffScopedData(", "function ensureAdminData("]) {
+  check(f.slice(9, -1) + " は取得後に足し戻す", /mealsData=r\[3\];mealClockOutMergePending\(\);/.test(fnSrc(f, f === "function ensureAdminData(" ? "// スタッフがPIN認証を通って" : "plTrackFetch(_staffDataPromise);")));
+}
+check("賄い一覧の定期取得も足し戻す", /mealsData=val;mealClockOutMergePending\(\);/.test(html));
 
 console.log("■ 結線（doPunch / _execPunch）");
 const exec = fnSrc("async function _execPunch(", "function doPunch(");
@@ -198,3 +228,4 @@ console.log("■ 賄い一覧は「CSV出力」タブ内で開閉する・スタ
 
 console.log("\n" + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);
+})();

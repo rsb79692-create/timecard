@@ -1168,12 +1168,14 @@ function mealToggleDate(eid,ym,ds){
 // ===== 退勤前の賄い確認（MEAL-CLOCKOUT） =====
 // 退勤ボタンを押したら、打刻の前に「賄いを食べましたか？」を聞き、はい／いいえに答えたら退勤を打刻する。
 // ★ 賄いの記録は退勤の端末保存が成功した後に書く（_execPunch の ⑥）。退勤をやめた・保存できなかったときは書かない。
-// ★ 聞けないとき（賄い不要・賄いデータ未取得・社員番号なし/不正・編集不可の月・その日が既に取得あり・閲覧用）は
-//   聞かずに従来どおり打刻する（打刻を止めない）。賄いデータ未取得で書くと tc5_meals/{eid} の全体PUTで他の日が消える。
+// ★ 聞けないとき（賄い不要・社員番号なし/不正・編集不可の月・その日が既に取得あり・閲覧用）は
+//   聞かずに従来どおり打刻する（打刻を止めない）。
+// ★ 賄いデータが未取得（mealsLoaded 偽）でも聞く（2026-10-15。PIN直後の退勤で質問が出なかった不具合）。
+//   記録は tc5_meals/{eid} の全体PUTでなく、その日の1件だけを PATCH で足す（mealClockOutWrite）ので他の日は消えない。
 // 聞く必要があれば {eid} を返す。
 function mealClockOutNeed(name,ds){
   if(!tenantFeature("meals"))return null; // 賄いを使わない会社（機能フラグ meals）は聞かない
-  if(viewerMode||!mealsLoaded||!name||!ds)return null;
+  if(viewerMode||!name||!ds)return null;
   var so=staffList.find(function(s){return s&&s.name===name;});
   if(!so||!so.mealRequired)return null;
   var eid=String(resolveStaffId(name)||"").trim();
@@ -1224,16 +1226,51 @@ function mealClockOutThenPunch(type,d){
 // 退勤の端末保存が成功した後に呼ぶ（_execPunch の ⑥）。「はい」ならその日を取得ありにして保存する。
 function mealClockOutCommit(meal,name){
   try{
-    if(!meal||!meal.taken||!meal.eid||!meal.ds||!mealsLoaded)return;
-    var eid=meal.eid,ds=meal.ds;
+    if(!meal||!meal.taken||!meal.eid||!meal.ds)return;
+    var eid=String(meal.eid).trim(),ds=meal.ds;
+    if(!/^[A-Za-z0-9_-]+$/.test(eid)||!/^\d{4}-\d{2}-\d{2}$/.test(ds))return;
     var nm=mealStaffNameById(eid)||name||"";
     if(!mealsData[eid]||typeof mealsData[eid]!=="object")mealsData[eid]={staffId:eid,staffName:nm,dates:{}};
     if(!mealsData[eid].dates||typeof mealsData[eid].dates!=="object")mealsData[eid].dates={};
     if(mealsData[eid].dates[ds]&&mealsData[eid].dates[ds].taken)return;
-    mealsData[eid].dates[ds]={taken:true,updatedAt:new Date().toISOString()};
+    var ent={taken:true,updatedAt:new Date().toISOString()};
+    mealsData[eid].dates[ds]=ent;
     if(nm)mealsData[eid].staffName=nm;
-    mealSaveEntry(eid);
+    if(!_mealCoPending[eid])_mealCoPending[eid]={};
+    _mealCoPending[eid][ds]=ent; // 取得中だった tc5_meals の応答で消されないよう、反映を確認するまで手元に持つ
+    mealClockOutWrite(eid,nm,ds,ent);
   }catch(e){console.warn("[meal] commit after clockOut failed",e);}
+}
+// 退勤時の「はい」を保存する。★ その日の1件だけを PATCH で足す（tc5_meals/{eid} の全体PUTをしない）。
+//   賄いデータの取得前でも他の日を消さない。書き込みには役割トークンが要るので昇格を待ってから送る。
+var _mealCoPending={}; // eid → {ds: entry}（送った「はい」。取得した tc5_meals に無ければ足し戻す）
+function mealClockOutWrite(eid,nm,ds,ent){
+  if(demoWriteBlocked())return;
+  var body={staffId:eid};
+  if(nm)body.staffName=nm;
+  body["dates/"+ds]=ent;
+  function fail(t){console.error("[mealClockOutWrite]",eid,ds,t);showAlert("賄いの記録を保存できませんでした（退勤の打刻は完了しています）。\n\n"+(ds.substring(5,7)-0)+"月"+(ds.substring(8,10)-0)+"日に賄いを食べたことを管理者へ伝えてください。");}
+  Promise.resolve(afterElevation()).catch(function(){}).then(function(){
+    return authFetch(FB_URL+"/tc5_meals/"+encodeURIComponent(eid)+".json",{
+      method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)
+    });
+  }).then(function(res){
+    if(!res.ok)fail("HTTP "+res.status);
+  }).catch(function(e){fail(e);});
+}
+// 取得した tc5_meals に、送った「はい」がまだ無ければ足し戻す（取得の応答が保存より古い場合）。反映済みのものは手放す。
+function mealClockOutMergePending(){
+  Object.keys(_mealCoPending).forEach(function(eid){
+    var p=_mealCoPending[eid];
+    Object.keys(p).forEach(function(ds){
+      var e=mealsData[eid];
+      if(e&&e.dates&&e.dates[ds]&&e.dates[ds].taken){delete p[ds];return;}
+      if(!e||typeof e!=="object")e=mealsData[eid]={staffId:eid,staffName:mealStaffNameById(eid)||"",dates:{}};
+      if(!e.dates||typeof e.dates!=="object")e.dates={};
+      e.dates[ds]=p[ds];
+    });
+    if(!Object.keys(p).length)delete _mealCoPending[eid];
+  });
 }
 // ===== MEAL-CLOCKOUT-END =====
 // 出勤日を全選択（その月の出勤打刻がある日をすべて賄い取得ON。既存ONは維持・非出勤日は変更しない）
@@ -3419,7 +3456,7 @@ function ensureAdminData(){
     if(_apvFresh&&r[0]&&typeof r[0]==="object"){approvals=r[0];Object.keys(_apvBusy).forEach(function(k){approvals[k]=true;});_lsSet("tc5_approvals",JSON.stringify(approvals));approvalsLoaded=true;changed=true;} // 同時保存中の日は保存どおり承認済みで表示する
     if(r[1]&&typeof r[1]==="object"){monthlyDaysImport=r[1];monthlyDaysLoaded=true;changed=true;}
     if(r[2]&&typeof r[2]==="object"){reviewStatus=r[2];reviewStatusLoaded=true;changed=true;}
-    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];changed=true;}
+    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];mealClockOutMergePending();changed=true;}
     if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];changed=true;}
     if(r[5]){var _pl=(typeof r[5]==="object"&&!Array.isArray(r[5]))?Object.values(r[5]):r[5];paidLeaveRequests=(_pl||[]).filter(Boolean);changed=true;}
     if(r[6]){applyAdminTokenState(r[6]);changed=true;}
@@ -3475,7 +3512,7 @@ function ensureStaffScopedData(name){
       Object.keys(cur).forEach(function(k){if(!r[2][k])r[2][k]=cur[k];});
       staffNotifications[sid]=r[2];
     }
-    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];}
+    if(r[3]&&typeof r[3]==="object"){mealsData=r[3];mealClockOutMergePending();}
     if(r[4]&&typeof r[4]==="object"){mealConfData=r[4];}
     if(r[3]!==null&&r[4]!==null)mealsLoaded=true;
     if((!paidLeaveLoaded||!mealsLoaded)&&_staffDataPromise===_mine)_staffDataPromise=null; // 再試行を許す（後から始めた取得は消さない）
@@ -3672,7 +3709,7 @@ function listenFirebase() {
         .then(function(r){return r.json();})
         .then(function(val){
           if(val&&typeof val==="object"&&JSON.stringify(val)!==JSON.stringify(mealsData)){
-            mealsData=val;
+            mealsData=val;mealClockOutMergePending();
             if(!document.querySelector('.time-edit-wrap')&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
           }
         }).catch(function(){});
