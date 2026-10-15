@@ -20,6 +20,7 @@ NODE_PATH=<playwright のある node_modules> node tests/visual/manual/build-man
 
 ```
 node tests/visual/manual/mantel-shots.js <撮影の出力先>
+MANUAL_TENANT=honomi node tests/visual/manual/mantel-shots.js <撮影の出力先>   # 穂乃味の従業員用（賄いの質問を含む・管理画面は撮らない）
 ```
 
 撮影の出力・できたマニュアルをこのリポジトリに置かない（公開リポジトリ）。

@@ -1,5 +1,6 @@
 /**
  * マンテール向けマニュアル（従業員用・管理者用）のスクリーンショット。
+ * MANUAL_TENANT=honomi で穂乃味の従業員用（施設URL・賄いの質問）を撮る（管理画面は撮らない）。
  * ★ ネットワークはすべて模擬（本番の Firebase・Vercel へは接続しない・書き込まない）。氏名・データは架空。
  *   node tests/visual/manual/mantel-shots.js <出力先>
  * 撮影の出力をこのリポジトリに置かない（公開リポジトリ）。
@@ -11,6 +12,8 @@ const HN = require("../harness");
 const { chromium } = HN.requirePlaywright();
 const ROOT = HN.ROOT, APP = HN.APP;
 const OUT = path.resolve(process.argv[2] || "shots");
+const HONOMI = process.env.MANUAL_TENANT === "honomi";
+const FAC_Q = HONOMI ? "?token=tokHonten" : "?c=mantel&token=tokHonten";
 fs.mkdirSync(OUT, { recursive: true });
 
 const NOW = new Date("2026-10-13T09:30:00+09:00");
@@ -18,7 +21,7 @@ const D = "2026-10-13";
 const ST = (name, last, first, yl, yf, loc, id, type) => ({ name, lastName: last, firstName: first, yomi: yl + yf, yomiLast: yl, yomiFirst: yf, location: loc, status: "在籍", employeeId: id, employmentType: type, dept: "ホール" });
 const STAFF = [
   ST("見本 太郎", "見本", "太郎", "みほん", "たろう", "本店", "M001", "正社員"),
-  Object.assign(ST("見本 花子", "見本", "花子", "みほん", "はなこ", "本店", "M002", "パート"), { canSupportWork: true }),
+  Object.assign(ST("見本 花子", "見本", "花子", "みほん", "はなこ", "本店", "M002", "パート"), { canSupportWork: true, mealRequired: true }),
   ST("試験 一郎", "試験", "一郎", "しけん", "いちろう", "本店", "M003", "パート"),
   ST("試験 次郎", "試験", "次郎", "しけん", "じろう", "駅前店", "M004", "正社員"),
 ];
@@ -47,7 +50,8 @@ Object.values(recs).forEach((r) => { if (r.date < D && !(r.staff === "試験 次
 R("試験 次郎", "clockIn", D, "09:02", "駅前店");
 
 function data() {
-  const pins = {}; STAFF.forEach((s) => { if (s.name !== "試験 一郎") pins[s.name] = { set: true }; }); // 試験 一郎は PIN 未登録（初回登録の画面用）
+  const sha = (v) => require("crypto").createHash("sha256").update("honomi_pin_v1:" + v).digest("hex");
+  const pins = {}; STAFF.forEach((s) => { if (s.name !== "試験 一郎") pins[s.name] = HONOMI ? { hash: sha("1234"), plain: "1234" } : { set: true }; }); // 試験 一郎は PIN 未登録（初回登録の画面用）
   return {
     tc5_staff: STAFF, tc5_pins: pins, tc_master_depts: ["ホール", "キッチン"],
     master: { locations: [{ name: "本店", token: "tokHonten" }, { name: "駅前店", token: "tokEki" }] },
@@ -107,7 +111,7 @@ async function open(browser, query, opts) {
     if (url.host === "timecard-rho.vercel.app") {
       if (req.method() === "OPTIONS") return route.fulfill({ status: 204, body: "" });
       let body = {}; try { body = JSON.parse(req.postData() || "{}"); } catch (e) {}
-      const p = url.pathname; const cl = { c: "mantel", sx };
+      const p = url.pathname; const cl = HONOMI ? {} : { c: "mantel", sx };
       if (p === "/api/auth/admin") { claims = Object.assign({ r: "a" }, cl); return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ customToken: "ct", role: "a", sessionExpiresAt: sx }) }); }
       if (p === "/api/auth/staff") { claims = Object.assign({ r: "s" }, cl); return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ customToken: "ct", role: "s", sessionExpiresAt: sx }) }); }
       if (p === "/api/auth/share") { const role = (body.kind === "kiosk" || body.kind === "adminKiosk") ? "k" : body.kind === "viewer" ? "v" : "x"; claims = Object.assign({ r: role }, cl); return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ customToken: "ct", role, sessionExpiresAt: sx }) }); }
@@ -155,7 +159,7 @@ async function staffLogin(page, name) {
   await settle(page, 5);
 }
 async function staffShots(browser) {
-  const FAC = "?c=mantel&token=tokHonten";
+  const FAC = FAC_Q;
   { // 打刻トップ・PIN
     const { ctx, page } = await open(browser, FAC);
     await shot(page, "s01-home", false, [{ n: 1, sel: page.locator("#app .btn-staff").filter({ hasText: /見本\s*太郎/ }) }]);
@@ -186,6 +190,11 @@ async function staffShots(browser) {
     await shot(page, "s09-paidleave", true, [{ n: 1, sel: page.locator("#app").getByText("22", { exact: true }) }, { n: 2, sel: page.locator("#app button").filter({ hasText: /^申請する$/ }) }]);
     await page.evaluate(() => { window.showPaidLeaveForm = false; window.render(); window.toggleMonthPunch(); }); await settle(page, 3);
     await shot(page, "s10-month", true);
+    if (HONOMI) { // 退勤 → 賄いの質問（穂乃味の「賄い 要」のスタッフ）
+      await page.evaluate(() => { window.render(); }); await settle(page, 1);
+      await page.click("button.btn-out"); await settle(page, 2);
+      await shot(page, "s11-meal", false, [{ n: 1, sel: page.getByText("はい", { exact: true }) }, { n: 2, sel: page.getByText("いいえ", { exact: true }) }]);
+    }
     await ctx.close();
   }
 }
@@ -218,7 +227,7 @@ if (require.main === module) {
   (async () => {
     const browser = await chromium.launch();
     await staffShots(browser);
-    await adminShots(browser);
+    if (!HONOMI) await adminShots(browser);
     await browser.close();
   })().catch((e) => { console.error(e); process.exit(1); });
 }
