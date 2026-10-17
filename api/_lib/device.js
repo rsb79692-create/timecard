@@ -67,6 +67,20 @@ const ACC_CAP_M = 100;
 const ACC_MAX_M = 300;
 
 /**
+ * 持ち出しの確定に必要な「範囲外の観測」の回数（2026-10-18 の誤検知を受けて追加）。
+ * ★ 1回の範囲外だけでは確定しない。屋内では Wi-Fi・基地局測位で位置が数百m飛ぶことがあり、
+ *   置きっぱなしの端末はその後ほとんど報告しないため、1回の飛びをスイープが3分後に
+ *   そのまま確定させていた（2026-10-15 ミュゲの泉で実害。端末は施設内にあった）。
+ * ★ 報告経路の確定は「dwell 経過後の2回目の範囲外」なので、もともと2回である。
+ *   スイープ（端末が沈黙した場合）にも同じ回数を要求する。
+ * ★ 代償: 範囲外を1回だけ報告して直後に電源を切られた持ち出しは確定しない
+ *   （受信途絶として現れる）。監視アプリは Exit 時に間を置いて2回測るので、
+ *   その間（約30秒）に電源を切られた場合だけが残る。誤報が続けば通知自体が
+ *   無視されるようになるため、こちらを選んだ。下げてはならない。
+ */
+const MIN_OUTSIDE_HITS = 2;
+
+/**
  * これだけ受信（または位置の判定）が無ければ管理者へ通知する（秒）。
  * ★ 24時間。短くしてはならない。iOS は静止している端末からの定期報告を保証しない
  *   （移動が無いと OS が背景実行を起こさない）ため、数時間のしきい値では毎日誤警報になる。
@@ -316,9 +330,21 @@ function evaluateReport(prev, rep, fac, cfg) {
     return { patch: patch, notify: notify, distM: distM, judged: false };
   }
 
-  patch.lastJudgedAt = nowMs;     // ここまで来たら位置判定が成立している
   const radius = normRadius(fac.radiusM);
-  const outside = (distM - Math.min(acc, ACC_CAP_M)) > radius;
+  // ★ 範囲外は「申告された誤差をすべて差し引いても」半径の外にあるときだけ（誤差の上限なし）。
+  //   範囲内は従来どおり誤差の差し引きを ACC_CAP_M までにする（acc を大きく申告して
+  //   範囲内を装う抜け道を作らないため）。
+  //   どちらにも当たらない（誤差 100〜300m で、範囲外とも範囲内とも言えない）測位は
+  //   判定に使わない。★ 2026-10-15 の誤検知はこの帯の測位を範囲外としていたことが一因。
+  //   ★ このとき pendingSince も outsideHits も消さない（粗い測位を挟んで計測を
+  //   リセットさせない）。lastJudgedAt も進めないので、続けば「判定できていない」で現れる。
+  const outside = (distM - acc) > radius;
+  const inside = (distM - Math.min(acc, ACC_CAP_M)) <= radius;
+  if (!outside && !inside) {
+    return { patch: patch, notify: notify, distM: distM, judged: false };
+  }
+
+  patch.lastJudgedAt = nowMs;     // ここまで来たら位置判定が成立している
 
   if (outside) {
     if (p.state === "outside") {
@@ -327,12 +353,15 @@ function evaluateReport(prev, rep, fac, cfg) {
     }
     const since = Number(p.pendingSince) > 0 ? Number(p.pendingSince) : nowMs;
     patch.pendingSince = since;
+    // 範囲外の観測回数（スイープの確定条件。MIN_OUTSIDE_HITS）
+    patch.outsideHits = (Number(p.pendingSince) > 0 ? (Number(p.outsideHits) || 0) : 0) + 1;
     // ★ 確定には「最初の範囲外」から dwell 以上経った別の報告が必要。
     //   1回の報告だけでは確定しない（GPSの単発の飛びで通知しない）。
     //   端末がこのあと沈黙しても、スイープ（sweepPlan）が同じ基準で確定させる。
     if (nowMs - since >= dwellMs) {
       patch.state = "outside";
       patch.pendingSince = null;
+      patch.outsideHits = null;
       patch.notifiedAt = nowMs;
       // since を返すのは、LINE送信が失敗したときに「確定前の状態」へ戻して
       // 次の報告で送り直せるようにするため（通知を1回分黙って捨てない）。
@@ -346,6 +375,7 @@ function evaluateReport(prev, rep, fac, cfg) {
 
   // 範囲内。継続計測を解除し、次の持ち出しへ向けて通知権を戻す。
   if (Number(p.pendingSince) > 0) patch.pendingSince = null;
+  if (p.outsideHits) patch.outsideHits = null;
   if (p.state !== "inside") patch.state = "inside";
   return { patch: patch, notify: notify, distM: distM, judged: true };
 }
@@ -364,6 +394,7 @@ function splitPatchForSend(evPatch, exitNotify, nowMs) {
   if (!exitNotify) return out;
   delete out.state;
   delete out.notifiedAt;
+  delete out.outsideHits;         // 確定前の観測回数は残す（null で消さない）
   out.pendingSince = Number(exitNotify.since) > 0 ? Number(exitNotify.since) : Number(nowMs) || 0;
   return out;
 }
@@ -372,7 +403,7 @@ function splitPatchForSend(evPatch, exitNotify, nowMs) {
  * 確定（持ち出し検知を送れたあとに書く差分）。純粋関数。
  */
 function confirmPatch(nowMs) {
-  return { state: "outside", pendingSince: null, notifiedAt: Number(nowMs) || 0 };
+  return { state: "outside", pendingSince: null, outsideHits: null, notifiedAt: Number(nowMs) || 0 };
 }
 
 /**
@@ -409,9 +440,11 @@ function sweepPlan(devices, nowMs, cfg, facilities) {
       // ★ 前の持ち出しの通知（notifiedAt）が今の継続より新しい場合は出さない。
       // ★ 判定が成立した時刻が継続開始より古い（＝監視OFF・基準位置変更をまたいで
       //   古い観測が残っている）ものは確定させない。現在位置を見ずに通知しないため。
+      // ★ 範囲外の観測が MIN_OUTSIDE_HITS 回に満たないものは確定させない（1回の飛びで通知しない）。
       const judged = Number(d.lastJudgedAt) || 0;
       const notified = Number(d.notifiedAt) || 0;
-      if (notified <= since && judged >= since) {
+      const hits = Number(d.outsideHits) || 0;
+      if (notified <= since && judged >= since && hits >= MIN_OUTSIDE_HITS) {
         confirms.push({ deviceId: id, dev: d, since: since });
         continue;
       }
@@ -801,7 +834,7 @@ module.exports = {
   ROOT,
   DEFAULT_RADIUS_M, MIN_RADIUS_M, MAX_RADIUS_M,
   DEFAULT_DWELL_SEC, MIN_DWELL_SEC, MAX_DWELL_SEC,
-  ACC_CAP_M, ACC_MAX_M,
+  ACC_CAP_M, ACC_MAX_M, MIN_OUTSIDE_HITS,
   DEFAULT_STALE_SEC,
   ENROLL_TTL_MS, MAX_ENROLL_OPEN, MAX_FACILITIES, MAX_DEVICES,
   SWEEP_CONFIRM_MAX, DIGEST_LINES_MAX,

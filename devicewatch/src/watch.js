@@ -57,6 +57,23 @@ const HEARTBEAT_MS = 15 * 60 * 1000;
  */
 const REPORT_THROTTLE_MS = 120 * 1000;
 const K_LAST_REPORT = "dw_last_report_at";
+
+/**
+ * 範囲外の確認（2026-10-18 追加。施設内での誤検知の再発防止）。
+ * ★ サーバは「範囲外の観測2回」が揃わないと持ち出しを確定しない（api/_lib/device.js の
+ *   MIN_OUTSIDE_HITS）。屋内の位置の飛び1回で通知しないため。
+ * ★ その代わり本当の持ち出しでは2回目を早く届ける必要がある。Exit を受けたら
+ *   ・その場で高精度（GPS）で測って報告し、
+ *   ・EXIT_VERIFY_DELAY_MS 後にもう1回測って報告する（背景時間で打ち切られても他の契機が残る）。
+ *   ・さらに EXIT_WATCH_MS のあいだは位置更新きっかけの報告の間隔を EXIT_THROTTLE_MS へ縮める。
+ * ★ 確認の報告もサーバの最短間隔（10秒）より長く空ける。
+ */
+const EXIT_VERIFY_DELAY_MS = 15 * 1000;
+const EXIT_WATCH_MS = 10 * 60 * 1000;
+const EXIT_THROTTLE_MS = 30 * 1000;
+const K_EXIT_AT = "dw_exit_at";
+// 位置更新で OS から渡された位置を使ってよい古さ。これより古ければ測り直す。
+const FRESH_FIX_MS = 2 * 60 * 1000;
 // ★ メモリだけで持ってはならない。背景タスクは新しい JS コンテキストで起こされることがあり、
 //   0 に戻ると間引きが効かなくなる（移動中に報告が殺到してレート制限へ当たる）。
 let _lastReportAt = 0;
@@ -140,16 +157,41 @@ export async function requestPermissions() {
 
 // ===== 位置 =====
 
-async function currentPosition() {
+/**
+ * ★ precise=true（範囲外の確認）では高精度（GPS）で測り、端末に残った古い位置で代用しない。
+ *   屋内の Balanced（Wi-Fi・基地局）測位は数百m飛ぶことがあり、これが誤検知の原因だった。
+ */
+async function currentPosition(precise) {
   try {
-    const p = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+    const p = await Location.getCurrentPositionAsync({
+      accuracy: precise ? Location.Accuracy.High : Location.Accuracy.Balanced,
+    });
     if (p && p.coords) return p.coords;
   } catch (e) { /* 取得できないことはある */ }
+  if (precise) return null;
   try {
     const p = await Location.getLastKnownPositionAsync({ maxAge: 5 * 60 * 1000 });
     if (p && p.coords) return p.coords;
   } catch (e) { /* 無ければ位置なしで報告する */ }
   return null;
+}
+
+/** OS が位置更新で渡した位置のうち、最新で新しいものだけを返す。 */
+function freshFromUpdate(body) {
+  const list = body && body.data && Array.isArray(body.data.locations) ? body.data.locations : [];
+  let best = null;
+  for (const l of list) {
+    if (l && l.coords && (!best || Number(l.timestamp) > Number(best.timestamp))) best = l;
+  }
+  if (!best || !(Date.now() - Number(best.timestamp) < FRESH_FIX_MS)) return null;
+  return best.coords;
+}
+
+async function exitWatchActive() {
+  try {
+    const v = Number(await SecureStore.getItemAsync(K_EXIT_AT));
+    return isFinite(v) && v > 0 && Date.now() - v < EXIT_WATCH_MS;
+  } catch (e) { return false; }
 }
 
 // ===== サーバへの報告 =====
@@ -208,11 +250,12 @@ export async function register(code) {
  * ★ 応答に入っている設定（基準位置・半径）が変わっていたらジオフェンスを張り直す。
  *   管理者が基準位置を直したときに、古い範囲で監視し続けないため。
  */
-export async function report(event) {
+export async function report(event, givenCoords) {
   const creds = await loadCreds();
   if (!creds) return { ok: false, error: "not_registered" };
   await markReported(Date.now());
-  const coords = await currentPosition();
+  const precise = event === "exit" || event === "exitVerify";
+  const coords = givenCoords || await currentPosition(precise);
   const perm = await permissionState();
   const r = await postJson(Object.assign(creds.tenant ? { tenant: creds.tenant } : {}, {
     action: "report",
@@ -348,6 +391,11 @@ TaskManager.defineTask(TASK_GEOFENCE, async function (body) {
   const kind = ev === Location.GeofencingEventType.Exit ? "exit"
     : ev === Location.GeofencingEventType.Enter ? "enter" : "geofence";
   try {
+    if (kind === "exit") {
+      try { await SecureStore.setItemAsync(K_EXIT_AT, String(Date.now())); } catch (e) { /* 間隔の短縮だけが効かない */ }
+    } else if (kind === "enter") {
+      try { await SecureStore.deleteItemAsync(K_EXIT_AT); } catch (e) { /* 次の Exit で上書きされる */ }
+    }
     const r = await report(kind);
     // ★ 直前に定期報告が走っていると、サーバの最短間隔（10秒）で弾かれることがある。
     //   ジオフェンスの出入りは**継続計測の開始時刻そのもの**なので、落としてはならない。
@@ -356,13 +404,21 @@ TaskManager.defineTask(TASK_GEOFENCE, async function (body) {
       await new Promise(function (res) { setTimeout(res, 12000); });
       await report(kind);
     }
+    // ★ 範囲外の2回目の観測。サーバは2回揃わないと確定しない（MIN_OUTSIDE_HITS）。
+    if (kind === "exit") {
+      await new Promise(function (res) { setTimeout(res, EXIT_VERIFY_DELAY_MS); });
+      await report("exitVerify");
+    }
   } catch (e) { /* 次の契機で送り直す */ }
 });
 
 TaskManager.defineTask(TASK_LOCATION, async function (body) {
   if (body && body.error) return;
   // ★ 位置更新きっかけの報告だけ間隔を空ける（ジオフェンスのイベントは間引かない）。
+  //   Exit の直後だけは間隔を縮める（範囲外の2回目の観測を早く届けるため）。
   const last = await loadLastReportAt();
-  if (last && Date.now() - last < REPORT_THROTTLE_MS) return;
-  try { await report("heartbeat"); } catch (e) { /* 次の契機で送り直す */ }
+  const gap = (await exitWatchActive()) ? EXIT_THROTTLE_MS : REPORT_THROTTLE_MS;
+  if (last && Date.now() - last < gap) return;
+  // ★ OS が渡した位置を使う。背景で測り直すと失敗して古い位置で代用しがちになる。
+  try { await report("heartbeat", freshFromUpdate(body)); } catch (e) { /* 次の契機で送り直す */ }
 });

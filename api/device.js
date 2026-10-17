@@ -194,6 +194,7 @@ async function handleSetFacility(body, actor) {
       // ★ 確定済み（state:"outside"）は消さない。持ち出し中の事実が管理画面から消えてしまう。
       if (d.state !== "outside") {
         map[D.ROOT + "/devices/" + id + "/pendingSince"] = null;
+        map[D.ROOT + "/devices/" + id + "/outsideHits"] = null;
         map[D.ROOT + "/devices/" + id + "/state"] = "unknown";
       }
       // ★ しきい値ぶんの猶予を与える。監視OFFのあいだ lastJudgedAt は進まないため、

@@ -249,8 +249,22 @@ section("4. GPS誤差の扱い");
   // 差し引き上限を超える誤差は上限までしか効かない
   const capped = D.evaluateReport({ state: "inside" },
     Object.assign({ nowMs: t0, acc: D.ACC_MAX_M - 1 }, northOf(BASE, 400)), BASE, CFG);
-  check("誤差の差し引きには上限がある（400m地点は範囲外のまま）",
-    capped.patch.pendingSince === t0);
+  check("誤差の差し引きには上限がある（400m地点は範囲外とは言えず、範囲内にもしない）",
+    capped.patch.pendingSince === undefined && capped.patch.state === undefined
+    && capped.judged === false && capped.patch.lastJudgedAt === undefined);
+  // ★ 範囲外は「誤差をすべて差し引いても外」のときだけ（2026-10-15 の誤検知の再発防止）
+  const farBad = D.evaluateReport({ state: "inside" },
+    Object.assign({ nowMs: t0, acc: 250 }, northOf(BASE, 600)), BASE, CFG);
+  check("誤差を全部差し引いても外なら範囲外（600m・誤差250m）",
+    farBad.patch.pendingSince === t0 && farBad.patch.outsideHits === 1);
+  const midBad = D.evaluateReport({ state: "pending", pendingSince: t0 - 1000, outsideHits: 1 },
+    Object.assign({ nowMs: t0, acc: 250 }, northOf(BASE, 350)), BASE, CFG);
+  check("どちらとも言えない測位は継続計測も観測回数も消さない",
+    midBad.patch.pendingSince === undefined && midBad.patch.outsideHits === undefined
+    && midBad.judged === false);
+  const ok90 = D.evaluateReport({ state: "inside" },
+    Object.assign({ nowMs: t0, acc: 90 }, northOf(BASE, 200)), BASE, CFG);
+  check("誤差内に施設が入る測位は範囲内（200m・誤差90m）", ok90.patch.state === undefined && ok90.judged === true);
 
   // 判定できたときは lastJudgedAt が進む（「判定できていない」検知の土台）
   const okj = D.evaluateReport({ state: "inside" },
@@ -364,27 +378,33 @@ section("8. スイープ：端末が沈黙しても確定する");
 
   // ★ Exit を1回報告した直後に端末が沈黙した場合（電源を切る・機内モード）
   const devices = {
-    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 200000,
+    dev0000000000001: { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 200000,
           lastSeenAt: now - 200000, lastJudgedAt: now - 200000 },
   };
   let plan = D.sweepPlan(devices, now, cfg, facs);
   check("継続が3分を超えていれば端末の追加報告なしで確定する", plan.confirms.length === 1);
   check("確定対象の端末IDを返す", !!plan.confirms[0] && plan.confirms[0].deviceId === "dev0000000000001");
 
-  plan = D.sweepPlan({ dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 100000,
+  // ★ 範囲外の観測が1回だけのまま沈黙した端末は確定しない（2026-10-15 の誤検知の再現）
+  plan = D.sweepPlan({ dev0000000000001: Object.assign({}, devices.dev0000000000001, { outsideHits: 1 }) }, now, cfg, facs);
+  check("範囲外の観測が1回だけなら沈黙していても確定しない", plan.confirms.length === 0);
+  plan = D.sweepPlan({ dev0000000000001: Object.assign({}, devices.dev0000000000001, { outsideHits: undefined }) }, now, cfg, facs);
+  check("観測回数を持たない古い継続も確定しない", plan.confirms.length === 0);
+
+  plan = D.sweepPlan({ dev0000000000001: { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 100000,
     lastSeenAt: now - 100000, lastJudgedAt: now - 100000 } }, now, cfg, facs);
   check("3分未満では確定しない", plan.confirms.length === 0);
 
   // ★ 形式が不正な端末IDを confirms へ入れてはならない。patchDevice が必ず throw するため
   //   「LINE は送れるが確定は永久に書けない」＝毎回のスイープで再送になる。
   //   markDevices（受信途絶・判定不能）は元から isDeviceId を検査しており、対称にする。
-  const badId = D.sweepPlan({ "x": { fkey: fk, state: "pending", pendingSince: now - 200000,
+  const badId = D.sweepPlan({ "x": { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 200000,
     lastSeenAt: now - 200000, lastJudgedAt: now - 200000 } }, now, cfg, facs);
   check("形式が不正な端末IDは確定の対象にしない", badId.confirms.length === 0);
   check("形式が不正な端末IDは受信途絶・判定不能の対象にもしない",
     badId.stales.length === 0 && badId.unjudged.length === 0);
   check("実物と同じ形（8〜40文字）の端末IDは対象にする",
-    D.sweepPlan({ "dev0000000000009": { fkey: fk, state: "pending", pendingSince: now - 200000,
+    D.sweepPlan({ "dev0000000000009": { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 200000,
       lastSeenAt: now - 200000, lastJudgedAt: now - 200000 } }, now, cfg, facs).confirms.length === 1);
 
   plan = D.sweepPlan({ dev0000000000001: { fkey: fk, state: "outside", pendingSince: 0,
@@ -406,7 +426,7 @@ section("8. スイープ：端末が沈黙しても確定する");
 
   // ★ 監視OFF・基準位置変更をまたいだ古い観測で確定しない
   plan = D.sweepPlan({
-    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 300000,
           lastSeenAt: now - 300000, lastJudgedAt: now - 400000 },
   }, now, cfg, facs);
   check("継続開始より古い判定しか無ければ確定しない（現在位置を見ずに通知しない）",
@@ -517,12 +537,12 @@ section("8c. スイープ：報告は届くが位置を判定できていない�
   // ★ 確定が抑止されたときに、受信途絶・判定できていない の検査を飛ばしてはならない
   //   （フェイルクローズ機構の中にフェイルオープンの穴を作らない）。
   plan = D.sweepPlan({
-    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 300000,
           lastSeenAt: now - 9 * 3600 * 1000, lastJudgedAt: now - 400000 },
   }, now, cfg, facs);
   check("確定を抑止しても受信途絶は検査する", plan.confirms.length === 0 && plan.stales.length === 1);
   plan = D.sweepPlan({
-    dev0000000000001: { fkey: fk, state: "pending", pendingSince: now - 300000,
+    dev0000000000001: { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 300000,
           lastSeenAt: now - 60000, lastJudgedAt: now - 9 * 3600 * 1000 },
   }, now, cfg, facs);
   check("確定を抑止しても判定できていないかを検査する",
@@ -595,6 +615,22 @@ section("8e. 定期実行：管理画面を開かなくても確定し、1回だ
   check("1回目の範囲外では確定しない（GPSの単発の飛びで通知しない）",
     exit0.length === 0 && dev.state === "pending" && dev.pendingSince === T0 + 1000);
 
+  // ★ 1回だけで沈黙した場合は、定期実行が何回回っても確定しない（2026-10-15 の誤検知の再現。
+  //   屋内の位置の飛び1回 → 置きっぱなしで報告なし → 3分後に「持ち出し検知」になっていた）
+  {
+    const lone = JSON.parse(JSON.stringify(dev));
+    const before = sent;
+    cronMinutes(lone, T0 + 1000, 60);
+    check("範囲外を1回だけ報告して沈黙した端末は1時間回しても通知しない",
+      sent === before && lone.state === "pending");
+  }
+
+  // ②' 監視アプリは Exit のとき約30秒あけてもう1回測る（2回目の範囲外）
+  ev = D.evaluateReport(dev, { nowMs: T0 + 31000, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+  applyPatch(dev, D.splitPatchForSend(ev.patch, null, T0 + 31000));
+  check("2回目の範囲外でも3分未満なら確定しない（継続開始は1回目のまま）",
+    ev.notify.length === 0 && dev.pendingSince === T0 + 1000 && dev.outsideHits === 2);
+
   // ③ 端末が沈黙したまま定期実行が回る。3分未満では出さない。
   cronMinutes(dev, T0 + 1000, 2);
   check("3分未満は定期実行でも確定しない", sent === 0 && dev.state === "pending");
@@ -621,6 +657,8 @@ section("8e. 定期実行：管理画面を開かなくても確定し、1回だ
   ev = D.evaluateReport(dev, { nowMs: tOut2, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
   applyPatch(dev, D.splitPatchForSend(ev.patch, null, tOut2));
   check("再度の持ち出しで継続計測が始まる", dev.state === "pending" && dev.pendingSince === tOut2);
+  ev = D.evaluateReport(dev, { nowMs: tOut2 + 30000, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+  applyPatch(dev, D.splitPatchForSend(ev.patch, null, tOut2 + 30000));
   cronMinutes(dev, tOut2, 3);
   check("復帰後の再持ち出しでは定期実行が再通知する",
     sent === 2 && dev.state === "outside");
@@ -646,7 +684,9 @@ section("8e. 定期実行：管理画面を開かなくても確定し、1回だ
     const t3 = t2 + 3600000;
     e2 = D.evaluateReport(d, { nowMs: t3, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
     applyPatch(d, D.splitPatchForSend(e2.patch, null, t3));
-    check("再外出は今回の時刻から計測を始める", d.pendingSince === t3);
+    check("再外出は今回の時刻から計測を始める", d.pendingSince === t3 && d.outsideHits === 1);
+    e2 = D.evaluateReport(d, { nowMs: t3 + 30000, lat: far.lat, lng: far.lng, acc: 10 }, BASE, cfg);
+    applyPatch(d, D.splitPatchForSend(e2.patch, null, t3 + 30000));
     cronMinutes(d, t3, 2);
     check("再外出でも3分未満なら通知しない", sent === before);
     cronMinutes(d, t3 + 120000, 1);
@@ -655,7 +695,7 @@ section("8e. 定期実行：管理画面を開かなくても確定し、1回だ
 
   // ⑨ 監視OFFの施設は定期実行でも通知しない（フェイルクローズを定期実行で破らない）
   const offFacs = {}; offFacs[fk] = Object.assign({}, BASE, { enabled: false });
-  const dev2 = { fkey: fk, state: "pending", pendingSince: T0, lastJudgedAt: T0, lastSeenAt: T0 };
+  const dev2 = { fkey: fk, state: "pending", outsideHits: 2, pendingSince: T0, lastJudgedAt: T0, lastSeenAt: T0 };
   const planOff = D.sweepPlan({ dev0000000000002: dev2 }, T0 + 600000, cfg, offFacs);
   check("監視OFFの施設は定期実行でも確定しない", planOff.confirms.length === 0);
   // 基準位置が未設定の施設も同じ
@@ -802,7 +842,7 @@ async function exitMemSection() {
   //   ここは "devMEM…"、8g は "devTESTid…"、8a〜8e は "dev00000…" で衝突しない。
   const idOf = function (i) { return "devMEM" + String(1000000000 + i); };
   const mk = function (offset) {
-    return { fkey: fk, state: "pending", pendingSince: now - 200000 - offset,
+    return { fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 200000 - offset,
              lastSeenAt: now - 200000 - offset, lastJudgedAt: now - 200000 - offset,
              createdAtMs: now - 900000 };
   };
@@ -978,9 +1018,9 @@ section("11. 設定の置き場所（クライアントから触れない）");
     check("持ち出し通知が無いときは差分をそのまま書く",
       none.state === "outside" && none.notifiedAt === 100);
     const conf = D.confirmPatch(123);
-    check("確定の差分は state/pendingSince/notifiedAt の3つだけ",
-      conf.state === "outside" && conf.pendingSince === null && conf.notifiedAt === 123
-      && Object.keys(conf).length === 3);
+    check("確定の差分は state/pendingSince/outsideHits/notifiedAt の4つだけ",
+      conf.state === "outside" && conf.pendingSince === null && conf.outsideHits === null
+      && conf.notifiedAt === 123 && Object.keys(conf).length === 4);
     check("確定を書くのは送信成功の枝の中だけ（ソース上の位置）",
       rep.indexOf("D.confirmPatch(nowMs)") > rep.indexOf("if (okSent)"));
     check("送信前の書き込みは純関数を通す", rep.indexOf("D.splitPatchForSend(ev.patch") > 0);
@@ -1380,7 +1420,7 @@ async function devReportHandlerSection() {
     { name: "ミュゲの泉", lat: 34.46, lng: 135.37, radiusM: 150, enabled: true };
   GDB["devmon/devices"] = {};
   GDB["devmon/devices"][DEV] = {
-    fkey: fk, state: "pending", pendingSince: now - 200000,
+    fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 200000,
     lastSeenAt: now - 200000, lastJudgedAt: now - 200000, createdAtMs: now - 900000,
   };
   r = await call({ action: "sweep", key: KEY });
@@ -1401,7 +1441,7 @@ async function devReportHandlerSection() {
     wrote.length === 1 && w0.state === "outside"
     && w0.pendingSince === null && Number(w0.notifiedAt) > 0);
   // ★ 送信成功のあとに書く（先に書くと、巻き戻し失敗でアラートが完全に失われる）
-  check("送信より後に確定を書く（取り逃しを作らない）", Object.keys(w0).length === 3);
+  check("送信より後に確定を書く（取り逃しを作らない）", Object.keys(w0).length === 4);
 
   // --- 同一持ち出し中は、毎分叩いても2通目を出さない ---
   // ★ 実装が**実際に書いた差分だけ**を適用する（期待値を上から流し込まない）。
@@ -1413,7 +1453,7 @@ async function devReportHandlerSection() {
 
   // --- 範囲内へ戻ったあとの再持ち出しでは再通知する ---
   GDB["devmon/devices"][DEV] = {
-    fkey: fk, state: "pending", pendingSince: now + 600000,
+    fkey: fk, state: "pending", outsideHits: 2, pendingSince: now + 600000,
     lastSeenAt: now + 600000, lastJudgedAt: now + 600000, createdAtMs: now - 900000,
     notifiedAt: now,                        // 前回の持ち出しの通知（これより継続が新しい）
   };
@@ -1432,7 +1472,7 @@ async function devReportHandlerSection() {
   // --- 監視OFF・基準位置未設定では通知しない（フェイルクローズ）---
   GDB["devmon/facilities"][fk].enabled = false;
   GDB["devmon/devices"][DEV] = {
-    fkey: fk, state: "pending", pendingSince: now - 400000,
+    fkey: fk, state: "pending", outsideHits: 2, pendingSince: now - 400000,
     lastSeenAt: now - 400000, lastJudgedAt: now - 400000, createdAtMs: now - 900000,
   };
   GCALLS.http.length = 0;
@@ -1455,7 +1495,7 @@ async function devReportHandlerSection() {
       { name: "ミュゲの泉", lat: 34.46, lng: 135.37, radiusM: 150, enabled: true };
     GDB["devmon/devices"] = {};
     GDB["devmon/devices"][DEV] = {
-      fkey: fk, state: "pending", pendingSince: t - 200000,
+      fkey: fk, state: "pending", outsideHits: 2, pendingSince: t - 200000,
       lastSeenAt: t - 200000, lastJudgedAt: t - 200000, createdAtMs: t - 900000,
     };
     // 端末レコードへの書き込みだけを失敗させる（レート制限のカウンタは成功させる）
@@ -1504,7 +1544,7 @@ async function devReportHandlerSection() {
     //   （抑止して良いのは「既に届いた同一内容」だけ。）
     GFAIL.httpStatus = 500;
     GDB["devmon/devices"][DEV] = {
-      fkey: fk, state: "pending", pendingSince: t - 1200000,
+      fkey: fk, state: "pending", outsideHits: 2, pendingSince: t - 1200000,
       lastSeenAt: t - 1200000, lastJudgedAt: t - 1200000, createdAtMs: t - 1800000,
     };
     GCALLS.http.length = 0;
