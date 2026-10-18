@@ -522,8 +522,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     check("穂乃味は起動時に先読み・転記を行う（通信あり）", c.__calls.fetch >= 1);
   }
 
-  console.log("■ ミュゲの泉・ナナイロだけ・2026-10-09 以降だけ（2026-10-09 再開・2026-10-18 ナナイロ追加。他施設は従来の打刻画面）");
-  for (const OF of ["ココラ", "ハーベスト", "ミュゲ貝塚", "ミュゲ春木", ""]) {
+  console.log("■ 対象施設・施設ごとの開始日だけ（2026-10-09 ミュゲの泉・2026-10-18 ナナイロ・2026-10-20 他の5施設。一覧に無い施設は従来の打刻画面）");
+  for (const OF of ["本社", "ミュゲ", ""]) {
     const c = makeClient({ facilityName: OF, records: [rec("山田", "clockIn", D, 6, { workFacility: OF, facilityName: OF })] });
     const p1 = c.mdocPlan("clockIn", "佐藤", OF, at(D, 6));
     const p2 = c.mdocPlan("clockOut", "山田", OF, at(D, 18));
@@ -549,12 +549,20 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     check("ミュゲの泉でも 2026-10-08 以前の打刻では聞かない", c.mdocPlan("clockIn", "山田", FAC, at("2026-10-08", 6)) === null && c.mdocPlan("clockOut", "山田", FAC, at("2026-10-08", 18)) === null);
     const p = c.mdocPlan("clockIn", "山田", FAC, at("2026-10-09", 6));
     check("ミュゲの泉の 2026-10-09 の出勤は聞く", p && p.hyg === true);
+    const pn = c.mdocPlan("clockIn", "山田", "ナナイロ", at("2026-10-09", 6));
+    check("ナナイロは 2026-10-09 以降の出勤で聞く", pn && pn.hyg === true);
+    for (const NF of ["ココラ", "ハーベスト", "ミュゲ貝塚", "ミュゲ春木", "ハルイロ"]) {
+      const cc = makeClient({ facilityName: NF });
+      const before = cc.mdocPlan("clockIn", "山田", NF, at("2026-10-19", 6)) === null && cc.mdocPlan("clockOut", "山田", NF, at("2026-10-19", 18)) === null;
+      const p20 = cc.mdocPlan("clockIn", "山田", NF, at("2026-10-20", 6));
+      check("施設「" + NF + "」: 2026-10-19 までは聞かず、2026-10-20 の出勤から聞く", before && p20 && p20.hyg === true && p20.slot === 0);
+    }
   }
   {
     const MD0 = require(path.join(ROOT, "api/_lib/monthly-docs.js"));
     const SRV_FAC = JSON.stringify(MD0.ENABLED_FACILITIES);
     const c = makeClient();
-    check("画面とサーバの対象施設・開始日が同じ", JSON.stringify(Array.from(c.MDOC_FACILITIES)) === SRV_FAC && c.MDOC_START_DATE === MD0.START_DATE, SRV_FAC);
+    check("画面とサーバの対象施設・開始日が同じ", JSON.stringify(Array.from(c.MDOC_FACILITIES)) === SRV_FAC && c.MDOC_START_DATE === MD0.START_DATE && JSON.stringify(c.MDOC_FACILITY_FROM) === JSON.stringify(MD0.FACILITY_FROM), SRV_FAC);
     const T0 = require(path.join(ROOT, "api/_lib/tenant.js"));
     const hon = /honomi:\{[\s\S]*?features:\{([^}]*)\}/.exec(html);
     check("穂乃味の monthlyDocs は画面・API の2か所とも有効", !!hon && /monthlyDocs:true/.test(hon[1]) && T0.TENANTS.honomi.features.monthlyDocs === true && T0.TENANTS.mantel.features.monthlyDocs === false);
@@ -621,12 +629,13 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   {
     const scope = {
       other2: R("other2", { workFacility: "ココラ", facilityName: "ココラ", mdoc: { f: "ココラ", hyg: { a: "ok" } } }),
+      cocora20: R("cocora20", { date: "2026-10-20", timestamp: "2026-10-19T21:10:00.000Z", workFacility: "ココラ", facilityName: "ココラ", mdoc: { f: "ココラ", hyg: { a: "ok" } } }),
       old: R("old", { date: "2026-10-08", mdoc: { f: FAC, hyg: { a: "ok" } } }),
       now: R("now", { mdoc: { f: FAC, hyg: { a: "ok" } } }),
     };
     const r5 = MD.eventsFromRecords(scope, master);
-    check("サーバ: ミュゲの泉以外・2026-10-08 以前の回答は転記しない（不正には数えない）",
-      r5.events.length === 1 && r5.events[0].event_id === "now:hyg" && r5.outOfScope === 2 && r5.rejected === 0, JSON.stringify(r5));
+    check("サーバ: 施設の開始日より前（ココラの 2026-10-19 以前・2026-10-08 以前）の回答は転記せず、ココラの 2026-10-20 は転記する（不正には数えない）",
+      r5.events.length === 2 && r5.events.some((e) => e.event_id === "now:hyg") && r5.events.some((e) => e.event_id === "cocora20:hyg" && e.facility === "ココラ") && r5.outOfScope === 2 && r5.rejected === 0, JSON.stringify(r5));
     let rng = null;
     const G0 = require(path.join(ROOT, "api/_lib/google.js"));
     const keep = [G0.dbGetRange, G0.dbGet];
@@ -682,8 +691,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("穂乃味: monthlyDocs が false なら測定対象も取れず、DB に触れない", r.code === 403 && touched.db === 0 && touched.http === 0, JSON.stringify(touched));
   // 以下は monthlyDocs が true のときの入口の検査
   T.feature = (n) => (n === "monthlyDocs" ? true : realFeature(n));
-  r = await call({ idToken: "x".repeat(40), action: "devices", facility: "ココラ" });
-  check("穂乃味: ミュゲの泉以外の測定対象は 403 facility_disabled で、DB に触れない", r.code === 403 && r.body && r.body.error === "facility_disabled" && touched.db === 0 && touched.http === 0, JSON.stringify(r) + JSON.stringify(touched));
+  r = await call({ idToken: "x".repeat(40), action: "devices", facility: "本社" });
+  check("穂乃味: 対象施設以外の測定対象は 403 facility_disabled で、DB に触れない", r.code === 403 && r.body && r.body.error === "facility_disabled" && touched.db === 0 && touched.http === 0, JSON.stringify(r) + JSON.stringify(touched));
   delete process.env.MDOC_SUPABASE_URL;
   r = await call({ idToken: "x".repeat(40), action: "sync" });
   check("穂乃味でも接続設定が無ければ 503（フェイルクローズ）", r.code === 503);

@@ -25,9 +25,15 @@ const MAX_DEVS = 8;
  * ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開し（2026-10-18 ナナイロを追加）、2026-10-09 以降の打刻だけを転記する
  * （他施設・それより前の打刻は転記しない＝既存の月次書類データに足さない）。index.html の MDOC_FACILITIES / MDOC_START_DATE と同じ値。
  */
-const ENABLED_FACILITIES = Object.freeze(["ミュゲの泉", "ナナイロ"]); // 2026-10-18 ユーザー指示でナナイロを追加
+const ENABLED_FACILITIES = Object.freeze(["ミュゲの泉", "ナナイロ", "ココラ", "ハーベスト", "ミュゲ貝塚", "ミュゲ春木", "ハルイロ"]); // 2026-10-18 ナナイロ追加・2026-10-19 他の5施設を追加（ユーザー指示）
 const START_DATE = "2026-10-09";
+/** 施設ごとの開始日（ここに無い施設は START_DATE から）。2026-10-19 ユーザー指示: 他の5施設は 2026-10-20 の打刻から。index.html の MDOC_FACILITY_FROM と同じ値。 */
+const FACILITY_FROM = Object.freeze({ "ココラ": "2026-10-20", "ハーベスト": "2026-10-20", "ミュゲ貝塚": "2026-10-20", "ミュゲ春木": "2026-10-20", "ハルイロ": "2026-10-20" });
 function facilityEnabled(name) { return typeof name === "string" && ENABLED_FACILITIES.indexOf(name) >= 0; }
+function facilityStart(name) {
+  const f = Object.prototype.hasOwnProperty.call(FACILITY_FROM, name) ? FACILITY_FROM[name] : "";
+  return f > START_DATE ? f : START_DATE;
+}
 
 const EVENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -142,7 +148,7 @@ function eventsFromRecords(records, master) {
     const allowed = r.type === "clockOut" ? (dayFacs[r.staff + "|" + r.date] || new Set()) : new Set(recFacs);
     if (!allowed.has(fac)) { bad(); continue; }
     // 対象外の施設・開始日より前の打刻は転記しない（不正ではないので rejected に数えない）
-    if (!facilityEnabled(fac) || r.date < START_DATE) { outOfScope++; continue; }
+    if (!facilityEnabled(fac) || r.date < facilityStart(fac)) { outOfScope++; continue; }
 
     const base = {
       punch_type: r.type,
@@ -275,7 +281,9 @@ module.exports = {
   HOZON_OFFSET_DAYS,
   ENABLED_FACILITIES,
   START_DATE,
+  FACILITY_FROM,
   facilityEnabled,
+  facilityStart,
   eventsFromRecords,
   hozonDiscardDate,
   addDays,

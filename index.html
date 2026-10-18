@@ -107,7 +107,7 @@ var TENANT_CONFIGS={
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     facilityAdminMenu:false,   // 施設URLの打刻トップに「管理者メニュー」を出すか（穂乃味は出さない。従来どおり）
     facePhotoDefault:false,    // 打刻時の顔撮影の既定（スタッフに設定が無いとき）。穂乃味は従来どおり OFF
-    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs はミュゲの泉・ナナイロだけ（MDOC_FACILITIES。2026-10-09 再開・2026-10-18 ナナイロ追加）
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs は MDOC_FACILITIES の施設だけ（2026-10-09 ミュゲの泉で再開・2026-10-18 ナナイロ追加・2026-10-20 から他の5施設）
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -10645,11 +10645,14 @@ var MDOC_HYG_ITEMS="体調・化膿創・服装・帽子・毛髪・爪・指輪
 var MDOC_FLU_ITEMS="熱・頭痛・関節痛・筋肉痛・咳・喉の痛み・鼻水・家族の症状";
 var MDOC_SLOT_LABEL=["朝","日中","夕方"];
 // ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開（他施設は従来の打刻画面のまま。通信もしない）。2026-10-09 以降の打刻だけが対象。
-//   2026-10-18 ユーザー指示: ナナイロを追加。
-//   サーバ（api/_lib/monthly-docs.js の ENABLED_FACILITIES / START_DATE）と同じ値にする。施設を足すときは両方に足す。
-var MDOC_FACILITIES=["ミュゲの泉","ナナイロ"];
+//   2026-10-18 ユーザー指示: ナナイロを追加。2026-10-19 ユーザー指示: 他の5施設も 2026-10-20 の打刻から（MDOC_FACILITY_FROM）。
+//   サーバ（api/_lib/monthly-docs.js の ENABLED_FACILITIES / START_DATE / FACILITY_FROM）と同じ値にする。施設を足すときは両方に足す。
+var MDOC_FACILITIES=["ミュゲの泉","ナナイロ","ココラ","ハーベスト","ミュゲ貝塚","ミュゲ春木","ハルイロ"];
 var MDOC_START_DATE="2026-10-09";
+// 施設ごとの開始日（ここに無い施設は MDOC_START_DATE から）。この日より前の打刻では聞かない。
+var MDOC_FACILITY_FROM={"ココラ":"2026-10-20","ハーベスト":"2026-10-20","ミュゲ貝塚":"2026-10-20","ミュゲ春木":"2026-10-20","ハルイロ":"2026-10-20"};
 function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
+function mdocStartFor(fac){var f=Object.prototype.hasOwnProperty.call(MDOC_FACILITY_FROM,fac)?MDOC_FACILITY_FROM[fac]:"";return f>MDOC_START_DATE?f:MDOC_START_DATE;}
 var _mdocDevLoading={};
 var _mdocSyncTimer=null,_mdocSyncDays=2;
 // ★ 2026-10-09 ユーザー指示: 出勤は「問題なし」を押した時点で確定し、すぐ送る（朝出勤確認で未出勤と誤らないため）。
@@ -10770,7 +10773,7 @@ function mdocPlan(type,staff,fac,d){
   if(!mdocActive()||!mdocFacilityOn(fac)||!staff)return null;
   if(type!=="clockIn"&&type!=="clockOut")return null;
   var dk=fmtDateKey(d),hour=d.getHours();
-  if(dk<MDOC_START_DATE)return null;
+  if(dk<mdocStartFor(fac))return null;
   var day=_mdocDay(dk);
   var tempDone=function(slot){return day.has(function(m){return m.f===fac&&m.temp&&m.temp.s===slot;});};
   var so=(staffList||[]).find(function(x){return x&&x.name===staff;})||{};
