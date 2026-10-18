@@ -107,7 +107,7 @@ var TENANT_CONFIGS={
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     facilityAdminMenu:false,   // 施設URLの打刻トップに「管理者メニュー」を出すか（穂乃味は出さない。従来どおり）
     facePhotoDefault:false,    // 打刻時の顔撮影の既定（スタッフに設定が無いとき）。穂乃味は従来どおり OFF
-    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs はミュゲの泉だけ（MDOC_FACILITIES。2026-10-09 再開）
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs はミュゲの泉・ナナイロだけ（MDOC_FACILITIES。2026-10-09 再開・2026-10-18 ナナイロ追加）
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -10645,8 +10645,9 @@ var MDOC_HYG_ITEMS="体調・化膿創・服装・帽子・毛髪・爪・指輪
 var MDOC_FLU_ITEMS="熱・頭痛・関節痛・筋肉痛・咳・喉の痛み・鼻水・家族の症状";
 var MDOC_SLOT_LABEL=["朝","日中","夕方"];
 // ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開（他施設は従来の打刻画面のまま。通信もしない）。2026-10-09 以降の打刻だけが対象。
+//   2026-10-18 ユーザー指示: ナナイロを追加。
 //   サーバ（api/_lib/monthly-docs.js の ENABLED_FACILITIES / START_DATE）と同じ値にする。施設を足すときは両方に足す。
-var MDOC_FACILITIES=["ミュゲの泉"];
+var MDOC_FACILITIES=["ミュゲの泉","ナナイロ"];
 var MDOC_START_DATE="2026-10-09";
 function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
 var _mdocDevLoading={};

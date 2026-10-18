@@ -131,7 +131,7 @@ console.log("■ 退勤（日中・夕方の温度／保存食／最後の退勤
   check("保存食が記録済みなら同じ日にもう聞かない", c.mdocPlan("clockOut", "高橋", FAC, at(D, 19)) === null);
 }
 {
-  const recs = [rec("山田", "clockIn", D, 6), rec("田中", "clockIn", D, 8, { workFacility: "ナナイロ", facilityName: "ナナイロ" })];
+  const recs = [rec("山田", "clockIn", D, 6), rec("田中", "clockIn", D, 8, { workFacility: "ココラ", facilityName: "ココラ" })];
   const c = makeClient({ records: recs });
   const p = c.mdocPlan("clockOut", "山田", FAC, at(D, 18));
   check("他施設の勤務中の人は数えない（日中勤務でも16時以降1人なら最後）", p && p.slot === 2 && p.hozon === true);
@@ -455,10 +455,10 @@ const uiTests = (async () => {
     let c = mk([rec("山田", "clockIn", D, 7)]);
     check("二重打刻: 同じ施設の出勤が届いていれば止める", !!c.mdocDupPunch("clockIn", "山田", D, FAC));
     check("二重打刻: 別の人の出勤では止めない", c.mdocDupPunch("clockIn", "佐藤", D, FAC) === null);
-    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ナナイロ", workFacility: "ナナイロ" })]);
+    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ココラ", workFacility: "ココラ" })]);
     const d1 = c.mdocDupPunch("clockIn", "山田", D, FAC);
-    check("二重打刻: 他施設で出勤中なら止める", !!d1 && d1.facilityName === "ナナイロ");
-    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ナナイロ", workFacility: "ナナイロ" }), rec("山田", "clockOut", D, 9, { facilityName: "ナナイロ" })]);
+    check("二重打刻: 他施設で出勤中なら止める", !!d1 && d1.facilityName === "ココラ");
+    c = mk([rec("山田", "clockIn", D, 7, { facilityName: "ココラ", workFacility: "ココラ" }), rec("山田", "clockOut", D, 9, { facilityName: "ココラ" })]);
     check("二重打刻: 他施設で退勤済みなら出勤できる（doPunch と同じ）", c.mdocDupPunch("clockIn", "山田", D, FAC) === null);
     check("二重打刻: その日の退勤は施設を問わず止める", !!c.mdocDupPunch("clockOut", "山田", D, FAC));
     c = mk([rec("山田", "clockIn", D, 7, { deleted: true })]);
@@ -497,7 +497,7 @@ console.log("■ 前回の温度（手元の打刻とサーバの最後の記録
   const c = makeClient({ records: recs });
   check("手元の打刻が新しければそれを使う", c.mdocLastTemps(FAC, { last: { at: "2026-10-08T09:00:00Z", devs: [{ id: devA, v: 9 }] } })[devA] === 3.5);
   check("サーバの記録が新しければそれを使う", c.mdocLastTemps(FAC, { last: { at: "2026-10-09T23:00:00Z", devs: [{ id: devA, v: 5 }] } })[devA] === 5);
-  check("他の施設の記録は使わない", c.mdocLastTemps("ナナイロ", null)[devA] === undefined);
+  check("他の施設の記録は使わない", c.mdocLastTemps("ココラ", null)[devA] === undefined);
 }
 
 console.log("■ 穂乃味以外・テスト画面では何もしない（判定・通信・端末保存なし）");
@@ -522,8 +522,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     check("穂乃味は起動時に先読み・転記を行う（通信あり）", c.__calls.fetch >= 1);
   }
 
-  console.log("■ ミュゲの泉だけ・2026-10-09 以降だけ（2026-10-09 再開。他施設は従来の打刻画面）");
-  for (const OF of ["ナナイロ", "ミュゲ貝塚", "ミュゲ春木", ""]) {
+  console.log("■ ミュゲの泉・ナナイロだけ・2026-10-09 以降だけ（2026-10-09 再開・2026-10-18 ナナイロ追加。他施設は従来の打刻画面）");
+  for (const OF of ["ココラ", "ハーベスト", "ミュゲ貝塚", "ミュゲ春木", ""]) {
     const c = makeClient({ facilityName: OF, records: [rec("山田", "clockIn", D, 6, { workFacility: OF, facilityName: OF })] });
     const p1 = c.mdocPlan("clockIn", "佐藤", OF, at(D, 6));
     const p2 = c.mdocPlan("clockOut", "山田", OF, at(D, 18));
@@ -563,7 +563,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   // ── サーバ側の検証 ───────────────────────────────────────
   console.log("■ サーバ: 打刻レコードの mdoc の検証");
   const MD = require(path.join(ROOT, "api/_lib/monthly-docs.js"));
-  const master = { staff: new Map([["山田", "E001"], ["佐藤", ""]]), facilities: new Set([FAC, "ナナイロ"]) };
+  const master = { staff: new Map([["山田", "E001"], ["佐藤", ""]]), facilities: new Set([FAC, "ココラ"]) };
   const U1 = "11111111-1111-4111-8111-111111111111", U2 = "22222222-2222-4222-8222-222222222222";
   const R = (id, o) => Object.assign({ eventId: id, staff: "山田", type: "clockIn", date: D, timestamp: "2026-10-08T21:10:00.000Z", workFacility: FAC, facilityName: FAC, serverReceivedAt: 1791320000000 }, o);
   const recs = {
@@ -573,7 +573,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     badkey: R("other", { mdoc: { f: FAC, hyg: { a: "ok" } } }),
     unknownStaff: R("unknownStaff", { staff: "知らない人", mdoc: { f: FAC, hyg: { a: "ok" } } }),
     unknownFac: R("unknownFac", { mdoc: { f: "架空施設", hyg: { a: "ok" } } }),
-    otherFac: R("otherFac", { mdoc: { f: "ナナイロ", hyg: { a: "ok" } } }),
+    otherFac: R("otherFac", { mdoc: { f: "ココラ", hyg: { a: "ok" } } }),
     hygOut: R("hygOut", { type: "clockOut", mdoc: { f: FAC, hyg: { a: "ok" } } }),
     tempSlot: R("tempSlot", { mdoc: { f: FAC, temp: { s: 2, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }),
     tempUuid: R("tempUuid", { mdoc: { f: FAC, temp: { s: 0, d: [{ id: "x", k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }),
@@ -606,8 +606,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   {
     // 応援勤務の人が自分のスマホ（施設リンクなし）で出勤先 X を選び、退勤時に X の温度と保存食に答えた
     const sup = {
-      cin: R("cin", { staff: "佐藤", workFacility: FAC, facilityName: "ナナイロ", homeFacility: "ナナイロ" }),
-      cout: R("cout", { staff: "佐藤", type: "clockOut", workFacility: undefined, facilityName: "ナナイロ",
+      cin: R("cin", { staff: "佐藤", workFacility: FAC, facilityName: "ココラ", homeFacility: "ココラ" }),
+      cout: R("cout", { staff: "佐藤", type: "clockOut", workFacility: undefined, facilityName: "ココラ",
         mdoc: { f: FAC, hozon: { a: "yes", store: D, discard: "2026-09-24" } } }),
       del: R("del", { staff: "佐藤", type: "clockOut", deleted: true, workFacility: undefined, facilityName: FAC,
         mdoc: { f: FAC, hozon: { a: "yes", store: D, discard: "2026-09-24" } } }),
@@ -620,7 +620,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   }
   {
     const scope = {
-      nana: R("nana", { workFacility: "ナナイロ", facilityName: "ナナイロ", mdoc: { f: "ナナイロ", hyg: { a: "ok" } } }),
+      other2: R("other2", { workFacility: "ココラ", facilityName: "ココラ", mdoc: { f: "ココラ", hyg: { a: "ok" } } }),
       old: R("old", { date: "2026-10-08", mdoc: { f: FAC, hyg: { a: "ok" } } }),
       now: R("now", { mdoc: { f: FAC, hyg: { a: "ok" } } }),
     };
@@ -682,7 +682,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("穂乃味: monthlyDocs が false なら測定対象も取れず、DB に触れない", r.code === 403 && touched.db === 0 && touched.http === 0, JSON.stringify(touched));
   // 以下は monthlyDocs が true のときの入口の検査
   T.feature = (n) => (n === "monthlyDocs" ? true : realFeature(n));
-  r = await call({ idToken: "x".repeat(40), action: "devices", facility: "ナナイロ" });
+  r = await call({ idToken: "x".repeat(40), action: "devices", facility: "ココラ" });
   check("穂乃味: ミュゲの泉以外の測定対象は 403 facility_disabled で、DB に触れない", r.code === 403 && r.body && r.body.error === "facility_disabled" && touched.db === 0 && touched.http === 0, JSON.stringify(r) + JSON.stringify(touched));
   delete process.env.MDOC_SUPABASE_URL;
   r = await call({ idToken: "x".repeat(40), action: "sync" });

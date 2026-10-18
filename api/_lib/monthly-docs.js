@@ -22,10 +22,10 @@ const HOZON_OFFSET_DAYS = 15;
 /** 1施設×種別の機器の上限（月次書類の帳票の欄＝冷蔵庫1〜4）。打刻1件に載せられる機器は冷蔵・冷凍で8台まで。 */
 const MAX_DEVS = 8;
 /**
- * ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開し、2026-10-09 以降の打刻だけを転記する
+ * ★ 2026-10-09 ユーザー指示: ミュゲの泉だけで再開し（2026-10-18 ナナイロを追加）、2026-10-09 以降の打刻だけを転記する
  * （他施設・それより前の打刻は転記しない＝既存の月次書類データに足さない）。index.html の MDOC_FACILITIES / MDOC_START_DATE と同じ値。
  */
-const ENABLED_FACILITIES = Object.freeze(["ミュゲの泉"]);
+const ENABLED_FACILITIES = Object.freeze(["ミュゲの泉", "ナナイロ"]); // 2026-10-18 ユーザー指示でナナイロを追加
 const START_DATE = "2026-10-09";
 function facilityEnabled(name) { return typeof name === "string" && ENABLED_FACILITIES.indexOf(name) >= 0; }
 
