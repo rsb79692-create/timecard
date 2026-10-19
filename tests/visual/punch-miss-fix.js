@@ -2,6 +2,7 @@
  * tests/visual/punch-miss-fix.js — 打刻漏れの修正（候補ボタン・まとめ画面・数字4桁入力）をブラウザで確かめる
  *
  * 実行: node tests/visual/punch-miss-fix.js [スクリーンショットの出力先]
+ *   PROD=1 node tests/visual/punch-miss-fix.js … アプリ本体を本番の GitHub Pages から取って同じ確認をする（Firebase・Vercel は模擬のまま）
  *   ※ Playwright（Chromium）が必要。ネットワークはすべて模擬する（本番の Firebase・Vercel へは接続しない）。
  *     書き込み（PUT / PATCH）は模擬サーバのメモリにだけ反映し、送った内容を検査する。
  *
@@ -92,6 +93,8 @@ async function main() {
   await page.addInitScript(() => { try { delete window.Notification; } catch (e) {} });
   await HN.installRoutes(page, ROOT, {});
   await page.route(/firebasedatabase\.app/, dbRoute); // 後から登録した方が先に効く（書き込みを模擬サーバへ反映する）
+  // PROD=1: アプリ本体だけ本番の GitHub Pages から取る（Firebase・Vercel は模擬のまま。本番データへは接続しない）
+  if (process.env.PROD === "1") await page.route(/rsb79692-create\.github\.io\/timecard\//, (r) => r.continue());
   await page.goto(APP + "?token=all", { waitUntil: "domcontentloaded" });
   await settle(page);
   await page.evaluate(() => window.goPin()); await settle(page);
