@@ -257,7 +257,7 @@ function makeCell(data, text) {
  */
 let newIdSeq = 0;   // 実装の generateRecordId は毎回ユニークな id を返す（crypto.randomUUID）
 function runCell(opts) {
-  const state = { saved: [], alerts: [], confirms: [], deleted: [], renders: 0, reasonCancelled: 0, plainSaved: [], approvedWrites: [], onFail: null, ls: {} };
+  const state = { saved: [], alerts: [], confirms: [], deleted: [], renders: 0, reasonCancelled: 0, reasonModals: 0, plainSaved: [], approvedWrites: [], onFail: null, ls: {} };
   const approvals = opts.approvals || {};
   const records = opts.records;
   const cell = opts.cell;
@@ -282,6 +282,7 @@ function runCell(opts) {
     showAlert: function (m) { state.alerts.push(m); },
     showConfirm: function (m, onYes, onNo) { state.confirms.push(m); if (opts.confirmDelete) onYes(); else if (onNo) onNo(); },
     showAdjustReasonModal: function (onConfirm, onCancel) {
+      state.reasonModals++;
       if (opts.cancelReason) { state.reasonCancelled++; if (onCancel) onCancel(); return; }
       onConfirm({ reason: "forgot", label: "打刻忘れ", comment: "" });
     },
@@ -327,8 +328,10 @@ console.log("\n[3] 保存処理：未打刻セルからの新規作成");
   check("両方未打刻：timestamp が JST の入力時刻",
     !!nr && nr.timestamp === new Date("2026-09-01T08:30:00+09:00").toISOString(), nr && nr.timestamp);
   check("両方未打刻：id が採番される（＝新規ノード）", !!nr && !!nr.id, nr && nr.id);
-  check("両方未打刻：管理者修正として記録される",
-    !!nr && nr.editedByAdmin === true && nr.manualAdd === true && nr.adjustReason === "forgot", JSON.stringify(nr));
+  // 2026-10-19 未打刻の出勤・退勤を埋めるときは理由を選ばせず「打刻漏れ」で保存する（ユーザー指示）
+  check("両方未打刻：管理者修正として記録される（理由は自動で「打刻漏れ」）",
+    !!nr && nr.editedByAdmin === true && nr.manualAdd === true && nr.adjustReason === "miss" && nr.adjustReasonLabel === "打刻漏れ" && nr.adjustComment === "", JSON.stringify(nr));
+  check("両方未打刻：理由を選ぶ画面を出さない", r.reasonModals === 0, String(r.reasonModals));
   check("両方未打刻：退勤を勝手に補完しない",
     r.saved.filter(function (x) { return x.type === "clockOut"; }).length === 0, JSON.stringify(r.saved));
 }
@@ -428,12 +431,13 @@ console.log("\n[5] 保存処理：勝手に保存しない（誤操作の防止�
   check("未入力のまま確定すると元の表示へ戻る", r.cell.textContent === "−", r.cell.textContent);
 }
 
-// (j) 修正理由モーダルをキャンセル → 保存しない
+// (j) 修正理由モーダルをキャンセル → 保存しない（既存の時刻の変更。未打刻の欄は理由を選ばないため対象外）
 {
-  const recs = [];
-  const r = runCell({ records: recs, cell: makeCell({ id: "", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "−"), input: "08:30", cancelReason: true });
-  check("修正理由をキャンセルすると保存しない", r.saved.length === 0 && recs.length === 0, JSON.stringify(r.saved));
-  check("修正理由をキャンセルすると元の表示へ戻る", r.cell.textContent === "−", r.cell.textContent);
+  const cin = { id: "rec-in", staff: "山田 太郎", type: "clockIn", date: "2026-09-01", time: "08:30", timestamp: "2026-08-30T23:30:00.000Z" };
+  const recs = [cin];
+  const r = runCell({ records: recs, cell: makeCell({ id: "rec-in", nm: "山田 太郎", type: "clockIn", date: "2026-09-01" }, "08:30"), input: "08:00", cancelReason: true });
+  check("修正理由をキャンセルすると保存しない", r.saved.length === 0 && recs.length === 1 && cin.time === "08:30", JSON.stringify(r.saved));
+  check("修正理由をキャンセルすると元の表示へ戻る", r.cell.textContent === "08:30", r.cell.textContent);
 }
 
 // (k) Enter / 設定ボタン以外では保存しない
@@ -527,7 +531,7 @@ console.log("\n[8] 管理者の出勤・退勤修正と同時承認");
     r.approvedWrites.length === 1 && r.plainSaved.length === 0 && recs.length === 2 && !!sv && sv.type === "clockOut" && sv.time === "15:00" && sv.manualAdd === true,
     JSON.stringify(r.saved));
   check("未打刻退勤の新規入力：その日が承認済みになる", r.approvals["2026-09-01__山田 太郎"] === true && r.approvedWrites[0].id === sv.id);
-  check("未打刻退勤の新規入力：修正理由が記録される", sv.adjustReason === "forgot" && sv.adjustReasonLabel === "打刻忘れ");
+  check("未打刻退勤の新規入力：修正理由は自動で「打刻漏れ」", sv.adjustReason === "miss" && sv.adjustReasonLabel === "打刻漏れ" && r.reasonModals === 0);
 }
 {
   // (c) 出勤・退勤とも無い日：出勤だけ入れた時点では承認しない（承認ボタンと同じく退勤漏れは承認不可）

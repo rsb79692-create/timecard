@@ -1601,7 +1601,8 @@ function _apvReconcile(staff,date,key,done,st){
     if(!st.finished){st.finished=true;done(false);}
   });
 }
-function saveRecordWithApproval(rec, approvalKey, onFail) {
+// approvalValue に null を渡すと承認キーを消す（打刻漏れの「元に戻す」で自動承認を外すとき）。省略時は承認する。
+function saveRecordWithApproval(rec, approvalKey, onFail, approvalValue) {
   if(demoWriteBlocked()){if(onFail)onFail();return;}
   // ★ ルート直下への多パス更新なので、id が空・不正だと tc5_records 全体を置き換えうる。書かずに止める。
   //   承認キーも RTDB のキーに使えない文字（パス区切りの "/" を含む）があれば書かない。
@@ -1613,7 +1614,7 @@ function saveRecordWithApproval(rec, approvalKey, onFail) {
   }
   var body={};
   body["tc5_records/"+rec.id]=rec;
-  body["tc5_approvals/"+approvalKey]=true;
+  body["tc5_approvals/"+approvalKey]=approvalValue===null?null:true;
   console.log("[saveRecordWithApproval] called:", rec.id, approvalKey);
   _lsSet("tc5_records", JSON.stringify(records));
   _lsSet("tc5_approvals", JSON.stringify(approvals));
@@ -3398,6 +3399,7 @@ function ensureAdminRecordRanges(){
     addMonth(selMonth);
     if(selDate)need.push([selDate,selDate]);
     need.push([today,today]);                                   // 朝出勤確認・当日状況
+    if(adminTab==="records")need.push([_recDayShift(-14),_recDayShift(-1)]); // 打刻漏れまとめ画面（過去14日〜前日）
     if(adminTab==="adjustlog")addMonth(adjLogMonth||monthKey(today));
     if(adminTab==="monthlyDays"&&monthlyDaysYear)need.push([monthlyDaysYear+"-01-01",recYearEnd(monthlyDaysYear)]);
     if(adminTab==="mileage"&&typeof mileage==="object"&&mileage&&mileage.adminYm)addMonth(mileage.adminYm);
@@ -3959,6 +3961,30 @@ body.has-mode-banner .admin-sticky-bar{top:var(--mode-banner-h,56px);}
 .time-edit-input{width:82px;height:34px;font-size:1.08rem;font-weight:700;font-family:monospace;font-variant-numeric:tabular-nums;text-align:center;padding:4px 6px;border:1px solid var(--brand-mid);border-radius:6px;background:var(--brand-soft2);outline:none;box-sizing:border-box;}
 .time-edit-ok{height:34px;min-width:48px;font-size:.9rem;font-weight:700;padding:4px 8px;border-radius:6px;background:var(--brand);color:#fff;border:none;cursor:pointer;font-family:inherit;box-sizing:border-box;}
 .time-edit-cancel{height:34px;min-width:34px;font-size:1rem;font-weight:700;padding:4px 8px;border-radius:6px;background:#dde1e7;color:#475569;border:1px solid #adb5bd;cursor:pointer;font-family:inherit;box-sizing:border-box;}
+.time-edit-input,.time-edit-ok,.time-edit-cancel{height:36px;}
+/* 打刻漏れ：候補の時刻ボタン・まとめ画面・元に戻す */
+.pm-sugg{display:flex;flex-wrap:wrap;justify-content:center;gap:4px;margin:4px auto 0;max-width:180px;min-width:104px;}
+.pm-btn,.pm-other{min-height:36px;min-width:50px;padding:0 6px;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;box-sizing:border-box;line-height:1;}
+.pm-btn{font-family:monospace;font-size:.95rem;font-variant-numeric:tabular-nums;background:var(--brand-soft2);color:var(--brand-dark);border:1px solid var(--brand-mid);}
+.pm-other{font-size:.8rem;background:#fff;color:#475569;border:1px solid #adb5bd;}
+.pm-sum-btn{min-height:36px;padding:0 12px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;background:#f1f5f9;color:#64748b;border:1px solid #cbd5e1;}
+.pm-sum-btn.pm-sum-on{background:#dc2626;color:#fff;border-color:#dc2626;}
+.pm-sum-ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9998;display:flex;align-items:center;justify-content:center;padding:16px;}
+.pm-sum-card{background:#fff;border:1px solid #adb5bd;border-radius:2px;width:100%;max-width:520px;max-height:88vh;overflow-y:auto;padding:16px;box-sizing:border-box;}
+.pm-sum-head{display:flex;align-items:center;justify-content:space-between;gap:8px;}
+.pm-sum-ttl{font-size:1.05rem;font-weight:900;color:#991b1b;}
+.pm-sum-close{min-height:36px;padding:0 14px;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;font-weight:700;cursor:pointer;font-family:inherit;}
+.pm-sum-sub{font-size:.75rem;color:#64748b;margin:6px 0 10px;}
+.pm-sum-row{border-top:1px solid #e9ecef;padding:10px 0;}
+.pm-sum-who{font-size:.95rem;color:#0f172a;margin-bottom:4px;word-break:break-all;}
+.pm-sum-loc{font-size:.75rem;color:#6b7280;}
+.pm-sum-body{font-size:.9rem;color:#374151;}
+.pm-sum-body .pm-sugg{justify-content:flex-start;max-width:none;margin-left:0;}
+.pm-sum-t,.pm-sum-cell{font-family:monospace;font-weight:700;font-size:1.05rem;font-variant-numeric:tabular-nums;color:#0f172a;}
+.pm-sum-empty{padding:24px 0;text-align:center;color:#16a34a;font-weight:700;}
+.pm-undo{position:fixed;left:16px;right:16px;bottom:16px;margin:0 auto;width:fit-content;z-index:10000;display:flex;align-items:center;gap:10px;background:#1f2937;color:#fff;padding:8px 8px 8px 14px;border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,.25);max-width:480px;box-sizing:border-box;font-size:.85rem;}
+.pm-undo-msg{flex:1;min-width:0;}
+.pm-undo-btn{min-height:36px;padding:0 12px;background:#fbbf24;color:#111827;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;}
 /* PC専用：管理者UI拡大(768px以上のみ) */
 @media(min-width:768px){
   .admin-title{font-size:1.55rem!important;font-weight:700!important;}
@@ -5076,7 +5102,264 @@ function filteredStaff(){
 }
 
 // ===== 時刻セル インライン編集ハンドラー（勤怠一覧・個人別共通） =====
+// 未打刻の出勤・退勤を埋めるときの修正理由（理由を選ぶ画面は出さない）
+var ADJ_MISS={reason:"miss",label:"打刻漏れ",comment:""};
+// 管理者の時刻入力を "HH:MM" に直す。「1800」「930」「18:00」「18」（全角も可）を受け付ける。
+// 戻り値: "HH:MM"／空欄は ""／正しくない値は null
+function parseAdminTimeInput(s){
+  var v=String(s==null?"":s).replace(/[０-９：]/g,function(c){return c==="："?":":String.fromCharCode(c.charCodeAt(0)-0xFEE0);}).replace(/\s+/g,"");
+  if(!v)return "";
+  var m=v.match(/^(\d{1,2}):(\d{2})$/)||v.match(/^(\d{2})(\d{2})$/)||v.match(/^(\d)(\d{2})$/)||v.match(/^(\d{1,2})()$/);
+  if(!m)return null;
+  var hh=parseInt(m[1],10),mm=m[2]?parseInt(m[2],10):0;
+  if(isNaN(hh)||isNaN(mm)||hh>23||mm>59)return null;
+  return pad(hh)+":"+pad(mm);
+}
+// ── 打刻漏れの候補時刻 ──
+// その職員の過去60日の同じ種類の打刻（削除済みを除く）を15分単位に丸め、回数の多い順に最大3つ。
+// 足りなければ同じ施設の全職員の傾向で補い、それでも無ければ既定値（退勤 18:00/17:00・出勤 09:00/08:00）。
+// 退勤の候補はその日の出勤より後、出勤の候補はその日の退勤より前のものだけ（otherTime）。
+var PM_SUGGEST_DAYS=60,PM_SUGGEST_MAX=3;
+var PM_DEFAULTS={clockOut:["18:00","17:00"],clockIn:["09:00","08:00"]};
+function pmRound15(t){
+  var m=/^(\d{1,2}):(\d{2})/.exec(String(t||""));if(!m)return null;
+  var x=Math.round((parseInt(m[1],10)*60+parseInt(m[2],10))/15)*15;
+  if(x>23*60+45)x=23*60+45; // 日付をまたがせない
+  return pad(Math.floor(x/60))+":"+pad(x%60);
+}
+function _pmShiftDate(ds,n){var p=String(ds).split("-");var d=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]+n));return d.toISOString().slice(0,10);}
+function pmSuggestTimes(recs,staffName,type,date,peerNames,otherTime){
+  var from=_pmShiftDate(date,-PM_SUGGEST_DAYS);
+  function fits(t){return !otherTime||(type==="clockOut"?t>otherTime:t<otherTime);}
+  function rank(names){
+    var set=Object.create(null),cnt=Object.create(null);
+    names.forEach(function(n){if(n)set[n]=true;});
+    recs.forEach(function(r){
+      if(!r||r.deleted||r.type!==type||!set[r.staff]||!r.date||r.date<from||r.date>=date)return;
+      var t=pmRound15(r.time);
+      if(t&&fits(t))cnt[t]=(cnt[t]||0)+1;
+    });
+    return Object.keys(cnt).sort(function(a,b){return (cnt[b]-cnt[a])||(a<b?-1:(a>b?1:0));});
+  }
+  var out=rank([staffName]).slice(0,PM_SUGGEST_MAX);
+  if(out.length<PM_SUGGEST_MAX&&peerNames&&peerNames.length){
+    rank(peerNames).forEach(function(t){if(out.length<PM_SUGGEST_MAX&&out.indexOf(t)<0)out.push(t);});
+  }
+  if(!out.length)out=(PM_DEFAULTS[type]||[]).filter(fits);
+  return out;
+}
+// 画面用：職員の拠点（tc5_staff の location）の在籍者を「同じ施設」とする
+function pmSuggestFor(staffName,date,type){
+  var me=staffList.find(function(s){return s.name===staffName;});
+  var loc=me&&me.location;
+  var peers=loc?staffList.filter(function(s){return s.location===loc&&(!s.status||s.status==="在籍");}).map(function(s){return s.name;}):[];
+  var other=records.find(function(r){return r.staff===staffName&&r.date===date&&!r.deleted&&r.type===(type==="clockOut"?"clockIn":"clockOut");});
+  return pmSuggestTimes(records,staffName,type,date,peers,other&&other.time||"");
+}
+// その日が打刻漏れ（退勤漏れ・出勤漏れ）なら未打刻側の種類を返す。当日は対象外（打刻漏れアラートと同じ基準）
+function pmMissType(nm,date,sr){
+  if(!date||date>=recToday())return null;
+  var v=validateAttendanceRecord(nm,date,sr);
+  return v.reason==="退勤漏れ"?"clockOut":(v.reason==="出勤漏れ"?"clockIn":null);
+}
+function pmSuggestHtml(nm,date,type){
+  var attrs=' data-nm="'+esc(nm)+'" data-date="'+esc(date)+'" data-type="'+esc(type)+'"';
+  return '<div class="pm-sugg">'
+    +pmSuggestFor(nm,date,type).map(function(t){return '<button type="button" class="pm-btn"'+attrs+' data-time="'+esc(t)+'">'+esc(t)+'</button>';}).join("")
+    +'<button type="button" class="pm-other"'+attrs+'>その他</button></div>';
+}
+// 管理者の時刻保存（時刻セル・候補ボタン・打刻漏れまとめ画面の共通処理）。
+// 出勤・退勤は自動承認・修正履歴・失敗時のロールバックを含む。保存した打刻を返す（止めたときは null）。
+// onAbort は保存せずに止めたときに呼ぶ（入力欄を元へ戻す）。
+function adminApplyTimeEdit(snm,date,type,id,newTime,adj,onAbort){
+  function cancel(){if(onAbort)onAbort();}
+  var typeName=TYPE_LABEL[type]||type;
+  var _newTime2=newTime,_saved=null;
+  // 入力欄を開いた後に同じ日の同時保存が始まっていたら、確定させない（控えが古くなるため）
+  if(apvSaveBusy(snm,date)){cancel();return null;}
+  var d2=parseJstDateTime(date,_newTime2);
+  var nowIso=new Date().toISOString();
+  var _oldRec=id?records.find(function(r){return r.id===id;}):records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+  var oldTime=(_oldRec&&_oldRec.time)||"（未打刻）";
+  // ★ 出勤・退勤を管理者が修正・入力して確定したら、その日（日付＋職員）を同時に承認済みにする。
+  //   時刻と承認は saveRecordWithApproval で1回の多パス更新として書く（片方だけ成功させない）。
+  //   休憩・削除・「➕ 打刻を追加」・職員の打刻・修正申請の承認は対象外（従来どおり）。
+  //   承認ボタンと同じ validateAttendanceRecord を通る日だけ承認する（退勤漏れ・出勤漏れ・勤務時間異常は時刻だけ保存）。
+  var _autoApv=(type==="clockIn"||type==="clockOut");
+  var _apvKey=date+"__"+snm;
+  if(_autoApv&&/[.#$\[\]\/\x00-\x1F\x7F]/.test(_apvKey)){showAlert("この職員名では承認を保存できないため、修正を保存できません。");cancel();return null;}
+  // 保存失敗時に画面・端末保存を元へ戻すための控え（この職員・この日の打刻）
+  var _snaps=records.filter(function(r){return r.staff===snm&&r.date===date;}).map(function(r){return{ref:r,copy:JSON.parse(JSON.stringify(r))};});
+  function commit(r){
+    if(!_autoApv){saveRecord(r);return;}
+    var _v=validateAttendanceRecord(snm,date,records.filter(function(x){return x.staff===snm&&x.date===date&&!x.deleted;}));
+    if(!_v.valid){saveRecord(r);showAlert("時刻を保存しました。\n"+_v.reason+"のため、この日はまだ承認していません。");return;}
+    var _had=!!approvals[_apvKey];
+    r.adjustApprovedAt=nowIso;
+    approvals[_apvKey]=true;
+    saveRecordWithApproval(r,_apvKey,function(){
+      if(!_had)delete approvals[_apvKey];
+      var _i=records.indexOf(r);
+      if(_i>=0&&!_snaps.some(function(s){return s.ref===r;}))records.splice(_i,1);
+      _snaps.forEach(function(s){Object.keys(s.ref).forEach(function(k){delete s.ref[k];});Object.assign(s.ref,s.copy);});
+      _lsSet("tc5_records",JSON.stringify(records));
+      _lsSet("tc5_approvals",JSON.stringify(approvals));
+      render();
+    });
+  }
+  var _origCin="",_origCout="";
+  var _cins=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockIn"&&!r.deleted;});
+  var _couts=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockOut"&&!r.deleted;});
+  if(_cins.length)_origCin=_cins[0].time;
+  if(_couts.length)_origCout=_couts[0].time;
+  var _corrCin=type==="clockIn"?_newTime2:_origCin;
+  var _corrCout=type==="clockOut"?_newTime2:_origCout;
+  if(id){
+    var rec=records.find(function(r){return r.id===id;});
+    if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=_newTime2;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;rec.adjustReason=adj.reason;rec.adjustReasonLabel=adj.label;rec.adjustComment=adj.comment;rec.adjustedAt=nowIso;rec.adjustedBy="管理者";rec.originalClockIn=_origCin;rec.originalClockOut=_origCout;rec.correctedClockIn=_corrCin;rec.correctedClockOut=_corrCout;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);_saved=rec;commit(rec);}
+  } else {
+    var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
+    if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=_newTime2;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;exist.adjustReason=adj.reason;exist.adjustReasonLabel=adj.label;exist.adjustComment=adj.comment;exist.adjustedAt=nowIso;exist.adjustedBy="管理者";exist.originalClockIn=_origCin;exist.originalClockOut=_origCout;exist.correctedClockIn=_corrCin;exist.correctedClockOut=_corrCout;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);_saved=exist;commit(exist);}
+    else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:_newTime2,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{},adjustReason:adj.reason,adjustReasonLabel:adj.label,adjustComment:adj.comment,adjustedAt:nowIso,adjustedBy:"管理者",originalClockIn:_origCin,originalClockOut:_origCout,correctedClockIn:_corrCin,correctedClockOut:_corrCout};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,_newTime2,"理由:",adj.label);_saved=nr;commit(nr);}
+  }
+  render();
+  return _saved;
+}
+// 未打刻の出勤・退勤を埋める（理由は自動で「打刻漏れ」）。保存後に「元に戻す」を数秒出す。
+function adminFillMissing(snm,date,type,time,onAbort){
+  if(apvSaveBusy(snm,date)){if(onAbort)onAbort();return null;}
+  var exist=records.find(function(r){return r.staff===snm&&r.date===date&&r.type===type&&!r.deleted;});
+  if(exist){showAlert("この欄にはすでに打刻があります（"+exist.time+"）。");if(onAbort)onAbort();render();return null;}
+  var hadApv=!!approvals[date+"__"+snm];
+  var rec=adminApplyTimeEdit(snm,date,type,"",time,ADJ_MISS,onAbort);
+  if(rec)pmShowUndo(rec,hadApv);
+  return rec;
+}
+// 「元に戻す」：埋めた打刻を論理削除し、同時に付いた自動承認も外す（時刻と承認を1回の多パス更新で戻す）
+function pmUndoFill(rec,hadApv){
+  if(apvSaveBusy(rec.staff,rec.date))return false;
+  var cur=records.find(function(r){return r.id===rec.id;});
+  if(!cur||cur.deleted)return true;
+  var key=cur.date+"__"+cur.staff;
+  if(cur.adjustApprovedAt&&approvals[key]===true&&!hadApv){
+    var snap=JSON.parse(JSON.stringify(cur));
+    cur.deleted=true;delete approvals[key];
+    saveRecordWithApproval(cur,key,function(){
+      Object.keys(cur).forEach(function(k){delete cur[k];});Object.assign(cur,snap);
+      approvals[key]=true;
+      _lsSet("tc5_records",JSON.stringify(records));
+      _lsSet("tc5_approvals",JSON.stringify(approvals));
+      render();
+    },null);
+  } else {
+    cur.deleted=true;softDeleteRecord(cur.id);
+  }
+  render();
+  return true;
+}
+var _pmUndoTimer=null;
+function pmShowUndo(rec,hadApv){
+  if(typeof document==="undefined"||!document.body||!document.getElementById)return;
+  var old=document.getElementById("pm-undo");if(old&&old.parentNode)old.parentNode.removeChild(old);
+  if(_pmUndoTimer)clearTimeout(_pmUndoTimer);
+  var bar=document.createElement("div");bar.id="pm-undo";bar.className="pm-undo";bar.setAttribute("role","status");
+  var msg=document.createElement("span");msg.className="pm-undo-msg";
+  msg.textContent=rec.staff+" "+rec.date.slice(5).replace("-","/")+" "+(TYPE_LABEL[rec.type]||"")+" "+rec.time+" を保存しました";
+  var b=document.createElement("button");b.type="button";b.className="pm-undo-btn";b.textContent="元に戻す";
+  function close(){if(_pmUndoTimer){clearTimeout(_pmUndoTimer);_pmUndoTimer=null;}if(bar.parentNode)bar.parentNode.removeChild(bar);}
+  b.onclick=function(){if(pmUndoFill(rec,hadApv))close();};
+  bar.appendChild(msg);bar.appendChild(b);document.body.appendChild(bar);
+  _pmUndoTimer=setTimeout(close,6000);
+}
+// ── 打刻漏れまとめ画面（勤怠一覧の「⚠ 打刻漏れ ○件」）──
+// 過去14日〜前日の退勤漏れ・出勤漏れ（当日は含めない。打刻漏れアラートと同じ基準）を新しい日付順に出す。
+// 施設は勤怠一覧で選んでいる施設（recFacFilter）に合わせる。承認済みの日は出さない。
+function pmMissRange(){return {from:_recDayShift(-14),to:_recDayShift(-1)};}
+// ★ 期間を取得し終えるまでは件数を断定しない（未取得の期間を「0件」と表示しない）
+function pmMissKnown(){var g=pmMissRange();return recordsRangeCovers(g.from,g.to);}
+function pmMissList(){
+  var g=pmMissRange();
+  var act=staffList.filter(function(s){return !s.status||s.status==="在籍";});
+  if(recFacFilter)act=act.filter(function(s){return (s.location||"__none__")===recFacFilter;});
+  var byName=Object.create(null);act.forEach(function(s){byName[s.name]=s;});
+  var days=Object.create(null);
+  records.forEach(function(r){
+    if(!r||r.deleted||!r.staff||!byName[r.staff]||!r.date||r.date<g.from||r.date>g.to)return;
+    var k=r.date+"__"+r.staff;(days[k]=days[k]||[]).push(r);
+  });
+  var out=[];
+  Object.keys(days).forEach(function(k){
+    if(approvals[k])return;
+    var sr=days[k].sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+    var t=pmMissType(sr[0].staff,sr[0].date,sr);
+    if(!t)return;
+    var cin=sr.find(function(r){return r.type==="clockIn";}),cout=sr.find(function(r){return r.type==="clockOut";});
+    var st=byName[sr[0].staff];
+    out.push({date:sr[0].date,staff:sr[0].staff,loc:st.location||"",yomi:st.yomi||st.name||"",type:t,cin:cin?cin.time:"",cout:cout?cout.time:""});
+  });
+  return out.sort(function(a,b){return a.date!==b.date?(a.date<b.date?1:-1):a.yomi.localeCompare(b.yomi,"ja");});
+}
+function pmSummaryButtonHtml(){
+  var known=pmMissKnown(),n=known?pmMissList().length:0;
+  return '<button id="btn-pm-summary" type="button" class="pm-sum-btn'+(known&&n?' pm-sum-on':'')+'">'
+    +(!known?'打刻漏れ 集計中…':(n?'⚠ 打刻漏れ '+n+'件':'打刻漏れ 0件'))+'</button>';
+}
+var _pmSummaryRefresh=null; // まとめ画面を開いている間だけ入る（render() のたびに一覧を作り直す）
+function openPunchMissSummary(){
+  if(typeof document==="undefined"||!document.body)return;
+  if(_pmSummaryRefresh)return;
+  var ov=document.createElement("div");ov.className="pm-sum-ov";
+  var card=document.createElement("div");card.className="pm-sum-card";
+  var head=document.createElement("div");head.className="pm-sum-head";
+  var ttl=document.createElement("div");ttl.className="pm-sum-ttl";
+  var cls=document.createElement("button");cls.type="button";cls.className="pm-sum-close";cls.textContent="閉じる";
+  head.appendChild(ttl);head.appendChild(cls);
+  var sub=document.createElement("div");sub.className="pm-sum-sub";
+  var list=document.createElement("div");list.className="pm-sum-list";
+  card.appendChild(head);card.appendChild(sub);card.appendChild(list);ov.appendChild(card);
+  var DOW=["日","月","火","水","木","金","土"];
+  function refresh(){
+    if(!ov.parentNode)return;
+    if(list.querySelector(".time-edit-wrap"))return; // 入力中は作り直さない
+    var known=pmMissKnown(),rows=known?pmMissList():[];
+    ttl.textContent=known?"⚠ 打刻漏れ "+rows.length+"件":"打刻漏れ（集計中）";
+    sub.textContent="過去14日〜前日・"+(recFacFilter?(recFacFilter==="__none__"?"施設未設定":recFacFilter):"全施設")+"　候補の時刻を押すと「打刻漏れ」として保存します";
+    if(!known){list.innerHTML='<div class="pm-sum-empty">打刻データを読み込んでいます…</div>';return;}
+    if(!rows.length){list.innerHTML='<div class="pm-sum-empty">打刻漏れはありません</div>';return;}
+    list.innerHTML=rows.map(function(r){
+      var p=r.date.split("-"),dw=DOW[new Date(+p[0],+p[1]-1,+p[2]).getDay()];
+      function tv(type,val){
+        if(val)return '<span class="pm-sum-t">'+esc(val)+'</span>';
+        return '<span class="time-cell pm-sum-cell" data-id="" data-nm="'+esc(r.staff)+'" data-type="'+type+'" data-date="'+esc(r.date)+'" style="cursor:pointer;border-bottom:1px solid #adb5bd;color:#c8ccd2;">--:--</span>';
+      }
+      return '<div class="pm-sum-row">'
+        +'<div class="pm-sum-who"><b>'+(+p[1])+'/'+(+p[2])+'('+dw+')</b> '+esc(r.staff)+(r.loc?' <span class="pm-sum-loc">'+esc(r.loc)+'</span>':'')+'</div>'
+        +'<div class="pm-sum-body">出勤 '+tv("clockIn",r.cin)+'・退勤 '+tv("clockOut",r.cout)
+        +pmSuggestHtml(r.staff,r.date,r.type)+'</div></div>';
+    }).join("");
+    attachTimeCellHandlers();
+  }
+  function close(){_pmSummaryRefresh=null;if(ov.parentNode)ov.parentNode.removeChild(ov);render();}
+  cls.onclick=close;
+  ov.onclick=function(e){if(e.target===ov)close();};
+  document.body.appendChild(ov);
+  _pmSummaryRefresh=refresh;
+  refresh();
+}
 function attachTimeCellHandlers(){
+  // 候補の時刻ボタン：押したら即保存（理由は「打刻漏れ」）
+  document.querySelectorAll(".pm-btn").forEach(function(b){
+    b.onclick=function(e){if(e&&e.stopPropagation)e.stopPropagation();adminFillMissing(b.dataset.nm,b.dataset.date,b.dataset.type,b.dataset.time);};
+  });
+  // 「その他」：同じ欄の時刻セルを開いて数字で入力する
+  document.querySelectorAll(".pm-other").forEach(function(b){
+    b.onclick=function(e){
+      if(e&&e.stopPropagation)e.stopPropagation();
+      var box=b.parentNode&&b.parentNode.parentNode;
+      var c=box&&box.querySelector('.time-cell[data-type="'+b.dataset.type+'"]');
+      if(c&&c.onclick)c.onclick();
+    };
+  });
   document.querySelectorAll(".time-cell").forEach(function(el){
     el.onclick=function(){
       var id=el.dataset.id,snm=el.dataset.nm,type=el.dataset.type,date=el.dataset.date;
@@ -5093,7 +5376,10 @@ function attachTimeCellHandlers(){
       var wrap=document.createElement("div");
       wrap.className="time-edit-wrap";
       var inp=document.createElement("input");
-      inp.type="time";inp.value=cur;inp.className="time-edit-input";
+      // 数字だけで入力する（スマホは数字キーボード）。「1800」「930」「18:00」「18」を受け付け、4桁で即確定する
+      inp.type="text";inp.value=cur;inp.className="time-edit-input";
+      inp.setAttribute("inputmode","numeric");inp.setAttribute("autocomplete","off");inp.setAttribute("enterkeyhint","done");
+      inp.setAttribute("placeholder","1800");inp.setAttribute("maxlength","5");inp.setAttribute("aria-label",typeName+"の時刻");
       var btnOk=document.createElement("button");
       btnOk.textContent="設定";btnOk.title="保存";btnOk.className="time-edit-ok";
       var btnCnl=document.createElement("button");
@@ -5101,18 +5387,17 @@ function attachTimeCellHandlers(){
       wrap.appendChild(inp);wrap.appendChild(btnOk);wrap.appendChild(btnCnl);
       el.textContent="";el.style.borderBottom="none";el.style.cursor="default";
       el.appendChild(wrap);
+      // 入力中は同じ欄の候補ボタンを隠す
+      var sugg=el.parentNode&&el.parentNode.querySelector?el.parentNode.querySelector(".pm-sugg"):null;
+      if(sugg)sugg.style.display="none";
       inp.focus();inp.select();
-      function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;}
+      function cancel(){el.setAttribute("style",origStyle);el.textContent=origText;if(sugg)sugg.style.display="";}
       function save(){
         if(!saveAllowed){return;}  // ガード：Enter / 設定ボタン以外は通さない
         saveAllowed=false;          // 即リセットして二重保存を防ぐ
-        var val=inp.value.trim();
-        if(!val&&!id){cancel();return;}
-        var parts=val?val.split(":"):[null,null];
-        var hh=val?parseInt(parts[0]):NaN,mm=val?parseInt(parts[1]):NaN;
-        if(val&&(isNaN(hh)||isNaN(mm)||hh>23||mm>59)){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
-        var newTime=val?pad(hh)+":"+pad(mm):"";
-        var oldTime=cur||"（未打刻）";
+        var newTime=parseAdminTimeInput(inp.value);
+        if(newTime===null){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
+        if(!newTime&&!id){cancel();return;}
         if(newTime===""&&id){
           showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
             if(apvSaveBusy(snm,date)){cancel();return;}
@@ -5121,55 +5406,13 @@ function attachTimeCellHandlers(){
             render();
           },function(){cancel();});
         } else if(newTime){
-          var _newTime2=newTime,_hh2=hh,_mm2=mm;
-          showAdjustReasonModal(function(adj){
-            // 入力欄を開いた後に同じ日の同時保存が始まっていたら、確定させない（控えが古くなるため）
-            if(apvSaveBusy(snm,date)){cancel();return;}
-            var d2=parseJstDateTime(date,pad(_hh2)+":"+pad(_mm2));
-            var nowIso=new Date().toISOString();
-            // ★ 出勤・退勤を管理者が修正・入力して確定したら、その日（日付＋職員）を同時に承認済みにする。
-            //   時刻と承認は saveRecordWithApproval で1回の多パス更新として書く（片方だけ成功させない）。
-            //   休憩・削除・「➕ 打刻を追加」・職員の打刻・修正申請の承認は対象外（従来どおり）。
-            //   承認ボタンと同じ validateAttendanceRecord を通る日だけ承認する（退勤漏れ・出勤漏れ・勤務時間異常は時刻だけ保存）。
-            var _autoApv=(type==="clockIn"||type==="clockOut");
-            var _apvKey=date+"__"+snm;
-            if(_autoApv&&/[.#$\[\]\/\x00-\x1F\x7F]/.test(_apvKey)){showAlert("この職員名では承認を保存できないため、修正を保存できません。");cancel();return;}
-            // 保存失敗時に画面・端末保存を元へ戻すための控え（この職員・この日の打刻）
-            var _snaps=records.filter(function(r){return r.staff===snm&&r.date===date;}).map(function(r){return{ref:r,copy:JSON.parse(JSON.stringify(r))};});
-            function commit(r){
-              if(!_autoApv){saveRecord(r);return;}
-              var _v=validateAttendanceRecord(snm,date,records.filter(function(x){return x.staff===snm&&x.date===date&&!x.deleted;}));
-              if(!_v.valid){saveRecord(r);showAlert("時刻を保存しました。\n"+_v.reason+"のため、この日はまだ承認していません。");return;}
-              var _had=!!approvals[_apvKey];
-              r.adjustApprovedAt=nowIso;
-              approvals[_apvKey]=true;
-              saveRecordWithApproval(r,_apvKey,function(){
-                if(!_had)delete approvals[_apvKey];
-                var _i=records.indexOf(r);
-                if(_i>=0&&!_snaps.some(function(s){return s.ref===r;}))records.splice(_i,1);
-                _snaps.forEach(function(s){Object.keys(s.ref).forEach(function(k){delete s.ref[k];});Object.assign(s.ref,s.copy);});
-                _lsSet("tc5_records",JSON.stringify(records));
-                _lsSet("tc5_approvals",JSON.stringify(approvals));
-                render();
-              });
-            }
-            var _origCin="",_origCout="";
-            var _cins=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockIn"&&!r.deleted;});
-            var _couts=records.filter(function(r){return r.staff===snm&&r.date===date&&r.type==="clockOut"&&!r.deleted;});
-            if(_cins.length)_origCin=_cins[0].time;
-            if(_couts.length)_origCout=_couts[0].time;
-            var _corrCin=type==="clockIn"?_newTime2:_origCin;
-            var _corrCout=type==="clockOut"?_newTime2:_origCout;
-            if(id){
-              var rec=records.find(function(r){return r.id===id;});
-              if(rec){if(!rec.editHistory)rec.editHistory=[];rec.editHistory.push({time:rec.time,editedAt:nowIso});if(!rec.editedFrom)rec.editedFrom=rec.time;rec.time=_newTime2;rec.timestamp=d2.toISOString();rec.editedByAdmin=true;rec.editedAt=nowIso;if(!rec.editedFields)rec.editedFields={};rec.editedFields[type]=true;rec.adjustReason=adj.reason;rec.adjustReasonLabel=adj.label;rec.adjustComment=adj.comment;rec.adjustedAt=nowIso;rec.adjustedBy="管理者";rec.originalClockIn=_origCin;rec.originalClockOut=_origCout;rec.correctedClockIn=_corrCin;rec.correctedClockOut=_corrCout;console.log("[管理者修正]",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);commit(rec);}
-            } else {
-              var exist=records.find(function(r){return r.staff===snm&&r.type===type&&r.date===date&&!r.deleted;});
-              if(exist){if(!exist.editHistory)exist.editHistory=[];exist.editHistory.push({time:exist.time,editedAt:nowIso});if(!exist.editedFrom)exist.editedFrom=exist.time;exist.time=_newTime2;exist.timestamp=d2.toISOString();exist.editedByAdmin=true;exist.editedAt=nowIso;if(!exist.editedFields)exist.editedFields={};exist.editedFields[type]=true;exist.adjustReason=adj.reason;exist.adjustReasonLabel=adj.label;exist.adjustComment=adj.comment;exist.adjustedAt=nowIso;exist.adjustedBy="管理者";exist.originalClockIn=_origCin;exist.originalClockOut=_origCout;exist.correctedClockIn=_corrCin;exist.correctedClockOut=_corrCout;console.log("[管理者修正] 既存更新:",snm,date,typeName,":",oldTime,"→",_newTime2,"理由:",adj.label);commit(exist);}
-              else{var nr={id:generateRecordId(),staff:snm,type:type,date:date,time:_newTime2,timestamp:d2.toISOString(),manualAdd:true,editedByAdmin:true,editedAt:nowIso,editedFields:{},adjustReason:adj.reason,adjustReasonLabel:adj.label,adjustComment:adj.comment,adjustedAt:nowIso,adjustedBy:"管理者",originalClockIn:_origCin,originalClockOut:_origCout,correctedClockIn:_corrCin,correctedClockOut:_corrCout};nr.editedFields[type]=true;records.push(nr);console.log("[管理者修正] 新規追加:",snm,date,typeName,_newTime2,"理由:",adj.label);commit(nr);}
-            }
-            render();
-          },function(){cancel();});
+          // 未打刻の出勤・退勤を埋めるときは理由を選ばせず「打刻漏れ」で保存する（既存の時刻の変更は理由を選ぶ）
+          var _fill=(type==="clockIn"||type==="clockOut")&&!id&&!records.some(function(r){return r.staff===snm&&r.date===date&&r.type===type&&!r.deleted;});
+          // 確定したら入力欄を閉じてから保存する（入力欄が残ると、打刻漏れまとめ画面が作り直されない）。止めたときは cancel() で元へ戻す
+          if(_fill){el.textContent=newTime;adminFillMissing(snm,date,type,newTime,cancel);}
+          else{
+            showAdjustReasonModal(function(adj){el.textContent=newTime;adminApplyTimeEdit(snm,date,type,id,newTime,adj,cancel);},function(){cancel();});
+          }
         } else {
           cancel();
         }
@@ -5183,10 +5426,15 @@ function attachTimeCellHandlers(){
       btnCnl.addEventListener("click",function(e){e.stopPropagation();cancel();});
       // Enter：saveAllowed を true にしてから save()
       // Escape：cancel のみ
-      // それ以外のキー・blur・change・枠外クリックでは一切何もしない
+      // 数字4桁の入力（下の input）以外のキー・blur・change・枠外クリックでは一切何もしない
       inp.addEventListener("keydown",function(e){
         if(e.key==="Enter"){e.preventDefault();saveAllowed=true;save();}
         if(e.key==="Escape"){e.preventDefault();cancel();}
+      });
+      // 数字4桁が入ったら（「1800」「0930」）そのまま確定へ進む
+      inp.addEventListener("input",function(){
+        var v=String(inp.value||"").replace(/[０-９]/g,function(c){return String.fromCharCode(c.charCodeAt(0)-0xFEE0);});
+        if(/^\d{4}$/.test(v)){saveAllowed=true;save();}
       });
     };
   });
@@ -5430,7 +5678,7 @@ window.addEventListener("resize",function(){if(document.querySelector('.rec-tool
 var DEMO_BLOCK_SELECTORS=[
   // 勤怠の承認・取消・編集・削除・追加
   ".btn-approve",".btn-withdraw",".btn-save",".btn-del-rec",
-  "#btn-bulk-approve","#btn-bulk-approve-detail","#btn-add-rec",
+  "#btn-bulk-approve","#btn-bulk-approve-detail","#btn-add-rec","#btn-pm-summary",".pm-btn",".pm-other",
   // 打刻修正申請の承認・却下
   ".btn-crq-approve",".btn-crq-reject",
   // 有給の承認・却下・引戻・付与・残数編集・削除
@@ -5492,6 +5740,7 @@ function _applyDemoUiLock(){
 function render(){
   _applyModeBanner();
   _renderInner();
+  if(_pmSummaryRefresh)_pmSummaryRefresh(); // 打刻漏れまとめ画面を開いていれば一覧を作り直す（保存した行を消す・失敗で戻す）
   faceCamSyncPreview(); // 打刻画面ならインカメラのプレビューを枠へ戻し、それ以外ならカメラを止める
   _applyDemoUiLock();
   _applyModeBanner(); // 描画後の高さで再計測
@@ -6744,6 +6993,8 @@ function _renderInner(){
       var isSun=dow===0,isSat=dow===6;
       var hasData=dr.length>0;
       var monthValidation=hasData&&!approved2?validateAttendanceRecord(nm,dk,dr):{valid:true};
+      // 打刻漏れの日は未打刻側に候補の時刻ボタンを出す（押すと即保存。当日・未取得の月・承認済みは出さない）
+      var _pmT=(!locked2&&monthKnown&&hasData)?pmMissType(nm,dk,dr):null;
       var bgRow=approved2?"#f0fdf4":(hasData&&!monthValidation.valid?"#fff5f5":isSun?"#fff1f2":isSat?"#eff6ff":(rowIdx%2===1?"#fafafa":"#fff"));
       var dayColor=isSun?"#dc2626":isSat?"#2563eb":"#374151";
       var otMs=Math.max(0,ms-8*3600000);
@@ -6795,9 +7046,9 @@ function _renderInner(){
       return'<tr style="border-bottom:1px solid #e9ecef;background:'+bgRow+';">'
         +'<td style="padding:4px 10px;font-family:monospace;font-size:.85rem;font-weight:700;color:'+dayColor+';white-space:nowrap;">'+dk.slice(5)+'</td>'
         +'<td style="padding:4px 6px;font-size:.85rem;font-weight:700;color:'+dayColor+';text-align:center;">'+yobi+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cin,"clockIn")+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cin,"clockIn")+(_pmT==="clockIn"?pmSuggestHtml(nm,dk,"clockIn"):"")+'</td>'
         +'<td style="padding:4px 8px;text-align:center;">'+brkDisplay+'</td>'
-        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cout,"clockOut")+'</td>'
+        +'<td style="padding:4px 10px;text-align:center;">'+tCell(cout,"clockOut")+(_pmT==="clockOut"?pmSuggestHtml(nm,dk,"clockOut"):"")+'</td>'
         +'<td style="padding:4px 10px;text-align:right;font-family:monospace;font-size:.88rem;font-weight:700;color:'+(ms>0?workedColor:"#d1d5db")+'">'+(ms>0?toHM(ms):"−")+'</td>'
         +'<td style="padding:4px 10px;text-align:center;white-space:nowrap;">'+approveBtn+'</td>'
         +'</tr>';
@@ -7182,6 +7433,8 @@ function _renderInner(){
         var approvedPL=paidLeaveRequests.find(function(r){return r.staffName===nm&&r.status==="approved"&&getLeaveDates(r).indexOf(selDate)>=0;});
         var locked=approved;
         var validation=hasPunch&&!approved?validateAttendanceRecord(nm,selDate,sr):{valid:true};
+        // 打刻漏れの日は未打刻側に候補の時刻ボタンを出す（押すと即保存。当日・承認済みは出さない）
+        var _pmT=(hasPunch&&!approved)?pmMissType(nm,selDate,sr):null;
         function tCell(rec,type,label,color){
           var t=rec?esc(rec.time):"--:--";
           var wasEdited=(rec&&rec.editedByAdmin&&rec.editedFields&&rec.editedFields[type]);
@@ -7197,6 +7450,7 @@ function _renderInner(){
             +'<span class="time-cell" data-id="'+esc(rec?rec.id:"")
             +'" data-nm="'+esc(nm)+'" data-type="'+esc(type)+'" data-date="'+selDate
             +'" style="font-family:monospace;font-size:1.18rem;font-weight:700;color:'+(rec?"#0f172a":"#c8ccd2")+';cursor:pointer;border-bottom:1px solid #adb5bd;padding-bottom:1px;font-variant-numeric:tabular-nums;">'+t+'</span>'
+            +(!rec&&_pmT===type?pmSuggestHtml(nm,selDate,type):"")
             +histLine+reasonLine+'</td>';
         }
         function brkPairCell(bsRec,beRec,locked2){
@@ -7282,6 +7536,7 @@ function _renderInner(){
           +_facGroups.map(function(g){var v=_facKey(g);return'<option value="'+esc(v)+'"'+(v===recFacFilter?' selected':'')+'>'+esc(g.name||"施設未設定")+'</option>';}).join("")
         +'</select>'
         +'<span style="color:#8496a7;font-size:.8rem;">'+allStaffSorted.length+'名</span>'
+        +pmSummaryButtonHtml()
         +(showUnapprovedOnly?'<button onclick="showUnapprovedOnly=false;render();" style="background:#c62828;color:#fff;border:none;padding:4px 10px;border-radius:6px;font-size:.75rem;font-weight:700;cursor:pointer;font-family:inherit;">✕ 未承認フィルター解除</button>':"")
         +'<button onclick="showBreakColumn=!showBreakColumn;render();" style="background:'+(showBreakColumn?"#374151":"#dde1e7")+';color:'+(showBreakColumn?"#fff":"#475569")+';border:1px solid #adb5bd;padding:4px 10px;border-radius:2px;font-size:.78rem;font-weight:700;cursor:pointer;font-family:inherit;">'+(showBreakColumn?"休憩非表示":"休憩表示")+'</button>'
         +'<button id="btn-bulk-approve" style="margin-left:auto;background:var(--brand);color:#fff;border:none;padding:6px 14px;border-radius:2px;font-size:.8rem;font-weight:700;cursor:pointer;font-family:inherit;">一括承認</button>'
@@ -9150,6 +9405,8 @@ function _renderInner(){
     if(bdPrev)bdPrev.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()-1);selDate=fmtDateKey(d);render();};
     var recFacSel=document.getElementById("rec-fac");
     if(recFacSel)recFacSel.onchange=function(){recFacFilter=recFacSel.value;render();};
+    var pmSumBtn=document.getElementById("btn-pm-summary");
+    if(pmSumBtn)pmSumBtn.onclick=openPunchMissSummary;
     var bdNext=document.getElementById("btn-date-next");
     if(bdNext)bdNext.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
 
