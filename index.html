@@ -10908,6 +10908,13 @@ var MDOC_FACILITIES=["ミュゲの泉","ナナイロ","ココラ","ハーベス�
 var MDOC_START_DATE="2026-10-09";
 // 施設ごとの開始日（ここに無い施設は MDOC_START_DATE から）。この日より前の打刻では聞かない。
 var MDOC_FACILITY_FROM={"ココラ":"2026-10-20","ハーベスト":"2026-10-20","ミュゲ貝塚":"2026-10-20","ミュゲ春木":"2026-10-20","ハルイロ":"2026-10-20"};
+// ★ 2026-10-21 ユーザー指示: 温度（冷蔵庫・冷凍庫）を聞かないスタッフ（施設ごと）。衛生・新興感染症・保存食はこれまでどおり聞く。
+//   氏名は空白を除いて比べる。この人の打刻で聞かなかった時間帯は、同じ日の他の人の打刻で従来どおり聞く。
+var MDOC_NO_TEMP_STAFF={"ココラ":["松本香織"]};
+function mdocNoTemp(fac,staff){
+  var l=Object.prototype.hasOwnProperty.call(MDOC_NO_TEMP_STAFF,fac)?MDOC_NO_TEMP_STAFF[fac]:null;
+  return !!l&&l.indexOf(String(staff||"").replace(/[\s\u3000]/g,""))>=0;
+}
 function mdocFacilityOn(fac){return !!fac&&MDOC_FACILITIES.indexOf(fac)>=0;}
 function mdocStartFor(fac){var f=Object.prototype.hasOwnProperty.call(MDOC_FACILITY_FROM,fac)?MDOC_FACILITY_FROM[fac]:"";return f>MDOC_START_DATE?f:MDOC_START_DATE;}
 var _mdocDevLoading={};
@@ -11058,6 +11065,7 @@ function mdocPlan(type,staff,fac,d){
     else if(!dayWorker&&!d2)plan.slot=2;
     if(last&&!hz)plan.hozon=true;
   }
+  if(mdocNoTemp(fac,staff))plan.slot=null;
   if(!plan.hyg&&plan.slot===null&&!plan.hozon)return null;
   return plan;
 }

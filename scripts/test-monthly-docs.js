@@ -559,6 +559,21 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     }
   }
   {
+    // 2026-10-21 ユーザー指示: ココラの松本香織さんには温度を聞かない（衛生・保存食は聞く。他の人・他施設は従来どおり）
+    const NF = "ココラ", DK = "2026-10-21";
+    const cc = makeClient({ facilityName: NF });
+    const pin = cc.mdocPlan("clockIn", "松本 香織", NF, at(DK, 6));
+    check("ココラの松本香織さんの出勤: 衛生は聞き、朝の温度は聞かない", pin && pin.hyg === true && pin.slot === null);
+    const pin2 = cc.mdocPlan("clockIn", "山田", NF, at(DK, 7));
+    check("ココラの他の人の出勤では朝の温度を聞く", pin2 && pin2.slot === 0);
+    const cl = makeClient({ facilityName: NF, records: [rec("松本香織", "clockIn", DK, 9, { facilityName: NF, workFacility: NF, mdoc: { f: NF, hyg: { a: "ok" } } })] });
+    const pout = cl.mdocPlan("clockOut", "松本香織", NF, at(DK, 18));
+    check("ココラの松本香織さんが最後の退勤者: 保存食は聞き、夕方の温度は聞かない", pout && pout.hozon === true && pout.slot === null);
+    const cm = makeClient({ facilityName: FAC });
+    const pm = cm.mdocPlan("clockIn", "松本香織", FAC, at(DK, 6));
+    check("ココラ以外の施設では同じ氏名でも温度を聞く", pm && pm.slot === 0);
+  }
+  {
     const MD0 = require(path.join(ROOT, "api/_lib/monthly-docs.js"));
     const SRV_FAC = JSON.stringify(MD0.ENABLED_FACILITIES);
     const c = makeClient();
