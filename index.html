@@ -11078,10 +11078,15 @@ function mdocPlan(type,staff,fac,d){
     if(hour<12&&!tempDone(0))plan.slot=0;
   } else {
     var d1=tempDone(1),d2=tempDone(2);
-    var hz=day.has(function(m){return m.f===fac&&m.hozon&&m.hozon.a==="yes";});
-    if(d1&&d2&&hz)return null; // その施設のその日の分はすべて記録済み（勤務中の人を数えない）
     var cin=day.recs.filter(function(r){return r.staff===staff&&r.type==="clockIn";})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);})[0];
+    // ★ 2026-10-21 ユーザー指示: 朝から一日通して最後まで勤務する日がある。本人の出勤より後に他の人が答えた「はい」は
+    //   本人がまだ勤務中の間の回答（MDOC_FORGOT_OUT_HOUR で朝からの人を数えずに聞いたもの）なので、記録済みとみなさず本人にも聞く。
+    var cinAt=cin?new Date(cin.timestamp).getTime():NaN;
+    var hz=day.has(function(m,r){
+      return m.f===fac&&m.hozon&&m.hozon.a==="yes"&&(r.staff===staff||isNaN(cinAt)||!(new Date(r.timestamp).getTime()>cinAt));
+    });
+    if(d1&&d2&&hz)return null; // その施設のその日の分はすべて記録済み（勤務中の人を数えない）
     var cinHour=cin?_mdocHour(cin.timestamp):null;
     var dayWorker=(cinHour!==null&&cinHour<12);
     var open=_mdocOpenFacilities(day);

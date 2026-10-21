@@ -166,6 +166,20 @@ console.log("■ 退勤の押し忘れ（17時以降は朝からの勤務中を�
   check("出勤の判定はその日最初の出勤の時刻（朝の出勤があれば押し忘れ扱い）", p && p.hozon === true);
 }
 
+{
+  // 一日通しの日: 朝からの人が最後まで勤務し、夕方の人が17時以降に先に帰る（2026-10-14 ミュゲ春木 等の本番の形）
+  const recs = [rec("山田", "clockIn", D, 6), rec("伊藤", "clockIn", D, 14)];
+  const c = makeClient({ records: recs });
+  const pB = c.mdocPlan("clockOut", "伊藤", FAC, at(D, 17, 31));
+  check("一日通しの日: 先に帰る夕方の人にも保存食を聞く（押し忘れと区別できないため）", pB && pB.hozon === true);
+  recs.push(rec("伊藤", "clockOut", D, 17, { timestamp: at(D, 17, 31).toISOString(), mdoc: { f: FAC, temp: { s: 2, d: [] }, hozon: { a: "yes" } } }));
+  const pA = c.mdocPlan("clockOut", "山田", FAC, at(D, 17, 35));
+  check("一日通しの日: 最後まで勤務した朝からの人にも保存食を聞く（自分の勤務中に他の人が答えた分は記録済みとみなさない）", pA && pA.hozon === true && pA.slot === null);
+  const c2 = makeClient({ records: [rec("伊藤", "clockIn", D, 14), rec("伊藤", "clockOut", D, 18, { mdoc: { f: FAC, hozon: { a: "yes" } } }), rec("高橋", "clockIn", D, 19)] });
+  const p2 = c2.mdocPlan("clockOut", "高橋", FAC, at(D, 21));
+  check("本人の出勤より前に答えた「はい」は記録済み（もう聞かない）", p2 === null || p2.hozon === false);
+}
+
 const pollTests = (async () => {
   console.log("■ 打刻画面での当日分の取り直し（他端末の打刻・削除を反映）");
   const mk = (o) => {
