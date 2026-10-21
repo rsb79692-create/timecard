@@ -3664,6 +3664,8 @@ function listenFirebase() {
           }).catch(function(){});
       }
     }
+    // 月次書類（穂乃味の対象施設だけ）: 打刻画面でも当日分を取り直す（最後の退勤者の判定に他端末の打刻・削除を反映）
+    if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) mdocPollToday();
     if(screen!=="admin" && screen!=="staffDetail" && !viewerMode) return;
     // ★ 変更前はここで tc5_records を毎回「全件」取得していた。
     //   本番実測 1,008KB × 6回/分 = 約360MB/時。管理画面を開いている間ずっと流れ続けていた。
@@ -10890,7 +10892,8 @@ function delStaff(n){staffDeleteOne(n);}
 // 打刻と月次書類（honomi-monthly-docs）の連携。★株式会社 穂乃味（会社ID honomi）専用。詳細: docs/features/monthly-docs.md
 // ・出勤／退勤の前に、必要なときだけ確認画面（衛生・新興感染症／温度／保存食）を出し、回答を打刻レコードの mdoc に入れる。
 //   打刻と同じ端末保存・再送の経路で届くので「打刻だけ残って監査記録が消える」ことが起きない。
-// ・聞くかどうかは手元の当日の打刻（records。10秒ごとに取り直している）だけで決める＝打刻のたびの問い合わせを増やさない。
+// ・聞くかどうかは手元の当日の打刻（records）だけで決める＝打刻のたびの問い合わせを増やさない。
+//   手元の当日分は打刻画面でも10秒ごとに取り直す（mdocPollToday。他端末の打刻・管理者の削除を最後の退勤者の判定へ反映する）。
 // ・温度の測定対象は施設ごとに端末へ控え（起動時・スタッフ選択時に裏で取り直す）、確認画面の表示を通信で待たせない。
 // ・月次書類の DB への転記はサーバ（/api/monthly-docs の sync）が RTDB の打刻を読んで行う（送信成功後と起動時）。
 // ★ 他社では mdocActive() が偽になり、この節の処理（通信・表示・端末保存）は一切動かない。
@@ -10922,6 +10925,10 @@ var _mdocSyncTimer=null,_mdocSyncDays=2;
 // ★ 2026-10-09 ユーザー指示: 出勤は「問題なし」を押した時点で確定し、すぐ送る（朝出勤確認で未出勤と誤らないため）。
 //   朝の温度は出勤の後に続けて聞く独立した記録（mdocAfterClockIn）。温度の画面は開いてから MDOC_POST_TEMP_IDLE_MS で閉じる（共用端末をふさがない）。
 var MDOC_POST_TEMP_IDLE_MS=3*60*1000;
+// ★ 2026-10-21 ユーザー指示: 17時以降の退勤では、正午より前に出勤して勤務中のままの人（退勤の押し忘れ）を
+//   最後の退勤者の判定で数えない（押し忘れがあると保存食を誰にも聞かない日が出ていた）。
+var MDOC_FORGOT_OUT_HOUR=17;
+var _mdocPolling=false;
 
 function mdocActive(){
   return TENANT_ID==="honomi"&&tenantFeature("monthlyDocs")&&punchOutboxEnabled();
@@ -10992,6 +10999,25 @@ function mdocScheduleSync(days){
     _mdocPost({action:"sync",days:dd},15000).then(function(d){if(d&&d.ok&&dd===7)_mdocLsSet("mdoc.syncAt",Date.now());});
   },3000);
 }
+// 打刻画面（管理画面・閲覧用以外）での当日分の取り直し（listenFirebase の10秒ポーリングから呼ぶ）。
+// 管理画面と同じ当日分だけ（date 索引）。対象施設の端末・対象施設のスタッフを選んでいる端末だけで動く。
+// ★ 打刻の保存中・確認画面の表示中は取り直さない。再描画もしない（入力中の PIN・確認画面を壊さない。判定は打刻時に records を読む）。
+function mdocPollToday(){
+  if(!mdocActive()||!recordsReady||_mdocPolling||_punchSaving||savingCount!==0)return;
+  var so=staffName?((staffList||[]).find(function(x){return x&&x.name===staffName;})||{}):{};
+  if(!mdocFacilityOn(facilityName)&&!mdocFacilityOn(so.location))return;
+  if(document.querySelector(".mdoc-ov"))return;
+  var d=recToday();
+  _mdocPolling=true;
+  fetchRecordsRange(d,d).then(function(v){
+    if(v===null||v===undefined||_punchSaving||savingCount!==0||recToday()!==d)return;
+    if(document.querySelector(".mdoc-ov"))return;
+    var incoming=Array.isArray(v)?v.filter(Boolean):Object.values(v).filter(Boolean);
+    var before=records.filter(function(r){return r&&r.date===d;});
+    if(JSON.stringify(before)===JSON.stringify(incoming))return;
+    mergeRecordsRange(d,d,v);
+  }).catch(function(){})["finally"](function(){_mdocPolling=false;});
+}
 function mdocStartup(){
   // 起動時の先読み・転記は対象施設の施設端末だけ（他施設の端末・施設リンクの無い端末では通信しない。
   // 個人のスマホの回答は送信成功時の転記で届く）
@@ -11014,8 +11040,8 @@ function _mdocOpenFacilities(day){
   var rs=day.recs.slice().sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
   var st={};
   rs.forEach(function(r){
-    var s=st[r.staff]||(st[r.staff]={open:false,fac:""});
-    if(r.type==="clockIn"){s.open=true;s.fac=r.workFacility||r.facilityName||"";}
+    var s=st[r.staff]||(st[r.staff]={open:false,fac:"",inHour:null});
+    if(r.type==="clockIn"){s.open=true;s.fac=r.workFacility||r.facilityName||"";if(s.inHour===null)s.inHour=_mdocHour(r.timestamp);}
     else if(r.type==="clockOut"){s.open=false;s.fac="";}
     else if(r.type==="facilityChange"&&s.open){s.fac=r.workFacility||r.facilityName||s.fac;}
   });
@@ -11032,6 +11058,7 @@ function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
 // 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度（slot 0。出勤の確定後に聞く）。
 // 退勤: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
 //       （日中勤務の人は16時以降に限る。夕方勤務の人が後から来る施設で、昼の退勤を最後と誤らないため）。
+//       17時以降は、正午より前に出勤して勤務中のままの人（退勤の押し忘れ）を数えない（MDOC_FORGOT_OUT_HOUR）。
 //       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
 function mdocPlan(type,staff,fac,d){
   if(!mdocActive()||!mdocFacilityOn(fac)||!staff)return null;
@@ -11058,7 +11085,11 @@ function mdocPlan(type,staff,fac,d){
     var cinHour=cin?_mdocHour(cin.timestamp):null;
     var dayWorker=(cinHour!==null&&cinHour<12);
     var open=_mdocOpenFacilities(day);
-    var othersOpen=Object.keys(open).some(function(k){return k!==staff&&open[k].open&&open[k].fac===fac;});
+    var othersOpen=Object.keys(open).some(function(k){
+      var o=open[k];
+      if(k===staff||!o.open||o.fac!==fac)return false;
+      return !(hour>=MDOC_FORGOT_OUT_HOUR&&o.inHour!==null&&o.inHour<12); // 17時以降は朝からの押し忘れを数えない
+    });
     var last=!othersOpen&&(!dayWorker||hour>=16);
     if(last&&!d2)plan.slot=2;
     else if(dayWorker&&!last&&!d1)plan.slot=1;

@@ -58,6 +58,7 @@ RTDB REST は索引が無い `orderBy` を **400 で拒否する**ため、こ�
 | 承認漏れサマリー・有給付与の自動算出 | 全期間（**月ごとに分割**して背景取得） | `ensureRecordsHistory()` |
 | スタッフ改名 | 全期間（必須。`ensureRecordsHistory()` の完了まで実行しない） | `recordsHistoryReady()` |
 | 10秒ポーリング（管理画面） | **当日のみ** | `listenFirebase()` 内 |
+| 10秒ポーリング（打刻画面。穂乃味の月次書類の対象施設の端末・対象施設のスタッフを選んでいる端末だけ） | **当日のみ**（変化が無ければ書き換えない。打刻の保存中・確認画面の表示中は取らない。再描画しない） | `mdocPollToday()`（`docs/features/monthly-docs.md`） |
 | 朝出勤確認「最新状態に更新」 | **当日のみ** | `fetchRecordsRange(_d,_d)` → `mergeRecordsRange` |
 | 日付が変わったとき | 当日を取り直す | `refreshRecordsIfDayChanged()` |
 

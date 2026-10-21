@@ -143,6 +143,71 @@ console.log("■ 退勤（日中・夕方の温度／保存食／最後の退勤
   check("前の人が「いいえ」なら確認済みにしない（次の最後の人にまた聞く）", p && p.hozon === true);
 }
 
+console.log("■ 退勤の押し忘れ（17時以降は朝からの勤務中を最後の退勤者の判定で数えない）");
+{
+  // 2026-10-09 等の本番: 朝の人が退勤を押し忘れ、18時に最後の人が退勤しても保存食が出なかった
+  const recs = [rec("山田", "clockIn", D, 7), rec("伊藤", "clockIn", D, 14)];
+  const c = makeClient({ records: recs });
+  const p = c.mdocPlan("clockOut", "伊藤", FAC, at(D, 18));
+  check("朝からの勤務中（押し忘れ）がいても17時以降の最後の退勤者には保存食を聞く", p && p.hozon === true && p.slot === 2);
+  const p2 = c.mdocPlan("clockOut", "伊藤", FAC, at(D, 16, 59));
+  check("17時より前は朝からの勤務中を数える（保存食は聞かない）", p2 && p2.hozon === false);
+}
+{
+  const recs = [rec("伊藤", "clockIn", D, 14), rec("高橋", "clockIn", D, 15)];
+  const c = makeClient({ records: recs });
+  const p = c.mdocPlan("clockOut", "伊藤", FAC, at(D, 18));
+  check("正午以降に出勤した勤務中の人は17時以降も数える（保存食は聞かない）", p && p.hozon === false);
+}
+{
+  const recs = [rec("山田", "clockIn", D, 7), rec("伊藤", "clockIn", D, 14), rec("山田", "clockIn", D, 15)];
+  const c = makeClient({ records: recs });
+  const p = c.mdocPlan("clockOut", "伊藤", FAC, at(D, 18));
+  check("出勤の判定はその日最初の出勤の時刻（朝の出勤があれば押し忘れ扱い）", p && p.hozon === true);
+}
+
+const pollTests = (async () => {
+  console.log("■ 打刻画面での当日分の取り直し（他端末の打刻・削除を反映）");
+  const mk = (o) => {
+    const c = makeClient({ facilityName: o.fac === undefined ? FAC : o.fac, records: o.records || [] });
+    c.__fetched = 0; c.__merged = null;
+    c.recordsReady = o.ready !== false; c._punchSaving = !!o.saving; c.savingCount = 0;
+    c.staffName = o.staff || null; c.staffList = o.staffList || [];
+    c.document = { querySelector: () => (o.overlay ? {} : null) };
+    c.recToday = () => D;
+    c.fetchRecordsRange = (f, t) => { c.__fetched++; return Promise.resolve(o.server === undefined ? {} : o.server); };
+    c.mergeRecordsRange = (f, t, v) => { c.__merged = [f, t, v]; };
+    return c;
+  };
+  const tick = () => new Promise((r) => setImmediate(r));
+  await (async () => {
+    const del = rec("てて", "clockIn", D, 14, { deleted: true });
+    const c = mk({ records: [rec("てて", "clockIn", D, 14)], server: { a: del } });
+    c.mdocPollToday(); await tick(); await tick();
+    check("対象施設の端末は当日分を取り直して手元へ反映する（管理者の削除が届く）", c.__fetched === 1 && c.__merged && c.__merged[0] === D && c.__merged[1] === D);
+    const same = rec("A", "clockIn", D, 7);
+    const c2 = mk({ records: [same], server: { x: same } });
+    c2.mdocPollToday(); await tick(); await tick();
+    check("変化が無ければ手元を書き換えない", c2.__fetched === 1 && c2.__merged === null);
+    const c3 = mk({ fac: "他施設" });
+    c3.mdocPollToday(); await tick();
+    check("対象外の施設の端末では通信しない", c3.__fetched === 0);
+    const c4 = mk({ fac: "", staff: "山田", staffList: [{ name: "山田", location: FAC }] });
+    c4.mdocPollToday(); await tick();
+    check("施設リンクの無い端末でも対象施設のスタッフを選んでいれば取り直す", c4.__fetched === 1);
+    const c5 = mk({ saving: true }); c5.mdocPollToday(); await tick();
+    const c6 = mk({ overlay: true }); c6.mdocPollToday(); await tick();
+    const c7 = mk({ ready: false }); c7.mdocPollToday(); await tick();
+    check("打刻の保存中・確認画面の表示中・起動時の取得前は取り直さない", c5.__fetched + c6.__fetched + c7.__fetched === 0);
+    const c8 = makeClient({ tenant: "mantel", facilityName: FAC });
+    c8.__f = 0; c8.recordsReady = true; c8._punchSaving = false; c8.savingCount = 0; c8.staffName = null;
+    c8.document = { querySelector: () => null }; c8.recToday = () => D; c8.fetchRecordsRange = () => { c8.__f++; return Promise.resolve({}); };
+    c8.mdocPollToday(); await tick();
+    check("穂乃味以外では取り直さない", c8.__f === 0);
+    check("打刻画面の10秒ポーリングから呼ばれる（管理画面の当日取得より前）", /mdocPollToday\(\);\s*\n\s*if\(screen!=="admin" && screen!=="staffDetail" && !viewerMode\) return;/.test(html));
+  })();
+})();
+
 console.log("■ 保存食の日付（廃棄日＝保存日の15日前・月次書類の帳票と同じ）");
 {
   const c = makeClient();
@@ -723,6 +788,7 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("公開キー以外（sb_secret_）は使わない", MD.config() === null);
   process.env.MDOC_SUPABASE_KEY = "sb_publishable_xxxxxxxx";
   check("公開キー＋合言葉なら設定あり", MD.config() !== null);
+  await pollTests;
   await uiTests;
 
   console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
