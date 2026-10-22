@@ -729,7 +729,7 @@ section("8f. 定期実行の入口（共有鍵・二重実装なし・認証前�
     && handler.slice(0, iKey).indexOf("loadSettings()") < 0);
   check("レート制限は sweep にも掛かる（鍵が漏れたときの上限）",
     /sweep: \{ kind: "dvm_s", limit: SWEEP_LIMIT_IP \}/.test(rep));
-  // ★ 上限の**値**も固定する。1分間隔なら10分窓で10回なので、60 は再試行込みで妥当。
+  // ★ 上限の**値**も固定する。1分間隔でも10分窓で10回なので、60 は再試行込みで妥当（本番は5分間隔で通常2回）。
   //   ここを極端に緩めると、鍵が漏れたときの歯止めが無くなる。
   check("sweep のレート制限は 10分窓60回", /SWEEP_LIMIT_IP = 60;/.test(rep));
   // ★ 鍵の誤りにはレート制限が掛からない（照合を前へ置いているため）。総当たりに耐えるのは
@@ -743,7 +743,7 @@ section("8f. 定期実行の入口（共有鍵・二重実装なし・認証前�
   check("鍵照合を通らずに handleSweep へ到達する枝が無い",
     handler.split("handleSweep()").length - 1 === 1);
   // ★ 定期実行はスイープの間引き（SWEEP_MIN_INTERVAL_MS）に掛からない。掛かると
-  //   1分間隔という前提が黙って壊れ、AGENTS.md の表だけが残る。
+  //   定期実行の間隔（本番は5分）という前提が黙って壊れ、文書の表だけが残る。
   check("定期実行は間引きの対象にしない",
     !/async function handleSweep[\s\S]{0,400}?SWEEP_MIN_INTERVAL_MS/.test(rep));
   check("register / report の上限を変えていない",
@@ -1302,7 +1302,7 @@ async function devwatchUiSection() {
       repSrc.indexOf("D.loadFacility(dev.fkey)") > 0);
     check("スイープの間隔は継続時間の最小値より短い",
       repSrc.indexOf("D.MIN_DWELL_SEC * 1000 - 1000") > 0);
-    // ★ 定期実行（60秒）の直下に置く。短すぎると cron の直後に端末報告が冗長な
+    // ★ 定期実行（当時60秒。2026-10-22 から5分）の直下に置いた値。短すぎると cron の直後に端末報告が冗長な
     //   全件スイープを重ねる。60秒以上にすると継続時間の最小値（60秒）を超える。
     check("報告時スイープの間引きは定期実行の間隔の直下（59秒）",
       /Math\.min\(59 \* 1000, D\.MIN_DWELL_SEC \* 1000 - 1000\)/.test(repSrc));
@@ -1482,10 +1482,10 @@ async function devReportHandlerSection() {
   r = await call({ action: "sweep", key: KEY });
   check("基準位置が未設定の施設は確定しない", GCALLS.http.length === 0 && r.body.confirms === 0);
 
-  // --- ★ LINE は送れたが確定の書き込みだけが失敗したときに、毎分再送しないこと ---
+  // --- ★ LINE は送れたが確定の書き込みだけが失敗したときに、スイープのたびに再送しないこと ---
   //   持ち出し検知は「送信できてから確定を書く」＝取り逃しより重複を選ぶ設計なので、
   //   書き込みだけが失敗すると sweepPlan の抑止条件が変わらず、次のスイープが送り直す。
-  //   定期実行が1分間隔なので、放置すると1端末あたり1,440通/日になりうる。
+  //   定期実行は5分間隔なので、放置すると1端末あたり288通/日（1分間隔なら1,440通/日）になりうる。
   //   LINE の push 枠は朝の未打刻通知と同じなので、枠を食い潰すと業務通知まで沈黙する。
   {
     reset();

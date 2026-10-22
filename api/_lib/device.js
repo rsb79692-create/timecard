@@ -427,7 +427,7 @@ function sweepPlan(devices, nowMs, cfg, facilities) {
     // ★ 形式が不正なキーは対象にしない（markDevices と対称にする）。
     //   patchDevice は不正な ID で必ず throw するため、confirms へ入れると
     //   「LINE は送れるが確定は永久に書けない」＝**毎回のスイープで再送**になる。
-    //   定期実行が1分間隔なので、1件混ざるだけで1日1,440通の通知になりうる。
+    //   定期実行は5分間隔なので、1件混ざるだけで定期実行だけでも1日288通（1分間隔だった当時は1,440通）の通知になりうる。
     if (!isDeviceId(id)) continue;
     const d = map[id];
     if (!d || typeof d !== "object") continue;
@@ -683,8 +683,8 @@ async function markDevices(items, field, value) {
  * ★★ なぜ要るか。持ち出し検知は「送信できてから確定（`state`/`notifiedAt`）を書く」
  *   ＝取り逃しより重複を選ぶ設計である。そのため **LINE は送れたのに確定の書き込みだけが
  *   失敗した**場合、`sweepPlan` の抑止条件（`notified <= since`）が変わらないので
- *   次のスイープが同じ通知を送り直す。定期実行が1分間隔になったことで、これが
- *   最悪 1端末あたり 1,440通/日になりうる。LINE の push 枠は朝の未打刻通知
+ *   次のスイープが同じ通知を送り直す。定期実行は5分間隔（2026-10-22 に1分から変更）なので、これが
+ *   定期実行だけで最悪 1端末あたり 288通/日（1分間隔なら 1,440通/日）になりうる。LINE の push 枠は朝の未打刻通知
  *   （`scripts/morning-check.js`）と**同じ資格情報・同じ枠**なので、枠を食い潰すと
  *   業務上より重い通知まで沈黙する。
  *
@@ -724,7 +724,7 @@ function markExitSent(key, nowMs) {
 /**
  * スイープ。次の3つの機会に呼ぶ。**判定の実装はここだけ**（二重実装を作らない）。
  *
- *   ① 外部スケジューラからの定期実行（1分間隔・`POST /api/device-report` の action:"sweep"）
+ *   ① 外部スケジューラからの定期実行（5分間隔。2026-10-22 に1分から変更・`POST /api/device-report` の action:"sweep"）
  *      ← これが主経路。管理画面を誰も開かなくても確定・通知されるのはこれによる。
  *   ② 端末の報告時（`SWEEP_MIN_INTERVAL_MS` で間引く）  ← 保険
  *   ③ 管理画面の取得時（`/api/device` の bootstrap）      ← 保険
