@@ -7750,6 +7750,13 @@ function _renderInner(){
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-can-support" style="width:16px;height:16px;cursor:pointer;">'
         +'応援勤務あり（打刻時に出勤先選択を表示）</label></div>'
+        // 勤務区分（穂乃味だけ。複数可）。登録するだけで打刻・月次書類の判定には使わない
+        +(TENANT_ID!=="honomi"?'':'<div style="grid-column:1/-1;">'
+        +'<div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">勤務区分（複数可）</div>'
+        +'<div style="display:flex;flex-wrap:wrap;gap:6px 16px;">'
+        +STAFF_SHIFT_TYPES.map(function(t){return'<label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
+          +'<input type="checkbox" class="modal-shift-type" value="'+t[0]+'" style="width:16px;height:16px;cursor:pointer;">'+t[1]+'</label>';}).join("")
+        +'</div></div>')
         +(!tenantFeature("meals")?'':'<div style="grid-column:1/-1;">'
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-meal-required" style="width:16px;height:16px;cursor:pointer;">'
@@ -10103,6 +10110,8 @@ function _renderInner(){
         s.canSupportWork=!!(cswEl2&&cswEl2.checked);
         var mrEl2=document.getElementById("modal-meal-required");
         if(mrEl2)s.mealRequired=!!mrEl2.checked; // 賄いの欄を出さない会社（機能フラグ meals）では既存の値を変えない
+        var stEl2=staffShiftTypesFromModal();
+        if(stEl2){if(stEl2.length)s.shiftTypes=stEl2; else delete s.shiftTypes;} // 欄を出さない会社では既存の値を変えない
         // 打刻時の顔撮影。★ チェックが入っているときだけ true を保存する
         //   （判定側は facePhoto===true のみをONとするため、未設定・false はOFF）。
         var fpEl2=document.getElementById("modal-face-photo");
@@ -10115,6 +10124,8 @@ function _renderInner(){
         var mrEl3=document.getElementById("modal-meal-required");
         var newStaff={name:newN,lastName:ln,firstName:fn,yomiLast:ly,yomiFirst:fy,yomi:newY,employeeId:empId,hireDate:hd,location:loc,dept:dept,employmentType:et,role:role,status:stat,canSupportWork:!!(cswEl3&&cswEl3.checked),mealRequired:!!(mrEl3&&mrEl3.checked)};
         if(wwd)newStaff.weeklyWorkDays=parseInt(wwd,10);
+        var stEl3=staffShiftTypesFromModal();
+        if(stEl3&&stEl3.length)newStaff.shiftTypes=stEl3;
         // ★ 新規登録でも顔撮影の既定は OFF。チェックが入っているときだけキーを持たせる。
         var fpEl3=document.getElementById("modal-face-photo");
         if(fpEl3&&fpEl3.checked)newStaff.facePhoto=true; else if(fpEl3&&faceCamTenantDefault())newStaff.facePhoto=false;
@@ -10675,6 +10686,15 @@ function showStaffPicker(list,current,from){
   ov.onclick=function(e){if(e.target===ov)close();};
   document.body.appendChild(ov);
 }
+// 勤務区分（穂乃味だけ。複数可。tc5_staff の shiftTypes にキーの配列で保存）。登録するだけで判定には使わない
+var STAFF_SHIFT_TYPES=[["open","開け"],["day","日中"],["close","閉め"],["full","通し"],["split","間抜け"]];
+// 編集画面のチェック。欄が無い（穂乃味以外）ときは null＝既存の値を変えない
+function staffShiftTypesFromModal(){
+  var els=document.querySelectorAll(".modal-shift-type");
+  if(!els.length)return null;
+  var out=[];els.forEach(function(el){if(el.checked)out.push(el.value);});
+  return out;
+}
 function openHrmEdit(nm){
   var s=nm?staffList.find(function(x){return x.name===nm;}):null;
   var modal=document.getElementById("hrm-modal");
@@ -10698,6 +10718,8 @@ function openHrmEdit(nm){
   if(cswEl)cswEl.checked=!!(s&&s.canSupportWork);
   var mrEl=document.getElementById("modal-meal-required");
   if(mrEl)mrEl.checked=!!(s&&s.mealRequired); // 既存スタッフ（mealRequired未設定）は初期値=不要
+  var _st=(s&&Array.isArray(s.shiftTypes))?s.shiftTypes:[];
+  document.querySelectorAll(".modal-shift-type").forEach(function(el){el.checked=_st.indexOf(el.value)>=0;});
   var fpEl=document.getElementById("modal-face-photo");
   // ★ 既存スタッフ（facePhoto未設定・null・"false" 等）はすべて OFF 表示にする（フェイルセーフ）。
   //   新規登録（s 無し）の初期表示は会社の既定（マンテールは ON・穂乃味は OFF）。

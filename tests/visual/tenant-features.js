@@ -47,6 +47,14 @@ async function probe(browser, tenant) {
     unset: faceCamStaffEnabled({ name: "x" }), off: faceCamStaffEnabled({ name: "x", facePhoto: false }),
     existing: faceCamStaffEnabled(staffList.find((x) => x.name === "佐藤 花子")),
   }));
+  // 勤務区分（穂乃味だけ）: 欄の有無と、登録済みの区分にチェックが入るか
+  out.shiftField = await page.evaluate(() => document.querySelectorAll(".modal-shift-type").length);
+  out.shiftChecked = await page.evaluate(() => {
+    const s = staffList.find((x) => x.name === "佐藤 花子"); s.shiftTypes = ["open", "split"];
+    openHrmEdit(s.name);
+    const v = Array.from(document.querySelectorAll(".modal-shift-type")).filter((e) => e.checked).map((e) => e.value).join(",");
+    try { closeHrmModal(); } catch (e) {} delete s.shiftTypes; return v;
+  });
   out.faceNewChecked = await page.evaluate(() => { openHrmEdit(null); const el = document.getElementById("modal-face-photo"); const v = !!(el && el.checked); try { closeHrmModal(); } catch (e) {} return v; });
   await ctx.close();
   // 閲覧用URL（労務士）
@@ -72,6 +80,9 @@ async function main() {
   check("マンテール: CSV出力に賄い一覧・賄いの列を出さない", !m.mealToggle && !m.mealList && !m.preview_monthly && !m.preview_daily, JSON.stringify(m));
   check("マンテール: スタッフ編集に「賄い 要」を出さない", m.staffMealField === false);
   check("マンテール: 閲覧用に「この月の賄い回数」を出さない", m.viewerMeals === false);
+  check("穂乃味: スタッフ編集に勤務区分（開け・日中・閉め・通し・間抜け）の5つのチェック欄", h.shiftField === 5, "n=" + h.shiftField);
+  check("穂乃味: 登録済みの勤務区分にチェックが入る", h.shiftChecked === "open,split", h.shiftChecked);
+  check("マンテール: スタッフ編集に勤務区分を出さない", m.shiftField === 0, "n=" + m.shiftField);
   await browser.close();
   console.log("\n" + pass + " PASS / " + fail + " FAIL");
   process.exit(fail ? 1 : 0);

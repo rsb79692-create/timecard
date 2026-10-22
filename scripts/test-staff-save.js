@@ -107,6 +107,8 @@ function makeTerminal(server, name) {
     document: { getElementById: (id) => el(id) },
     showAlert(m) { env.alerts.push(m); }, closeHrmModal() { env.closed++; }, render() { env.renders++; },
     faceCamTenantDefault() { return env.TENANT.facePhotoDefault === true; },
+    // 勤務区分の欄（穂乃味だけ）。shiftTypesInput 未設定＝欄が無い会社（null）
+    staffShiftTypesFromModal() { return env.shiftTypesInput === undefined ? null : env.shiftTypesInput.slice(); },
     mileageSaveStaffModal() {}, prompt() { return null; }, getTodayJSTStr() { return "2026-09-30"; },
     apvApprovalBlocked() { return false; }, recordsHistoryReady() { return true; }, ensureRecordsHistory() {},
     renamePinInAuthz() {}, _lsSet() {}, TLS: { setItem() {} }, esc: (s) => String(s),
@@ -342,6 +344,26 @@ const INIT_FAC = [{ name: "本店", token: "TOK_HONTEN_0000000000000000000000" }
     T.facilityAddOne("五号店", "x"); await settle(T);
     check("施設マスタを取得できていない端末は施設を保存しない", !facNames().includes("五号店") && T.alerts.length === 1);
     check("打刻URLトークンは書き換えない（本店）", Object.values(srv.db["master/locations"]).find((f) => f && f.name === "本店").token === INIT_FAC[0].token);
+  }
+
+  console.log("■ 勤務区分（shiftTypes）は1件単位の保存で書き、欄の無い会社では既存の値を変えない");
+  {
+    const srv = makeServer({ tc5_staff: INIT_STAFF, "master/locations": INIT_FAC });
+    const A = makeTerminal(srv, "A"); A.load();
+    A.shiftTypesInput = ["open", "close"];
+    await A.saveModal("佐藤花子", FORM(INIT_STAFF[1]));
+    check("チェックした勤務区分が保存される", JSON.stringify(staffOf(srv, "佐藤花子").shiftTypes) === '["open","close"]', JSON.stringify(staffOf(srv, "佐藤花子")));
+    check("他の人の行は変わらない", JSON.stringify(staffOf(srv, "山田太郎")) === JSON.stringify(INIT_STAFF[0]));
+    check("勤務区分の保存でも全体 PUT を行わない", !srv.log.includes("FULL-PUT tc5_staff") && !A.fullSave);
+    const B = makeTerminal(srv, "B"); B.load();
+    await B.saveModal("佐藤花子", FORM(INIT_STAFF[1], { empid: "E2-b" }));
+    check("欄の無い会社で保存しても勤務区分は消えない", JSON.stringify(staffOf(srv, "佐藤花子").shiftTypes) === '["open","close"]' && staffOf(srv, "佐藤花子").employeeId === "E2-b");
+    A.load(); A.shiftTypesInput = [];
+    await A.saveModal("佐藤花子", FORM(INIT_STAFF[1]));
+    check("チェックを全部外すとキーを持たない", !("shiftTypes" in staffOf(srv, "佐藤花子")), JSON.stringify(staffOf(srv, "佐藤花子")));
+    A.shiftTypesInput = ["split"];
+    await A.saveModal("", { lname: "新人", fname: "三郎", ly: "しんじん", fy: "さぶろう", loc: "本店", et: "パート" });
+    check("新規登録でも勤務区分が保存される", JSON.stringify((staffOf(srv, "新人三郎") || {}).shiftTypes) === '["split"]', JSON.stringify(A.alerts));
   }
 
   console.log("■ デモ・テスト画面（writePolicy≠full）は従来の保存経路のまま");
