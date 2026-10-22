@@ -12,6 +12,8 @@
  *  4. API: 穂乃味以外は入口で拒否し、RTDB にも月次書類 DB にも触れない
  */
 "use strict";
+// 判定は端末の現地時刻（getHours）で行うため、実行環境の時間帯によらず日本時間で評価する
+process.env.TZ = "Asia/Tokyo";
 
 const fs = require("fs");
 const path = require("path");
@@ -662,6 +664,79 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     check("穂乃味の monthlyDocs は画面・API の2か所とも有効", !!hon && /monthlyDocs:true/.test(hon[1]) && T0.TENANTS.honomi.features.monthlyDocs === true && T0.TENANTS.mantel.features.monthlyDocs === false);
   }
 
+  console.log("■ 勤務区分（開け・日中・閉め・通し・間抜け）による温度・保存食の判定");
+  {
+    const DK = "2026-10-22";
+    const ST = (name, types) => ({ name: name, shiftTypes: types });
+    const mk = (records, staff) => { const c = makeClient({ records: records || [], facilityName: FAC }); c.staffList = staff; return c; };
+    const r = (staff, type, hh, extra) => rec(staff, type, DK, hh, extra);
+    const staff = [ST("開け", ["open"]), ST("日中", ["day"]), ST("閉め", ["close"]), ST("閉め2", ["close"]), ST("通し", ["full"]),
+      ST("間抜け", ["split"]), ST("開け閉め", ["open", "close"]), { name: "未登録" }, { name: "未登録2" }];
+    {
+      const c = mk([], staff);
+      check("開けの人の出勤（12時前）は朝の温度を聞く", c.mdocPlan("clockIn", "開け", FAC, at(DK, 6)).slot === 0);
+      check("通し・間抜けの人の出勤も朝の温度を聞く", c.mdocPlan("clockIn", "通し", FAC, at(DK, 6)).slot === 0 && c.mdocPlan("clockIn", "間抜け", FAC, at(DK, 6)).slot === 0);
+      const pd = c.mdocPlan("clockIn", "日中", FAC, at(DK, 9)), pc = c.mdocPlan("clockIn", "閉め", FAC, at(DK, 10));
+      check("日中・閉めだけの人の出勤は朝の温度を聞かない（衛生は聞く）", pd.slot === null && pd.hyg === true && pc.slot === null && pc.hyg === true);
+      check("未登録の人の出勤は従来どおり朝の温度を聞く", c.mdocPlan("clockIn", "未登録", FAC, at(DK, 6)).slot === 0);
+    }
+    {
+      const c = mk([r("開け", "clockIn", 6), r("日中", "clockIn", 9)], staff);
+      const p1 = c.mdocPlan("clockOut", "開け", FAC, at(DK, 13));
+      check("開けだけの人の退勤は日中の温度（保存食は聞かない）", p1 && p1.slot === 1 && p1.hozon === false);
+      const p2 = c.mdocPlan("clockOut", "日中", FAC, at(DK, 18));
+      check("日中の人は17時以降の退勤でも日中の温度だけ", p2 && p2.slot === 1 && p2.hozon === false);
+    }
+    {
+      // 開けの人が退勤を押し忘れていても、閉めの人の17時以降の退勤では夕方の温度と保存食を聞く
+      const c = mk([r("開け", "clockIn", 6), r("閉め", "clockIn", 13)], staff);
+      const p = c.mdocPlan("clockOut", "閉め", FAC, at(DK, 18));
+      check("閉めの人の17時以降の退勤: 開けだけの人の勤務中（押し忘れ）は数えず、夕方の温度と保存食", p && p.slot === 2 && p.hozon === true);
+      const p16 = c.mdocPlan("clockOut", "閉め", FAC, at(DK, 16, 30));
+      check("閉めの人の17時より前の退勤は日中の温度（保存食は聞かない）", p16 && p16.slot === 1 && p16.hozon === false);
+    }
+    {
+      const c = mk([r("閉め", "clockIn", 13), r("閉め2", "clockIn", 14)], staff);
+      check("閉めの人がまだ勤務中なら、先に帰る閉めの人には夕方の温度・保存食を聞かない", c.mdocPlan("clockOut", "閉め", FAC, at(DK, 17, 30)) === null);
+      const c2 = mk([r("閉め", "clockIn", 13), r("未登録", "clockIn", 14)], staff);
+      check("未登録の人（午後から）が勤務中なら閉めの人にも聞かない", c2.mdocPlan("clockOut", "閉め", FAC, at(DK, 18)) === null);
+      const c3 = mk([r("閉め", "clockIn", 13), r("未登録", "clockIn", 8)], staff);
+      const p3 = c3.mdocPlan("clockOut", "閉め", FAC, at(DK, 18));
+      check("未登録の朝からの人の勤務中は従来どおり押し忘れとみなし、閉めの人に聞く", p3 && p3.slot === 2 && p3.hozon === true);
+    }
+    {
+      const c = mk([r("通し", "clockIn", 6)], staff);
+      const p = c.mdocPlan("clockOut", "通し", FAC, at(DK, 19));
+      check("通しの人が最後に退勤: 夕方の温度と保存食", p && p.slot === 2 && p.hozon === true);
+      const c2 = mk([r("開け閉め", "clockIn", 6)], staff);
+      const p2 = c2.mdocPlan("clockOut", "開け閉め", FAC, at(DK, 12));
+      check("開けと閉めの両方の人が昼に退勤: 日中の温度", p2 && p2.slot === 1 && p2.hozon === false);
+    }
+    {
+      const c = mk([r("間抜け", "clockIn", 6)], staff);
+      const pb = c.mdocPlan("breakStart", "間抜け", FAC, at(DK, 12));
+      check("間抜けの人の休憩開始: 日中の温度を聞く（衛生・保存食は聞かない）", pb && pb.slot === 1 && pb.hyg === false && pb.hozon === false);
+      const c2 = mk([r("間抜け", "clockIn", 6), r("開け", "clockOut", 11, { mdoc: { f: FAC, temp: { s: 1, d: [] } } })], staff);
+      check("日中の温度が記録済みなら休憩開始では聞かない", c2.mdocPlan("breakStart", "間抜け", FAC, at(DK, 12)) === null);
+      check("間抜け以外（未登録を含む）の休憩開始では何も聞かない", c.mdocPlan("breakStart", "開け", FAC, at(DK, 12)) === null && c.mdocPlan("breakStart", "未登録", FAC, at(DK, 12)) === null);
+      const c3 = mk([r("間抜け", "clockIn", 6), r("間抜け", "breakStart", 12), r("間抜け", "breakEnd", 15)], staff);
+      const po = c3.mdocPlan("clockOut", "間抜け", FAC, at(DK, 18, 30));
+      check("間抜けの人の17時以降の退勤: 夕方の温度と保存食", po && po.slot === 2 && po.hozon === true);
+    }
+    {
+      const nf = makeClient({ facilityName: "ココラ" }); nf.staffList = [ST("松本香織", ["split"])];
+      check("温度を聞かないスタッフ（ココラの松本香織さん）は間抜けでも休憩開始で聞かない", nf.mdocPlan("breakStart", "松本香織", "ココラ", at(DK, 12)) === null);
+    }
+    {
+      const c = mk([r("間抜け", "clockIn", 6)], staff);
+      check("休憩開始の見直し: 勤務中なら二重打刻ではない", c.mdocDupPunch("breakStart", "間抜け", DK, FAC) === null);
+      const c2 = mk([r("間抜け", "clockIn", 6), r("間抜け", "breakStart", 12)], staff);
+      check("休憩開始の見直し: すでに休憩中なら止める", !!c2.mdocDupPunch("breakStart", "間抜け", DK, FAC));
+      const c3 = mk([r("間抜け", "clockIn", 6), r("間抜け", "clockOut", 12)], staff);
+      check("休憩開始の見直し: 退勤済みなら止める", !!c3.mdocDupPunch("breakStart", "間抜け", DK, FAC));
+    }
+  }
+
   // ── サーバ側の検証 ───────────────────────────────────────
   console.log("■ サーバ: 打刻レコードの mdoc の検証");
   const MD = require(path.join(ROOT, "api/_lib/monthly-docs.js"));
@@ -690,6 +765,21 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
   check("不正なものは数えて捨てる（11件）", rejected === 11, "rejected=" + rejected);
   const t = events.find((e) => e.event_id === "ok1:temp");
   check("温度は0.1℃に丸め、記録時点の機器名を持つ", t && t.payload.devs[0].v === 4 && t.payload.devs[0].n === "冷蔵庫①");
+  {
+    // 休憩開始（勤務区分「間抜け」）は日中の温度（slot 1）だけを受ける。施設はその日の本人の打刻に現れた施設
+    const bs = {
+      bin: R("bin", { workFacility: FAC, facilityName: FAC }),
+      bok: R("bok", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, temp: { s: 1, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 5 }] } } }),
+      bs2: R("bs2", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, temp: { s: 2, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 5 }] } } }),
+      bhyg: R("bhyg", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, hyg: { a: "ok" } } }),
+      bhz: R("bhz", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, hozon: { a: "yes", store: D, discard: "2026-09-24" } } }),
+      bend: R("bend", { type: "breakEnd", workFacility: undefined, mdoc: { f: FAC, temp: { s: 1, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 5 }] } } }),
+    };
+    const rb = MD.eventsFromRecords(bs, master);
+    const be = rb.events.find((e) => e.event_id === "bok:temp");
+    check("サーバ: 休憩開始の日中の温度は受け、打刻の種類は breakStart のまま記録する", rb.events.length === 1 && be && be.slot === 1 && be.punch_type === "breakStart", JSON.stringify(rb.events));
+    check("サーバ: 休憩開始の夕方の温度・衛生・保存食、休憩終了の回答は受けない", rb.rejected === 4, "rejected=" + rb.rejected);
+  }
   {
     const r3 = MD.eventsFromRecords({ ta: R("ta", { mdoc: { f: FAC, temp: { s: 0, at: "2026-10-08T21:11:30.000Z", d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }) }, master);
     check("出勤後に記録した温度は、温度を確定した時刻を記録日時にする", r3.events[0] && r3.events[0].recorded_at === "2026-10-08T21:11:30.000Z");

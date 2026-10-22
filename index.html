@@ -7750,7 +7750,7 @@ function _renderInner(){
         +'<label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;font-weight:600;color:#475569;">'
         +'<input type="checkbox" id="modal-can-support" style="width:16px;height:16px;cursor:pointer;">'
         +'応援勤務あり（打刻時に出勤先選択を表示）</label></div>'
-        // 勤務区分（穂乃味だけ。複数可）。登録するだけで打刻・月次書類の判定には使わない
+        // 勤務区分（穂乃味だけ。複数可）。月次書類の温度・保存食を誰に聞くかの判定に使う
         +(TENANT_ID!=="honomi"?'':'<div style="grid-column:1/-1;">'
         +'<div style="font-size:12px;font-weight:600;color:#475569;margin-bottom:5px;">勤務区分（複数可）</div>'
         +'<div style="display:flex;flex-wrap:wrap;gap:6px 16px;">'
@@ -10686,7 +10686,7 @@ function showStaffPicker(list,current,from){
   ov.onclick=function(e){if(e.target===ov)close();};
   document.body.appendChild(ov);
 }
-// 勤務区分（穂乃味だけ。複数可。tc5_staff の shiftTypes にキーの配列で保存）。登録するだけで判定には使わない
+// 勤務区分（穂乃味だけ。複数可。tc5_staff の shiftTypes にキーの配列で保存）。月次書類の温度・保存食の判定に使う（mdocShiftTypes）
 var STAFF_SHIFT_TYPES=[["open","開け"],["day","日中"],["close","閉め"],["full","通し"],["split","間抜け"]];
 // 編集画面のチェック。欄が無い（穂乃味以外）ときは null＝既存の値を変えない
 function staffShiftTypesFromModal(){
@@ -11076,28 +11076,50 @@ function mdocDiscardDate(dk){
 }
 function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
 
+// ★ 勤務区分（2026-10-22 ユーザー指示。スタッフ編集で登録する tc5_staff の shiftTypes）。未登録の人は従来の判定のまま。
+//   朝の温度＝開け・通し・間抜け／日中＝日中・開けだけの人（退勤時）、間抜け（休憩開始時。昼の抜けを休憩で打刻するため）／
+//   夕方＋保存食＝閉め・通し・間抜け（17時以降の退勤。17時より前は日中として聞く）。
+var MDOC_SHIFT_KEYS=["open","day","close","full","split"];
+var MDOC_CLOSE_HOUR=17; // 閉めの担当の人に夕方の温度・保存食を聞く時刻（これより前の退勤は日中）
+// 登録済みの勤務区分（未登録・不正は空配列＝従来の判定）
+function mdocShiftTypes(staff){
+  var so=(staffList||[]).find(function(x){return x&&x.name===staff;})||{};
+  return Array.isArray(so.shiftTypes)?so.shiftTypes.filter(function(t){return MDOC_SHIFT_KEYS.indexOf(t)>=0;}):[];
+}
+function _mdocHas(ts,keys){return ts.some(function(t){return keys.indexOf(t)>=0;});}
+// 閉めの担当になりうる人（閉め・通し・間抜け、または勤務区分が未登録）。開けだけ・日中だけの人は数えない
+function mdocMayClose(staff){var ts=mdocShiftTypes(staff);return !ts.length||_mdocHas(ts,["close","full","split"]);}
+
 // 何を聞くか（聞くものが無ければ null＝従来どおりすぐ打刻）。
 // 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度（slot 0。出勤の確定後に聞く）。
-// 退勤: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
+//       勤務区分が登録済みなら、朝の温度は開け・通し・間抜けの人だけに聞く。
+// 休憩開始: 勤務区分が間抜けの人だけ。日中の温度（slot 1）が未記録なら聞く。
+// 退勤（勤務区分が登録済み）: 閉め・通し・間抜けの人が17時以降に退勤し、同じ施設に閉めの担当になりうる人（mdocMayClose）が
+//       勤務中でなければ、夕方の温度と保存食（未記録なら）。勤務中なら聞かない。17時より前の退勤・開けや日中だけの人は日中の温度（未記録なら）。
+// 退勤（未登録）: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
 //       （日中勤務の人は16時以降に限る。夕方勤務の人が後から来る施設で、昼の退勤を最後と誤らないため）。
 //       17時以降は、正午より前に出勤して勤務中のままの人（退勤の押し忘れ）を数えない（MDOC_FORGOT_OUT_HOUR）。
+//       開けだけ・日中だけの人は勤務中に数えない。
 //       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
 function mdocPlan(type,staff,fac,d){
   if(!mdocActive()||!mdocFacilityOn(fac)||!staff)return null;
-  if(type!=="clockIn"&&type!=="clockOut")return null;
+  if(type!=="clockIn"&&type!=="clockOut"&&type!=="breakStart")return null;
   var dk=fmtDateKey(d),hour=d.getHours();
   if(dk<mdocStartFor(fac))return null;
   var day=_mdocDay(dk);
   var tempDone=function(slot){return day.has(function(m){return m.f===fac&&m.temp&&m.temp.s===slot;});};
   var so=(staffList||[]).find(function(x){return x&&x.name===staff;})||{};
   var sid=(typeof so.employeeId==="string"&&/^[A-Za-z0-9_-]{1,32}$/.test(so.employeeId.trim()))?so.employeeId.trim():"";
+  var ts=mdocShiftTypes(staff);
   var plan={type:type,staff:staff,sid:sid,fac:fac,dk:dk,hyg:false,hygNg:false,slot:null,hozon:false};
   if(type==="clockIn"){
     if(!day.has(function(m,r){return r.staff===staff&&!!m.hyg;})){
       plan.hyg=true;
       plan.hygNg=!!_mdocLsGet("mdoc.ng."+dk+"."+staff); // 「問題あり」の後の再打刻は聞き直さない
     }
-    if(hour<12&&!tempDone(0))plan.slot=0;
+    if(hour<12&&!tempDone(0)&&(!ts.length||_mdocHas(ts,["open","full","split"])))plan.slot=0;
+  } else if(type==="breakStart"){
+    if(ts.indexOf("split")>=0&&!tempDone(1))plan.slot=1;
   } else {
     var d1=tempDone(1),d2=tempDone(2);
     var cin=day.recs.filter(function(r){return r.staff===staff&&r.type==="clockIn";})
@@ -11109,19 +11131,34 @@ function mdocPlan(type,staff,fac,d){
       return m.f===fac&&m.hozon&&m.hozon.a==="yes"&&(r.staff===staff||isNaN(cinAt)||!(new Date(r.timestamp).getTime()>cinAt));
     });
     if(d1&&d2&&hz)return null; // その施設のその日の分はすべて記録済み（勤務中の人を数えない）
-    var cinHour=cin?_mdocHour(cin.timestamp):null;
-    var dayWorker=(cinHour!==null&&cinHour<12);
     var open=_mdocOpenFacilities(day);
-    var othersOpen=Object.keys(open).some(function(k){
-      var o=open[k];
-      if(k===staff||!o.open||o.fac!==fac)return false;
-      return !(hour>=MDOC_FORGOT_OUT_HOUR&&o.inHour!==null&&o.inHour<12); // 17時以降は朝からの押し忘れを数えない
-    });
-    var last=!othersOpen&&(!dayWorker||hour>=16);
-    if(last&&!d2)plan.slot=2;
-    else if(dayWorker&&!last&&!d1)plan.slot=1;
-    else if(!dayWorker&&!d2)plan.slot=2;
-    if(last&&!hz)plan.hozon=true;
+    var othersAt=function(skip){
+      return Object.keys(open).some(function(k){
+        var o=open[k];
+        if(k===staff||!o.open||o.fac!==fac||!mdocMayClose(k))return false;
+        return !skip(o,k);
+      });
+    };
+    if(ts.length){
+      if(_mdocHas(ts,["close","full","split"])&&hour>=MDOC_CLOSE_HOUR){
+        // 勤務中に数えるのは閉めの担当になりうる人。未登録の人は従来どおり、17時以降の朝からの勤務中（押し忘れ）を数えない
+        if(!othersAt(function(o,k){return !mdocShiftTypes(k).length&&o.inHour!==null&&o.inHour<12;})){
+          if(!d2)plan.slot=2;
+          if(!hz)plan.hozon=true;
+        }
+      } else if(!d1)plan.slot=1;
+    } else {
+      var cinHour=cin?_mdocHour(cin.timestamp):null;
+      var dayWorker=(cinHour!==null&&cinHour<12);
+      var othersOpen=othersAt(function(o){ // 17時以降は朝からの押し忘れを数えない
+        return hour>=MDOC_FORGOT_OUT_HOUR&&o.inHour!==null&&o.inHour<12;
+      });
+      var last=!othersOpen&&(!dayWorker||hour>=16);
+      if(last&&!d2)plan.slot=2;
+      else if(dayWorker&&!last&&!d1)plan.slot=1;
+      else if(!dayWorker&&!d2)plan.slot=2;
+      if(last&&!hz)plan.hozon=true;
+    }
   }
   if(mdocNoTemp(fac,staff))plan.slot=null;
   if(!plan.hyg&&plan.slot===null&&!plan.hozon)return null;
@@ -11187,7 +11224,7 @@ function mdocCollect(plan){
     var card=document.createElement("div");card.className="mdoc-card";
     ov.appendChild(card);
     document.body.appendChild(ov);
-    var verb=plan.type==="clockIn"?"出勤":"退勤";
+    var verb=plan.type==="clockIn"?"出勤":(plan.type==="breakStart"?"休憩開始":"退勤");
     function finish(v){if(done)return;done=true;if(idleTimer)clearTimeout(idleTimer);if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
     // 打刻後の温度（plan.post）: 開いてから一定時間（操作の有無によらない上限）で閉じる（共用端末をふさぎ続けない。出勤はすでに送信済み）
     if(plan.post)idleTimer=setTimeout(function(){finish(null);},MDOC_POST_TEMP_IDLE_MS);
@@ -11334,7 +11371,14 @@ function mdocCollect(plan){
 
 // 確認画面を閉じた時点の二重打刻の見直し（doPunch の検査と同じ規則。手元の records だけ・通信なし）。
 // 出勤＝同じ施設のその日の出勤か、他施設で出勤中。退勤＝その日の退勤（施設を問わない）。該当する打刻を返す。
+// 休憩開始＝その日の退勤、または最後の打刻が休憩開始（すでに休憩中）。
 function mdocDupPunch(type,staff,dk,fn){
+  if(type==="breakStart"){
+    var mine=records.filter(function(r){return r&&r.staff===staff&&r.date===dk&&!r.deleted;})
+      .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
+    var lastR=mine[mine.length-1];
+    return mine.find(function(r){return r.type==="clockOut";})||(lastR&&lastR.type==="breakStart"?lastR:null)||null;
+  }
   return records.find(function(r){return r&&r.staff===staff&&r.date===dk&&!r.deleted&&r.type===type
       &&(type!=="clockIn"||!r.facilityName||!fn||r.facilityName===fn);})
     ||(type==="clockIn"?findOpenClockInAcrossFacilities(staff,dk):null)||null;
@@ -11442,7 +11486,7 @@ async function _execPunch(type,d,meal){
   //      回答は打刻レコードの mdoc に入れ、下の端末保存で打刻と一緒に保存する（打刻と監査記録を分けない）。
   //      「やめる」「問題あり」のときは打刻しない（端末にもサーバにも何も残さない）。
   var _mdPost=null; // 出勤の確定後に聞く朝の温度（MONTHLY-DOCS）
-  if(mdocActive()&&(type==="clockIn"||type==="clockOut")){
+  if(mdocActive()&&(type==="clockIn"||type==="clockOut"||type==="breakStart")){
     var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(getCurrentWorkFacility(staffName,nr.date)||_effFn);
     var _mdPlan=mdocPlan(type,staffName,_mdFac,d);
     if(_mdPlan){
@@ -11457,7 +11501,8 @@ async function _execPunch(type,d,meal){
       var _mdFn=facilityName||"";
       var _mdDup=mdocDupPunch(type,_mdName,nr.date,_mdFn);
       if(_mdDup){
-        if(_mdDup.type==="clockIn"&&_mdFn&&_mdDup.facilityName&&_mdDup.facilityName!==_mdFn)
+        if(type==="breakStart")showAlert("打刻状態が変わりました。\n画面を確認してもう一度操作してください。");
+        else if(_mdDup.type==="clockIn"&&_mdFn&&_mdDup.facilityName&&_mdDup.facilityName!==_mdFn)
           showAlert("他施設で出勤中です。\n\n出勤中："+_mdDup.facilityName+" "+_mdDup.time+"\n\n退勤を押してください。");
         else showAlert("本日の"+TYPE_LABEL[type]+"はすでに打刻済みです。\n\n"+TYPE_LABEL[type]+" "+_mdDup.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
         render();return;

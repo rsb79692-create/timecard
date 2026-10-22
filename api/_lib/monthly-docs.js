@@ -131,7 +131,8 @@ function eventsFromRecords(records, master) {
     const bad = function () { rejected++; };
     // 打刻としての整合（ノード名 = eventId、種別、日付、本人、施設）
     if (!EVENT_ID_RE.test(key) || r.eventId !== key) { bad(); continue; }
-    if (r.type !== "clockIn" && r.type !== "clockOut") { bad(); continue; }
+    // 休憩開始は勤務区分「間抜け」の日中の温度だけ（下の温度の検証で slot 1 に限る。月次書類 DB の migration 006 と同じ）
+    if (r.type !== "clockIn" && r.type !== "clockOut" && r.type !== "breakStart") { bad(); continue; }
     if (!isDate(r.date)) { bad(); continue; }
     const at = typeof r.timestamp === "string" ? new Date(r.timestamp) : null;
     if (!at || isNaN(at.getTime())) { bad(); continue; }
@@ -142,10 +143,10 @@ function eventsFromRecords(records, master) {
     const who = sid ? { sid: sid } : {};
     const fac = md.f;
     if (!isText(fac, 40) || !master.facilities.has(fac)) { bad(); continue; }
-    // 打刻の施設と食い違う申告は受けない。出勤はその打刻の施設、退勤はその日の本人の打刻に現れた施設のいずれか。
+    // 打刻の施設と食い違う申告は受けない。出勤はその打刻の施設、退勤・休憩開始はその日の本人の打刻に現れた施設のいずれか。
     // 施設の項目が1つも無い打刻は受けない。
     const recFacs = [r.workFacility, r.facilityName, r.homeFacility].filter(function (x) { return typeof x === "string" && x; });
-    const allowed = r.type === "clockOut" ? (dayFacs[r.staff + "|" + r.date] || new Set()) : new Set(recFacs);
+    const allowed = r.type !== "clockIn" ? (dayFacs[r.staff + "|" + r.date] || new Set()) : new Set(recFacs);
     if (!allowed.has(fac)) { bad(); continue; }
     // 対象外の施設・開始日より前の打刻は転記しない（不正ではないので rejected に数えない）
     if (!facilityEnabled(fac) || r.date < facilityStart(fac)) { outOfScope++; continue; }
@@ -168,7 +169,7 @@ function eventsFromRecords(records, master) {
     if (md.temp !== undefined) {
       const t = md.temp || {};
       const s = t.s;
-      const slotOk = r.type === "clockIn" ? s === 0 : (s === 1 || s === 2);
+      const slotOk = r.type === "clockIn" ? s === 0 : (r.type === "breakStart" ? s === 1 : (s === 1 || s === 2));
       const devs = Array.isArray(t.d) && t.d.length >= 1 && t.d.length <= MAX_DEVS ? t.d.map(cleanDev) : null;
       const ids = devs ? new Set(devs.filter(Boolean).map(function (d) { return d.id; })) : null;
       if (!slotOk || !devs || devs.some(function (d) { return !d; }) || ids.size !== devs.length) bad();
