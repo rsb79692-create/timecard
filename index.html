@@ -4715,7 +4715,7 @@ function calcMs(rs){
 }
 // ===== 施設別勤務時間（施設変更 facilityChange を境界に分割）=====
 // calcMs() は総実働時間（給与・残業の基礎）であり一切変更しない。本関数は施設別内訳の専用計算。
-// ・出勤〜最初の施設変更 → 出勤時の施設へ計上（移動時間は必ず変更前施設へ含める）
+// ・出勤〜最初の施設変更 → 出勤時の施設へ計上（区切りは施設変更を押した時刻。2026-10-22 から移動元を出る前に押す運用＝移動時間は変更後の施設へ）
 // ・施設変更〜次の施設変更/退勤 → 変更後の施設へ計上
 // ・施設変更が無い日は全時間が出勤時の施設へ計上され、従来と同一結果になる（既存データ互換）
 // ・休憩は重なり分を該当区間から差し引く
@@ -6698,7 +6698,7 @@ function _renderInner(){
                 +'<button class="btn-punch" onclick="openFacilityChangeModal()" style="width:100%;background:#b45309;font-size:1.05rem;padding:14px 10px;">🔄 施設変更</button>'
                 +'<div style="text-align:center;font-size:.72rem;color:#4b5563;line-height:1.5;margin-top:6px;">'
                   +'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">現在の勤務施設：<b>'+esc(_curFac)+'</b></div>'
-                  +'<div>移動時間は変更前の施設に計上されます</div>'
+                  +'<div>移動時間は変更後の施設に計上されます</div>'
                 +'</div>'
                 +'</div>'
               :"")
@@ -11094,6 +11094,7 @@ function mdocMayClose(staff){var ts=mdocShiftTypes(staff);return !ts.length||_md
 // 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度（slot 0。出勤の確定後に聞く）。
 //       勤務区分が登録済みなら、朝の温度は開け・通し・間抜けの人だけに聞く。
 // 休憩開始: 勤務区分が間抜けの人だけ。日中の温度（slot 1）が未記録なら聞く。
+// 施設変更: 移動元の施設（fac）の日中の温度（slot 1）が未記録なら聞く（2026-10-22 ユーザー指示。移動元を出る前に押す運用）。
 // 退勤（勤務区分が登録済み）: 閉め・通し・間抜けの人が17時以降に退勤し、同じ施設に閉めの担当になりうる人（mdocMayClose）が
 //       勤務中でなければ、夕方の温度と保存食（未記録なら）。勤務中なら聞かない。17時より前の退勤・開けや日中だけの人は日中の温度（未記録なら）。
 // 退勤（未登録）: 正午より前に出勤した人＝日中勤務、正午以降＝夕方勤務。その施設に他の勤務中の人がいなければ最後の退勤者
@@ -11103,7 +11104,7 @@ function mdocMayClose(staff){var ts=mdocShiftTypes(staff);return !ts.length||_md
 //       最後の退勤者 → 夕方の温度（未記録なら）と保存食。そうでなければ 日中勤務 → 日中の温度、夕方勤務 → 夕方の温度（未記録なら）。
 function mdocPlan(type,staff,fac,d){
   if(!mdocActive()||!mdocFacilityOn(fac)||!staff)return null;
-  if(type!=="clockIn"&&type!=="clockOut"&&type!=="breakStart")return null;
+  if(type!=="clockIn"&&type!=="clockOut"&&type!=="breakStart"&&type!=="facilityChange")return null;
   var dk=fmtDateKey(d),hour=d.getHours();
   if(dk<mdocStartFor(fac))return null;
   var day=_mdocDay(dk);
@@ -11120,6 +11121,8 @@ function mdocPlan(type,staff,fac,d){
     if(hour<12&&!tempDone(0)&&(!ts.length||_mdocHas(ts,["open","full","split"])))plan.slot=0;
   } else if(type==="breakStart"){
     if(ts.indexOf("split")>=0&&!tempDone(1))plan.slot=1;
+  } else if(type==="facilityChange"){
+    if(!tempDone(1))plan.slot=1;
   } else {
     var d1=tempDone(1),d2=tempDone(2);
     var cin=day.recs.filter(function(r){return r.staff===staff&&r.type==="clockIn";})
@@ -11224,7 +11227,7 @@ function mdocCollect(plan){
     var card=document.createElement("div");card.className="mdoc-card";
     ov.appendChild(card);
     document.body.appendChild(ov);
-    var verb=plan.type==="clockIn"?"出勤":(plan.type==="breakStart"?"休憩開始":"退勤");
+    var verb=plan.type==="clockIn"?"出勤":(plan.type==="breakStart"?"休憩開始":(plan.type==="facilityChange"?"施設変更":"退勤"));
     function finish(v){if(done)return;done=true;if(idleTimer)clearTimeout(idleTimer);if(ov.parentNode)document.body.removeChild(ov);resolve(v);}
     // 打刻後の温度（plan.post）: 開いてから一定時間（操作の有無によらない上限）で閉じる（共用端末をふさぎ続けない。出勤はすでに送信済み）
     if(plan.post)idleTimer=setTimeout(function(){finish(null);},MDOC_POST_TEMP_IDLE_MS);
@@ -11371,9 +11374,9 @@ function mdocCollect(plan){
 
 // 確認画面を閉じた時点の二重打刻の見直し（doPunch の検査と同じ規則。手元の records だけ・通信なし）。
 // 出勤＝同じ施設のその日の出勤か、他施設で出勤中。退勤＝その日の退勤（施設を問わない）。該当する打刻を返す。
-// 休憩開始＝その日の退勤、または最後の打刻が休憩開始（すでに休憩中）。
+// 休憩開始・施設変更＝その日の退勤、または最後の打刻が休憩開始（すでに休憩中）。
 function mdocDupPunch(type,staff,dk,fn){
-  if(type==="breakStart"){
+  if(type==="breakStart"||type==="facilityChange"){
     var mine=records.filter(function(r){return r&&r.staff===staff&&r.date===dk&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var lastR=mine[mine.length-1];
@@ -11466,7 +11469,7 @@ async function _execPunch(type,d,meal){
     if(_effFn)nr.workFacility=_effFn;
   } else if(type==="facilityChange"){
     // 施設変更：この時刻を境界に、以降の勤務時間を workFacility へ計上する
-    // fromFacility＝変更前施設（移動時間はこちらへ計上される）
+    // fromFacility＝変更前施設。勤務時間は押した時刻で区切る（2026-10-22 から移動元を出る前に押す運用＝移動時間は変更後の施設へ）
     // 認可は書き込みパス側で強制する（UIの非表示だけを認可として扱わない・フェイルクローズ）
     var _from=getCurrentWorkFacility(staffName,nr.date)||"";
     var _to=facilityChangeTo||"";
@@ -11486,8 +11489,9 @@ async function _execPunch(type,d,meal){
   //      回答は打刻レコードの mdoc に入れ、下の端末保存で打刻と一緒に保存する（打刻と監査記録を分けない）。
   //      「やめる」「問題あり」のときは打刻しない（端末にもサーバにも何も残さない）。
   var _mdPost=null; // 出勤の確定後に聞く朝の温度（MONTHLY-DOCS）
-  if(mdocActive()&&(type==="clockIn"||type==="clockOut"||type==="breakStart")){
-    var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(getCurrentWorkFacility(staffName,nr.date)||_effFn);
+  if(mdocActive()&&(type==="clockIn"||type==="clockOut"||type==="breakStart"||type==="facilityChange")){
+    // 施設変更は移動元の施設（fromFacility）の温度を聞く
+    var _mdFac=(type==="clockIn")?(nr.workFacility||_effFn):(type==="facilityChange"?nr.fromFacility:(getCurrentWorkFacility(staffName,nr.date)||_effFn));
     var _mdPlan=mdocPlan(type,staffName,_mdFac,d);
     if(_mdPlan){
       _mdPlan.pressedAt=d;
@@ -11501,7 +11505,7 @@ async function _execPunch(type,d,meal){
       var _mdFn=facilityName||"";
       var _mdDup=mdocDupPunch(type,_mdName,nr.date,_mdFn);
       if(_mdDup){
-        if(type==="breakStart")showAlert("打刻状態が変わりました。\n画面を確認してもう一度操作してください。");
+        if(type==="breakStart"||type==="facilityChange")showAlert("打刻状態が変わりました。\n画面を確認してもう一度操作してください。");
         else if(_mdDup.type==="clockIn"&&_mdFn&&_mdDup.facilityName&&_mdDup.facilityName!==_mdFn)
           showAlert("他施設で出勤中です。\n\n出勤中："+_mdDup.facilityName+" "+_mdDup.time+"\n\n退勤を押してください。");
         else showAlert("本日の"+TYPE_LABEL[type]+"はすでに打刻済みです。\n\n"+TYPE_LABEL[type]+" "+_mdDup.time+"\n\n修正が必要な場合は管理者へ連絡してください。");
@@ -11652,7 +11656,7 @@ function doPunch(type){
 
 // ===== 施設変更 =====
 // 勤務中に別施設へ移動したことを現在時刻で記録する。
-// 移動時間（出発〜到着）は変更前の施設へ計上されるため、到着後に押してもらう運用。
+// 2026-10-22 から移動元を出る前に押してもらう運用（移動時間は変更後の施設へ計上。移動元の日中の温度をこのとき聞く。MONTHLY-DOCS）。
 function openFacilityChangeModal(){
   if(!tokenValid)return;
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
@@ -11684,7 +11688,7 @@ function openFacilityChangeModal(){
   var msg=document.createElement("div");
   msg.style.cssText="font-size:.88rem;color:#0f172a;line-height:1.6;margin-bottom:14px;white-space:pre-line;";
   // 記録される時刻は押下時点で確定するため、ここでは特定の時刻を約束しない
-  msg.textContent="現在の勤務施設："+cur+"\n移動先の施設を選んでください。\n\n「施設を変更する」を押した時刻を境界として記録します。\n移動時間は「"+cur+"」に計上されます。";
+  msg.textContent="現在の勤務施設："+cur+"\n移動先の施設を選んでください。\n\n「施設を変更する」を押した時刻を境界として記録します。\n移動時間は移動先の施設に計上されます。";
   card.appendChild(msg);
   var sel=document.createElement("select");
   sel.style.cssText="width:100%;font-size:1rem;font-weight:700;padding:10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;color:#0f172a;font-family:inherit;margin-bottom:18px;";

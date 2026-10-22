@@ -728,6 +728,19 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       check("温度を聞かないスタッフ（ココラの松本香織さん）は間抜けでも休憩開始で聞かない", nf.mdocPlan("breakStart", "松本香織", "ココラ", at(DK, 12)) === null);
     }
     {
+      // 施設変更（移動元を出る前に押す）: 移動元の日中の温度を聞く。区分によらない
+      const c = mk([r("開け", "clockIn", 6), r("未登録", "clockIn", 7)], staff);
+      const pf = c.mdocPlan("facilityChange", "開け", FAC, at(DK, 13));
+      check("施設変更: 移動元の日中の温度が未記録なら聞く（衛生・保存食は聞かない）", pf && pf.slot === 1 && pf.hyg === false && pf.hozon === false);
+      check("施設変更: 区分が未登録・閉めの人にも聞く", c.mdocPlan("facilityChange", "未登録", FAC, at(DK, 13)).slot === 1 && c.mdocPlan("facilityChange", "閉め", FAC, at(DK, 13)).slot === 1);
+      const c2 = mk([r("開け", "clockIn", 6), r("日中", "clockOut", 12, { mdoc: { f: FAC, temp: { s: 1, d: [] } } })], staff);
+      check("施設変更: 移動元の日中の温度が記録済みなら何も聞かない", c2.mdocPlan("facilityChange", "開け", FAC, at(DK, 13)) === null);
+      const nf = makeClient({ facilityName: "ココラ" }); nf.staffList = [ST("松本香織", ["open"])];
+      check("施設変更: 温度を聞かないスタッフ（ココラの松本香織さん）には聞かない", nf.mdocPlan("facilityChange", "松本香織", "ココラ", at(DK, 13)) === null);
+      const c3 = mk([r("開け", "clockIn", 6), r("開け", "breakStart", 12)], staff);
+      check("施設変更の見直し: 休憩中なら止める", !!c3.mdocDupPunch("facilityChange", "開け", DK, FAC) && c.mdocDupPunch("facilityChange", "開け", DK, FAC) === null);
+    }
+    {
       const c = mk([r("間抜け", "clockIn", 6)], staff);
       check("休憩開始の見直し: 勤務中なら二重打刻ではない", c.mdocDupPunch("breakStart", "間抜け", DK, FAC) === null);
       const c2 = mk([r("間抜け", "clockIn", 6), r("間抜け", "breakStart", 12)], staff);
@@ -773,12 +786,18 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       bs2: R("bs2", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, temp: { s: 2, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 5 }] } } }),
       bhyg: R("bhyg", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, hyg: { a: "ok" } } }),
       bhz: R("bhz", { type: "breakStart", workFacility: undefined, mdoc: { f: FAC, hozon: { a: "yes", store: D, discard: "2026-09-24" } } }),
+      fok: R("fok", { type: "facilityChange", workFacility: "ココラ", fromFacility: FAC, mdoc: { f: FAC, temp: { s: 1, d: [{ id: U2, k: "f", n: "冷凍庫①", o: 0, v: -18 }] } } }),
+      fs2: R("fs2", { type: "facilityChange", workFacility: "ココラ", fromFacility: FAC, mdoc: { f: FAC, temp: { s: 2, d: [{ id: U2, k: "f", n: "冷凍庫①", o: 0, v: -18 }] } } }),
+      fhz: R("fhz", { type: "facilityChange", workFacility: "ココラ", fromFacility: FAC, mdoc: { f: FAC, hozon: { a: "yes", store: D, discard: "2026-09-24" } } }),
       bend: R("bend", { type: "breakEnd", workFacility: undefined, mdoc: { f: FAC, temp: { s: 1, d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 5 }] } } }),
     };
     const rb = MD.eventsFromRecords(bs, master);
     const be = rb.events.find((e) => e.event_id === "bok:temp");
-    check("サーバ: 休憩開始の日中の温度は受け、打刻の種類は breakStart のまま記録する", rb.events.length === 1 && be && be.slot === 1 && be.punch_type === "breakStart", JSON.stringify(rb.events));
-    check("サーバ: 休憩開始の夕方の温度・衛生・保存食、休憩終了の回答は受けない", rb.rejected === 4, "rejected=" + rb.rejected);
+    check("サーバ: 休憩開始の日中の温度は受け、打刻の種類は breakStart のまま記録する", be && be.slot === 1 && be.punch_type === "breakStart", JSON.stringify(rb.events));
+    const fe = rb.events.find((e) => e.event_id === "fok:temp");
+    check("サーバ: 施設変更の移動元の日中の温度は受け、打刻の種類は facilityChange のまま記録する", fe && fe.slot === 1 && fe.facility === FAC && fe.punch_type === "facilityChange", JSON.stringify(rb.events));
+    check("サーバ: 受けるのは休憩開始・施設変更の日中の温度の2件だけ", rb.events.length === 2, JSON.stringify(rb.events.map((e) => e.event_id)));
+    check("サーバ: 休憩開始・施設変更の夕方の温度・衛生・保存食、休憩終了の回答は受けない", rb.rejected === 6, "rejected=" + rb.rejected);
   }
   {
     const r3 = MD.eventsFromRecords({ ta: R("ta", { mdoc: { f: FAC, temp: { s: 0, at: "2026-10-08T21:11:30.000Z", d: [{ id: U1, k: "r", n: "冷蔵庫①", o: 0, v: 4 }] } } }) }, master);
