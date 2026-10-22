@@ -6698,7 +6698,6 @@ function _renderInner(){
                 +'<button class="btn-punch" onclick="openFacilityChangeModal()" style="width:100%;background:#b45309;font-size:1.05rem;padding:14px 10px;">🔄 施設変更</button>'
                 +'<div style="text-align:center;font-size:.72rem;color:#4b5563;line-height:1.5;margin-top:6px;">'
                   +'<div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">現在の勤務施設：<b>'+esc(_curFac)+'</b></div>'
-                  +'<div>移動時間は変更後の施設に計上されます</div>'
                 +'</div>'
                 +'</div>'
               :"")
@@ -11688,7 +11687,7 @@ function openFacilityChangeModal(){
   var msg=document.createElement("div");
   msg.style.cssText="font-size:.88rem;color:#0f172a;line-height:1.6;margin-bottom:14px;white-space:pre-line;";
   // 記録される時刻は押下時点で確定するため、ここでは特定の時刻を約束しない
-  msg.textContent="現在の勤務施設："+cur+"\n移動先の施設を選んでください。\n\n「施設を変更する」を押した時刻を境界として記録します。\n移動時間は移動先の施設に計上されます。";
+  msg.textContent="現在の勤務施設："+cur+"\n移動先の施設を選んでください。\n\n「施設を変更する」を押した時刻を境界として記録します。";
   card.appendChild(msg);
   var sel=document.createElement("select");
   sel.style.cssText="width:100%;font-size:1rem;font-weight:700;padding:10px;border:1px solid #adb5bd;border-radius:2px;background:#fff;color:#0f172a;font-family:inherit;margin-bottom:18px;";
