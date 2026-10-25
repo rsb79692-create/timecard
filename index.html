@@ -5000,6 +5000,8 @@ var showPaidLeaveForm=false; // 打刻画面の有給申請フォーム表示フ
 var plFormDate=""; // 有給申請フォームの選択日付を render() またぎで保持（後方互換用、未使用）
 var plFormDates=[]; // 有給申請フォームの選択日付配列（複数日対応、render()またぎ保持）
 var plFormMonth=""; // 有給申請フォームで表示中の年月（YYYY-MM、render()またぎ保持）
+var plRangeMode=false; // 有給申請フォーム: true=期間で選ぶ（開始日→終了日の2回タップ）
+var plRangeStart=""; // 期間で選ぶときの開始日（終了日を待っている間だけ値を持つ）
 var plSubmitting=false; // 申請ボタン二重クリック・非同期競合防止フラグ
 var showPaidLeaveHistory=false; // 有給申請一覧の履歴表示切替フラグ
 var plHistMonth=""; // 履歴表示中の対象月（YYYY-MM。取得日基準。初期値は当月=JST）
@@ -6803,13 +6805,14 @@ function _renderInner(){
               var ds=fy+"-"+(fm<10?"0"+fm:fm)+"-"+(day<10?"0"+day:day);
               var isSel=selSet[ds]||false;
               var isExist=existingDates[ds]||false;
+              var isRangeStart=plRangeMode&&plRangeStart===ds;
               var isToday=(ds===today_);
               var isDisabled=isExist&&!isSel; // 既存申請日は選択不可（ただし選択済みはそのまま）
-              var bg=isExist?"#e5e7eb":(isSel?"var(--brand)":"#fff");
-              var color=isExist?"#9ca3af":(isSel?"#fff":"#0f172a");
-              var border=isToday?"2px solid #f59e0b":"1px solid #e5e7eb";
+              var bg=isExist?"#e5e7eb":(isSel?"var(--brand)":(isRangeStart?"var(--brand-soft3)":"#fff"));
+              var color=isExist?"#9ca3af":(isSel?"#fff":(isRangeStart?"var(--brand)":"#0f172a"));
+              var border=isRangeStart?"3px solid var(--brand)":(isToday?"2px solid #f59e0b":"1px solid #e5e7eb");
               var cursor=isDisabled?"default":"pointer";
-              var onclick=isDisabled?"":"plToggleDate('"+ds+"')";
+              var onclick=isDisabled?"":(plRangeMode?"plRangeTap('"+ds+"')":"plToggleDate('"+ds+"')");
               row+='<td style="text-align:center;padding:2px;">'
                 +'<div onclick="'+onclick+'" style="width:32px;height:32px;line-height:32px;margin:0 auto;border-radius:50%;background:'+bg+';color:'+color+';border:'+border+';font-size:.82rem;font-weight:'+(isSel?"700":"400")+';cursor:'+cursor+';user-select:none;box-sizing:border-box;">'+day+'</div>'
                 +'</td>';
@@ -6820,12 +6823,24 @@ function _renderInner(){
             var calHtml='<table style="width:100%;border-collapse:collapse;table-layout:fixed;">'+headerRow+rows+'</table>';
             return '<div style="margin-top:8px;background:#fff;border-radius:2px;padding:14px;border:1px solid #adb5bd;">'
               +'<div style="font-weight:700;font-size:.9rem;margin-bottom:8px;color:#0f172a;">有給申請</div>'
-              +'<div style="font-size:.82rem;color:#475569;margin-bottom:8px;">取得日を選択してください（複数可）'
+              +(function(){
+                var _on='flex:1;background:var(--brand);color:#fff;border:1px solid var(--brand);';
+                var _off='flex:1;background:#fff;color:#475569;border:1px solid #adb5bd;';
+                var _b='border-radius:2px;padding:9px 4px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;';
+                return '<div style="display:flex;gap:6px;margin-bottom:8px;">'
+                  +'<button onclick="plRangeMode=false;plRangeStart=\'\';render();" style="'+(plRangeMode?_off:_on)+_b+'">1日ずつ</button>'
+                  +'<button onclick="plRangeMode=true;plRangeStart=\'\';render();" style="'+(plRangeMode?_on:_off)+_b+'">期間で選ぶ</button>'
+                  +'</div>';
+              })()
+              +'<div style="font-size:.88rem;color:#475569;margin-bottom:8px;">'
+              +(plRangeMode?(plRangeStart?plMd(plRangeStart)+'から<b style="color:var(--brand);">終了日</b>をタップしてください':'<b style="color:var(--brand);">開始日</b>をタップしてください'):'取得日をタップしてください（複数可）')
               +(selCount>0?'<span style="display:inline-block;margin-left:8px;background:var(--brand-soft3);color:var(--brand);font-weight:700;padding:2px 8px;border-radius:10px;font-size:.8rem;">選択中: '+selCount+'日</span>':"")
               +'</div>'
               +'<div style="display:flex;justify-content:center;align-items:center;gap:6px;margin-bottom:8px;">'
-              +'<span style="font-size:.8rem;font-weight:700;color:#b45309;">'+fy+'年'+fm+'月</span>'
-              +'<button onclick="var _p=plFormMonth.split(\'-\');var _y=parseInt(_p[0]);var _m=parseInt(_p[1])+1;if(_m>12){_m=1;_y++;}plFormMonth=_y+\'-\'+(_m<10?\'0\'+_m:\'\'+_m);render();" style="background:none;border:1px solid #adb5bd;border-radius:2px;padding:1px 8px;cursor:pointer;font-size:.85rem;color:#475569;font-family:inherit;line-height:1.4;">＞</button>'
+              // 月送り。＜は当月より前へ戻れないときも場所を残す（月の表示が左右にずれないように）
+              +'<button onclick="var _p=plFormMonth.split(\'-\');var _y=parseInt(_p[0]);var _m=parseInt(_p[1])-1;if(_m<1){_m=12;_y--;}plFormMonth=_y+\'-\'+(_m<10?\'0\'+_m:\'\'+_m);render();" style="background:#fff;border:1px solid #adb5bd;border-radius:2px;min-width:44px;height:36px;cursor:pointer;font-size:.95rem;color:#475569;font-family:inherit;'+(plFormMonth>getJSTMonthRange().first.slice(0,7)?'':'visibility:hidden;')+'">＜</button>'
+              +'<span style="font-size:.88rem;font-weight:700;color:#b45309;min-width:7em;text-align:center;">'+fy+'年'+fm+'月</span>'
+              +'<button onclick="var _p=plFormMonth.split(\'-\');var _y=parseInt(_p[0]);var _m=parseInt(_p[1])+1;if(_m>12){_m=1;_y++;}plFormMonth=_y+\'-\'+(_m<10?\'0\'+_m:\'\'+_m);render();" style="background:#fff;border:1px solid #adb5bd;border-radius:2px;min-width:44px;height:36px;cursor:pointer;font-size:.95rem;color:#475569;font-family:inherit;">＞</button>'
               +'</div>'
               +calHtml
               +(existingDates&&Object.keys(existingDates).length>0?'<div style="font-size:.72rem;color:#9ca3af;margin-top:4px;">グレーの日付は申請済みです</div>':"")
@@ -6833,11 +6848,11 @@ function _renderInner(){
               +(function(){var sid=resolveStaffId(staffName);var vr=sid?getValidRemainDays(sid):null;if(vr===null)return'';var c=vr===0?"#dc2626":vr<selCount?"#d97706":"#166534";return'<div style="font-size:.82rem;margin-top:8px;font-weight:700;color:'+c+';">有効残日数：'+vr+'日</div>';})()
               +'<div style="display:flex;gap:8px;margin-top:10px;">'
               +'<button id="btn-pl-submit" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:10px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">申請する</button>'
-              +'<button onclick="showPaidLeaveForm=false;plFormDates=[];render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
+              +'<button onclick="showPaidLeaveForm=false;plFormDates=[];plRangeStart=\'\';render();" style="flex:0 0 auto;background:#dde1e7;color:#475569;border:1px solid #adb5bd;border-radius:2px;padding:10px 14px;font-size:.85rem;font-weight:700;cursor:pointer;font-family:inherit;">キャンセル</button>'
               +'</div></div>';
           })()
         :'<button onclick="showCorrectionRequestModal(staffName);" style="margin-top:8px;width:100%;background:#f1f5f9;color:#475569;border:1px solid #94a3b8;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">時刻修正申請</button>'
-          +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
+          +'<button onclick="showPaidLeaveForm=true;plFormMonth=\'\';plRangeStart=\'\';render();" style="margin-top:8px;width:100%;background:#f0fdf4;color:#166534;border:1px solid #86efac;border-radius:2px;padding:11px;font-size:.88rem;font-weight:700;cursor:pointer;font-family:inherit;">有給申請</button>'
       )
       +(MEAL_PUNCH_CARD_VISIBLE&&tenantFeature("meals")?_mealConfHtml+_mealHtml:"") // 非表示（MEAL_PUNCH_CARD_VISIBLE）。賄いは退勤時に聞く
       +_mileageHtml
@@ -6848,6 +6863,8 @@ function _renderInner(){
       if(plSubmitBtn)plSubmitBtn.onclick=async function(){
         if(plSubmitting)return; // 二重クリック防止
         // ── 同期チェック（Firebase書き込み前）──
+        // 期間で選ぶの途中（開始日だけ押した状態）で送ると、その日が黙って落ちるので止める
+        if(plRangeMode&&plRangeStart){showAlert(plMd(plRangeStart)+"からの終了日をタップしてください（1日だけなら同じ日をもう一度）");return;}
         if(plFormDates.length===0){showAlert("取得日を1日以上選択してください");return;}
         var reqEmpId=resolveStaffId(staffName);
         if(!reqEmpId){showAlert(resolveStaffIdError(staffName));return;}
@@ -6860,7 +6877,7 @@ function _renderInner(){
         });
         if(dupDates.length>0){showAlert(dupDates.join(", ")+" はすでに有給申請があります");return;}
         // ── 申請前確認 ──
-        showModal({title:"確認",message:"シフト作成者または施設責任者への\n申請・許可は済んでいますか？",okLabel:"はい",onOK:async function(){
+        showModal({title:"確認",message:"取得日："+plDatesLabel(plFormDates)+"\n\nシフト作成者または施設責任者への\n申請・許可は済んでいますか？",okLabel:"はい",onOK:async function(){
         // ── Firebaseから最新の有給残日数を直接取得してブロック判定 ──
         plSubmitting=true;
         try{
@@ -10753,7 +10770,7 @@ function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?n
 function goHome(){
   faceCamClose();   // ★ 打刻直後に「もどる」を押しても、スタッフ一覧の上に表示を残さない
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
-  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];staffNotifOpen=false;
+  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;staffNotifOpen=false;
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
   screen="home";render();
 }
@@ -11781,7 +11798,7 @@ function _sandboxLoad(name){
 }
 function _sandboxResetUiState(){
   if(punchTimer){clearTimeout(punchTimer);punchTimer=null;}
-  selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];
+  selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;
   punchMsg=null;staffNotifOpen=false;staffUploadFile=null;staffUploadMsg=null;
   mealFormOpen=false;monthPunchOpen=false;mealFormMonth="";
 }
@@ -16831,7 +16848,57 @@ function isoToJSTMonthDayTime(isoStr){
   return mo+"/"+da+" "+hh+":"+mi;
 }
 
-// \u6709\u7D66\u7533\u8ACB\u30D5\u30A9\u30FC\u30E0\u306E\u30AB\u30EC\u30F3\u30C0\u30FC\u3067\u65E5\u4ED8\u30C8\u30B0\u30EB\uFF08\u9078\u629E/\u89E3\u9664\uFF09
+// ===== PL-RANGE-BEGIN =====
+// 期間で選ぶ: 1回目のタップで開始日、2回目で終了日。間の日をすべて選択に加える（申請済みの日は飛ばす）。
+// 開始日と同じ日をもう一度タップするとその1日を加える。終了日が開始日より前でも入れ替えて扱う。31日を超える期間は止める。
+var PL_RANGE_MAX_DAYS=31;
+function plRangeTap(ds){
+  if(!plRangeStart){plRangeStart=ds;render();return;}
+  if(plAddDateRange([],plRangeStart,ds,null).length>PL_RANGE_MAX_DAYS){
+    plRangeStart="";render();
+    showAlert("期間は"+PL_RANGE_MAX_DAYS+"日以内にしてください");
+    return;
+  }
+  plFormDates=plAddDateRange(plFormDates,plRangeStart,ds,plExistingLeaveDateSet(staffName));
+  plRangeStart="";
+  render();
+}
+// "YYYY-MM-DD" → "M/D"
+function plMd(ds){var p=String(ds||"").split("-");return p.length===3?parseInt(p[1],10)+"/"+parseInt(p[2],10):String(ds||"");}
+// 確認画面用の取得日の表示。3日までは並べ、それより多いときは最初〜最後と日数（飛び石でも日数は実数）
+function plDatesLabel(dates){
+  var s=dates.slice().sort();
+  if(s.length<=3)return s.map(plMd).join("、")+"（"+s.length+"日）";
+  var all=plAddDateRange([],s[0],s[s.length-1],null).length;
+  return plMd(s[0])+"〜"+plMd(s[s.length-1])+(all===s.length?"（"+s.length+"日）":"のうち"+s.length+"日");
+}
+// 開始日〜終了日（YYYY-MM-DD、両端を含む）のうち exclude にない日を dates に足した新しい配列を返す（重複は足さない）。
+function plAddDateRange(dates,from,to,exclude){
+  var out=dates.slice();
+  var ymd=/^\d{4}-\d{2}-\d{2}$/;
+  if(!ymd.test(String(from))||!ymd.test(String(to)))return out; // 形の崩れた日付は足さない
+  if(from>to){var t=from;from=to;to=t;}
+  var has={};out.forEach(function(d){has[d]=true;});
+  var p=from.split("-");var cur=new Date(Date.UTC(+p[0],+p[1]-1,+p[2]));
+  for(var i=0;i<400;i++){
+    var d=cur.toISOString().slice(0,10);
+    if(d>to)break;
+    if(!has[d]&&!(exclude&&exclude[d])){out.push(d);has[d]=true;}
+    cur.setUTCDate(cur.getUTCDate()+1);
+  }
+  return out;
+}
+// 本人の申請中・承認済みの取得日（申請フォームでグレーにする日と同じ条件）
+function plExistingLeaveDateSet(name){
+  var set={};
+  paidLeaveRequests.forEach(function(r){
+    if(r.staffName===name&&r.status!=="rejected"){getLeaveDates(r).forEach(function(d){set[d]=true;});}
+  });
+  return set;
+}
+// ===== PL-RANGE-END =====
+
+// 有給申請フォームのカレンダーで日付トグル（選択/解除）
 function plToggleDate(ds){
   var idx=plFormDates.indexOf(ds);
   if(idx>=0){plFormDates.splice(idx,1);}
@@ -17691,8 +17758,10 @@ function ensureProxyLeaveModal(){
     +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">対象スタッフ</label>'
     +'<select id="pl-proxy-staff" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;"></select>'
     +'<div style="font-size:.66rem;color:#8496a7;margin-top:3px;">※社員番号が未設定・重複しているスタッフは選択できません</div></div>'
-    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">有給日</label>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">有給日（期間のときは開始日）</label>'
     +'<input type="date" id="pl-proxy-date" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
+    +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">終了日（期間で申請するとき）</label>'
+    +'<input type="date" id="pl-proxy-date-end" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:monospace;outline:none;box-sizing:border-box;"></div>'
     +'<div><label style="display:block;font-size:11px;font-weight:600;color:#475569;margin-bottom:3px;">理由・メモ（任意）</label>'
     +'<textarea id="pl-proxy-note" rows="2" style="width:100%;font-size:13px;padding:7px 8px;border:1px solid #adb5bd;border-radius:2px;background:#fff;font-family:inherit;outline:none;box-sizing:border-box;resize:vertical;" placeholder="例：本人から電話連絡あり"></textarea></div>'
     +'<label style="display:flex;align-items:center;gap:8px;background:#fef9c3;border:1px solid #fde047;border-radius:4px;padding:9px 11px;font-size:.8rem;color:#713f12;cursor:pointer;">'
@@ -17724,6 +17793,7 @@ function openProxyLeaveModal(){
       }).join("");
   var sel=document.getElementById("pl-proxy-staff");if(sel)sel.innerHTML=opts;
   var dt=document.getElementById("pl-proxy-date");if(dt)dt.value="";
+  var dte=document.getElementById("pl-proxy-date-end");if(dte)dte.value="";
   var nt=document.getElementById("pl-proxy-note");if(nt)nt.value="";
   var ap=document.getElementById("pl-proxy-approve");if(ap)ap.checked=false;
   _proxyLeaveModalOpen=true;
@@ -17739,24 +17809,47 @@ function submitProxyLeaveRequest(){
   if(_proxyLeaveSubmitting||paidLeaveBalanceSaving)return;
   var name=((document.getElementById("pl-proxy-staff")||{}).value||"").trim();
   var date=((document.getElementById("pl-proxy-date")||{}).value||"").trim();
+  var dateEnd=((document.getElementById("pl-proxy-date-end")||{}).value||"").trim();
   var note=((document.getElementById("pl-proxy-note")||{}).value||"").trim();
   var doApprove=!!((document.getElementById("pl-proxy-approve")||{}).checked);
   // ── バリデーション ──
   if(!name){showAlert("対象スタッフを選択してください");return;}
   if(!date){showAlert("有給日を入力してください");return;}
+  // 終了日があれば有給日〜終了日の全日（両端を含む）を1件の申請にする
+  if(dateEnd&&dateEnd<date){showAlert("終了日は有給日より後の日付にしてください");return;}
+  var dates=plAddDateRange([],date,dateEnd||date,null).sort();
+  if(dates.length===0){showAlert("有給日を正しく入力してください");return;}
+  if(dates.length>31){showAlert("期間は31日以内にしてください");return;}
+  var dispDates=dates.length===1?date:dates[0]+"〜"+dates[dates.length-1]+"（"+dates.length+"日）";
   // 社員番号解決（空白・重複・氏名重複は null → エラー。既存ヘルパを再利用）
   var staffId=resolveStaffId(name);
   if(!staffId){showAlert(resolveStaffIdError(name));return;}
   // 重複申請チェック（本人申請と同一ロジック）
-  var dup=paidLeaveRequests.find(function(r){
-    return r.staffName===name&&getLeaveDates(r).indexOf(date)>=0&&r.status!=="rejected";
-  });
-  if(dup){showAlert(date+" はすでに有給申請があります");return;}
-  // 即承認時のみ残日数不足をブロック（既存承認と同じ getValidRemainDays を使用）
-  if(doApprove){
+  var _exist=plExistingLeaveDateSet(name);
+  var dupDates=dates.filter(function(d){return _exist[d];});
+  if(dupDates.length>0){showAlert(dupDates.join(", ")+" はすでに有給申請があります");return;}
+  // 即承認時は残日数不足をブロック（既存承認と同じ getValidRemainDays を使用）。
+  // 期間（2日以上）の申請は承認待ちでも止める（承認時の FIFO 消化は不足でも止まらないため、残より多い日数を登録させない）
+  if(doApprove||dates.length>1){
     var remain=getValidRemainDays(staffId);
-    if(remain<1){showAlert("有給残日数が不足しているため即承認できません（残"+remain+"日）。申請のみ登録するか、有給を付与してください。");return;}
+    if(remain<dates.length){showAlert(doApprove
+      ?"有給残日数が不足しているため即承認できません（必要"+dates.length+"日／残"+remain+"日）。申請のみ登録するか、有給を付与してください。"
+      :"有給残日数が不足しています（必要"+dates.length+"日／残"+remain+"日）。期間を短くするか、有給を付与してください。");return;}
   }
+  // 期間（2日以上）のときは、休みの日も含めた日数を保存前に確かめる
+  if(dates.length>1){
+    showConfirm(name+"さんの有給を "+plDatesLabel(dates)+" で"+(doApprove?"申請・承認":"申請")+"します。\n期間中の休みの日も有給の日数に入ります。よろしいですか？",_save);
+    return;
+  }
+  _save();
+  function _save(){
+  if(_proxyLeaveSubmitting||paidLeaveBalanceSaving)return;
+  if(!_proxyLeaveModalOpen)return; // 確認中に Esc で代理申請を閉じていたら保存しない
+  // 確認を待つ間に他の申請・残日数が変わっていないか、保存直前にもう一度確かめる
+  var _exist2=plExistingLeaveDateSet(name);
+  var dupDates2=dates.filter(function(d){return _exist2[d];});
+  if(dupDates2.length>0){showAlert(dupDates2.join(", ")+" はすでに有給申請があります");return;}
+  if((doApprove||dates.length>1)&&getValidRemainDays(staffId)<dates.length){showAlert("有給残日数が不足しています（必要"+dates.length+"日／残"+getValidRemainDays(staffId)+"日）");return;}
   // ── 申請データ生成（本人申請と同形 + 代理識別フィールド）──
   var reqId="pl"+Date.now();
   var nowIso=new Date().toISOString();
@@ -17764,8 +17857,8 @@ function submitProxyLeaveRequest(){
     id:reqId,
     staffId:staffId,
     staffName:name,
-    leaveDates:[date],
-    date:date,
+    leaveDates:dates,
+    date:dates[0],
     status:"pending",
     createdAt:nowIso,
     approvedBy:"",
@@ -17788,9 +17881,9 @@ function submitProxyLeaveRequest(){
       _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
       var btn=document.querySelector('.btn-pl-approve[data-plid="'+reqId+'"]');
       if(btn){btn.click();}
-      else{showAlert("代理申請を登録しました（"+date+"）。一覧から承認してください。");}
+      else{showAlert("代理申請を登録しました（"+dispDates+"）。一覧から承認してください。");}
     }else{
-      showAlert("管理者代理で有給申請を登録しました（"+date+"）");
+      showAlert("管理者代理で有給申請を登録しました（"+dispDates+"）");
       _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
     }
   }).catch(function(e){
@@ -17802,6 +17895,7 @@ function submitProxyLeaveRequest(){
     console.error("[PaidLeave] proxy submit error",e);
     showAlert("代理申請の保存に失敗しました。通信状態を確認して再度お試しください。");
   });
+  }
 }
 
 // 有給付与登録モーダル・代理申請モーダル・付与日数修正モーダル: Escキーで閉じる（body直下固定なので常時有効）
