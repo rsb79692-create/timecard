@@ -59,7 +59,7 @@ async function main() {
     const title = await page.evaluate(() => document.title);
     check("マンテール: タイトルがマンテール", title.indexOf("マンテール") >= 0 && title.indexOf("穂乃味") < 0, title);
     const manifest = await page.evaluate(() => { const l = document.querySelector('link[rel="manifest"]'); return l ? l.getAttribute("href") : null; });
-    check("マンテール: 施設URLには manifest を置かない（ホーム画面に追加すると施設URLのまま起動する）", manifest === null, String(manifest));
+    check("マンテール: 施設URLには manifest を置かない（Android 以外。Android は test-tenant-manifest.js で確認）", manifest === null, String(manifest));
     await ctx.close();
   }
 

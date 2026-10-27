@@ -13,6 +13,10 @@
 //   穂乃味（?c が無い）は従来どおり manifest.json。マンテールなど他社は会社の manifest。
 //   他社で資格情報つきの URL（施設・管理者・閲覧用・デモ・スタッフテスト・システム管理者）は manifest を置かない＝ホーム画面に追加すると開いている URL のまま起動する
 //   （会社の manifest の start_url は ?c=<会社> だけなので、施設トークン・管理者トークンが落ちる）。
+//   例外: Android の施設URL（token だけ）は manifest を置く（2026-10-27）。manifest が無いと Chrome は「インストール」を出せず
+//   ショートカットしか作れない（施設の打刻端末をアプリにできない）。Android のインストール済みアプリは Chrome と端末保存を共有するので、
+//   start_url（?c=<会社>）で起動しても、交換に成功した施設トークン（TLS facilityToken）で施設端末として入れる。
+//   iPhone・iPad はホーム画面アプリの保存領域が Safari と別で施設トークンが引き継がれないため、従来どおり置かない。PC は必要が無いので従来どおり。
 (function(){
   var q=null,c="";
   try{q=new URLSearchParams(location.search);c=q.get("c")||"";
@@ -21,6 +25,10 @@
   if(c&&c!=="honomi"){
     var cred=false;
     try{["token","admin","viewer","demo","staffDemo","sys"].forEach(function(k){if(q.get(k)!==null)cred=true;});}catch(e){cred=false;}
+    try{
+      var kioskOnly=q.get("token")!==null&&["admin","viewer","demo","staffDemo","sys"].every(function(k){return q.get(k)===null;});
+      if(cred&&kioskOnly&&/Android/i.test(navigator.userAgent||""))cred=false;
+    }catch(e){}
     // 会社の manifest は manifest-<会社ID>.json（TENANT_CONFIGS の manifest と同じ名前にする）。不正な会社IDには置かない。
     href=(cred||!/^[a-z][a-z0-9]{1,23}$/.test(c))?"":("manifest-"+c+".json");
   }
@@ -230,7 +238,8 @@ function tenantBrandBarHtml(){
 (function(){
   if(TENANT.legacy)return;
   try{
-    var m=document.querySelector('link[rel="manifest"]');if(m)m.setAttribute("href",TENANT.manifest);
+    // ★ 存在しない会社では manifest を外す（穂乃味の manifest へ差し替えると、そのURLから穂乃味のアプリとしてインストールされる）
+    var m=document.querySelector('link[rel="manifest"]');if(m){if(TENANT_INVALID)m.parentNode.removeChild(m);else m.setAttribute("href",TENANT.manifest);}
     var ti=document.querySelector('link[rel="apple-touch-icon"]');if(ti)ti.setAttribute("href",TENANT.touchIcon);
     var fi=document.querySelector('link[rel="icon"]');if(fi)fi.setAttribute("href",TENANT.touchIcon);
     var tc=document.querySelector('meta[name="theme-color"]');if(tc)tc.setAttribute("content",TENANT.themeColor);

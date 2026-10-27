@@ -57,7 +57,7 @@
 | 退勤前の賄い確認 | [`meal-clockout.md`](docs/features/meal-clockout.md) | `node scripts/test-meal-clockout.js` |
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |
 | 施設端末の持ち出し検知 | [`device-watch.md`](docs/features/device-watch.md) | `node scripts/test-device-watch.js` |
-| マルチテナント（会社間分離） | [`multitenant.md`](docs/features/multitenant.md) | `node scripts/test-multitenant.js`（Rules 変更時は `tests/rules`、画面変更時は `tests/visual/*`） |
+| マルチテナント（会社間分離） | [`multitenant.md`](docs/features/multitenant.md) | `node scripts/test-multitenant.js` / `node scripts/test-tenant-manifest.js`（Rules 変更時は `tests/rules`、画面変更時は `tests/visual/*`） |
 | 従業員・施設マスタの保存（1件単位） | [`master-save.md`](docs/features/master-save.md) | `node scripts/test-staff-save.js` |
 | CSV一括登録（施設・従業員） | [`csv-import.md`](docs/features/csv-import.md) | `node scripts/test-csv-import.js` |
 | 有給残日数CSVの一括登録 | [`paid-leave-import.md`](docs/features/paid-leave-import.md) | `node scripts/test-paid-leave-import.js` |
