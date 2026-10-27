@@ -12537,7 +12537,8 @@ var CSVIMP=(function(){
   var MAX_BYTES=1024*1024,MAX_ROWS=3000;
   var SPEC={
     fac:{label:"施設",cols:["施設コード","施設名","正式名称","郵便番号","住所","電話番号","状態"]},
-    staff:{label:"従業員",cols:["社員コード","姓","名","ふりがな","在籍状態","所属部署","役職","施設名","雇用区分","入社日","退職日"]},
+    // opt: 無くてもよい列（在れば読む）。週所定労働日数は登録済みの人も、氏名と社員コードが一致すればこの項目だけ更新する
+    staff:{label:"従業員",cols:["社員コード","姓","名","ふりがな","在籍状態","所属部署","役職","施設名","雇用区分","入社日","退職日"],opt:["週所定労働日数"]},
     // 有給残日数（paid-leave-import.md）。社員番号・年間出勤日数・付与日数の列は空欄可（列そのものは必須）
     pl:{label:"有給残日数",cols:["社員番号","氏名","有給残日数","年間出勤日数","直近付与日数","前回付与日数"]}
   };
@@ -12601,8 +12602,9 @@ var CSVIMP=(function(){
     head.forEach(function(h,i){
       if(h==="")return;
       if(has(idx,h)){if(dup.indexOf(h)<0)dup.push(h);return;}
-      idx[h]=i;if(spec.cols.indexOf(h)<0)extra.push(h);
+      idx[h]=i;if(spec.cols.indexOf(h)<0&&(spec.opt||[]).indexOf(h)<0)extra.push(h);
     });
+    var readCols=spec.cols.concat((spec.opt||[]).filter(function(c){return has(idx,c);}));
     if(dup.length)return {ok:false,error:"見出しに同じ列名が重複しています："+dup.join("、")};
     var missing=spec.cols.filter(function(c){return !has(idx,c);});
     if(missing.length){
@@ -12618,7 +12620,8 @@ var CSVIMP=(function(){
       if(isBlank(cells))continue; // Excel が出力する空行は無視する（エラーにしない）
       if(body.length>=MAX_ROWS)return {ok:false,error:"行数が多すぎます（"+MAX_ROWS+"行まで）"};
       var v={},shape="";
-      spec.cols.forEach(function(c){var x=cells[idx[c]];v[c]=x===undefined?"":String(x).trim();});
+      (spec.opt||[]).forEach(function(c){v[c]="";}); // 無い列は空欄（＝変更しない）扱い
+      readCols.forEach(function(c){var x=cells[idx[c]];v[c]=x===undefined?"":String(x).trim();});
       if(cells.length<head.length)shape="列の数が見出しより少なくなっています（途中で列が欠けていないか確認してください）";
       else if(cells.slice(head.length).some(function(x){return String(x).trim()!=="";}))shape="見出しの無い列に値が入っています";
       body.push({line:rows[r].line,v:v,shape:shape});
@@ -12730,8 +12733,8 @@ var CSVIMP=(function(){
   function validateStaff(rows,existing,facilities,depts,todayYmd,fileWarnings){
     var ex=(Array.isArray(existing)?existing:[]).filter(isObj);
     var exByName=D(),exByNorm=D(),exIds=D();
-    ex.forEach(function(s){
-      if(typeof s.name==="string"){exByName[s.name]=true;exByNorm[norm(s.name)]=s.name;}
+    ex.forEach(function(s,i){
+      if(typeof s.name==="string"){(exByName[s.name]=exByName[s.name]||[]).push(i);exByNorm[norm(s.name)]=s.name;}
       var id=String(s.employeeId||"").trim();
       if(id){(exIds[id]=exIds[id]||[]).push(String(s.name||""));}
     });
@@ -12752,7 +12755,14 @@ var CSVIMP=(function(){
       var v=row.v,ln=v["姓"],fn=v["名"],name=ln+fn;
       var it=newItem(row,name||"（氏名なし）");
       if(row.shape)add(it,"error",row.shape);
-      cellErrors(v,SPEC.staff.cols).forEach(function(e){add(it,"error",e);});
+      cellErrors(v,SPEC.staff.cols.concat(SPEC.staff.opt)).forEach(function(e){add(it,"error",e);});
+      // 週所定労働日数: 空欄＝設定しない。1〜5（5＝5日以上）。スタッフ管理の選択肢と同じ値だけを受け付ける
+      var wwd=null,ws=String(v["週所定労働日数"]||"").normalize("NFKC").replace(/\s+/g,"");
+      if(ws){
+        var wm=/^週?([1-5])日?(以上)?$/.exec(ws);
+        if(!wm||(wm[2]&&wm[1]!=="5"))add(it,"error","週所定労働日数「"+v["週所定労働日数"]+"」は 1〜5 の数字で入力してください（5＝5日以上）");
+        else wwd=+wm[1];
+      }
       if(!ln)add(it,"error","姓が空欄です");
       else if(KEY_BAD_RE.test(name))add(it,"error","氏名に使えない文字（. # $ [ ] /）が含まれています");
       else{
@@ -12808,10 +12818,25 @@ var CSVIMP=(function(){
         if(!/^[A-Za-z0-9_-]+$/.test(id))add(it,"warn","社員コードに英数字・ハイフン・アンダースコア以外が含まれています（月別出勤日数などで使えません）");
       }
       if(hasErr(it))return it;
-      // 既存スタッフとの照合。★ 同じ氏名は上書きしない（CSVに本人を確実に特定するIDが無いため）
+      // 既存スタッフとの照合。★ 同じ氏名は上書きしない（CSVに本人を確実に特定するIDが無いため）。
+      //   例外は週所定労働日数だけ: 同じ氏名が1人だけで、社員コードも空欄でなく一致するときに限り、この項目だけを更新する（2026-10-27 ユーザー指示）
       if(exByName[name]){
         it.action="skip";
-        add(it,"info","同じ氏名のスタッフが登録済みのため取り込みません（上書きしません。変更はスタッフ管理画面で行ってください）");
+        var hit=exByName[name],cs=hit.length===1?ex[hit[0]]:null;
+        if(wwd==null){
+          add(it,"info","同じ氏名のスタッフが登録済みのため取り込みません（上書きしません。変更はスタッフ管理画面で行ってください）");
+          return it;
+        }
+        if(!cs){add(it,"warn","同じ氏名のスタッフが複数登録されているため、週所定労働日数を更新しません（スタッフ管理画面で設定してください）");return it;}
+        if(!id||String(cs.employeeId||"").trim()!==id){
+          add(it,"warn","登録済みのスタッフと社員コードが一致しないため、週所定労働日数を更新しません（CSV「"+(id||"空欄")+"」／登録済み「"+(String(cs.employeeId||"").trim()||"空欄")+"」）");
+          return it;
+        }
+        var cw=parseInt(cs.weeklyWorkDays,10);
+        if(cw===wwd){add(it,"info","登録済みで週所定労働日数も同じため、変更しません");return it;}
+        it.action="update";it.idx=hit[0];
+        it.changes={weeklyWorkDays:{from:(cw>=1&&cw<=5)?cw:null,to:wwd}};
+        add(it,"info","登録済みのスタッフです。週所定労働日数だけを更新します（ほかの項目は変えません）");
         return it;
       }
       if(has(exByNorm,norm(name))){
@@ -12824,6 +12849,7 @@ var CSVIMP=(function(){
         hireDate:hd?hd.store:"",location:loc,dept:v["所属部署"],employmentType:etv,role:"",status:st,
         canSupportWork:false,mealRequired:false};
       if(st==="退職")it.rec.retireDate=rd.store;
+      if(wwd!=null)it.rec.weeklyWorkDays=wwd;
       return it;
     });
     return finish(items,fileWarnings);
@@ -12980,7 +13006,10 @@ var CSVIMP=(function(){
   }
   function buildStaffPatch(res,cur){
     var patch={},next=cur.next;
-    res.items.forEach(function(it){if(it.action==="add")patch[String(next++)]=it.rec;});
+    res.items.forEach(function(it){
+      if(it.action==="add")patch[String(next++)]=it.rec;
+      else if(it.action==="update")patch[cur.keys[it.idx]+"/weeklyWorkDays"]=it.changes.weeklyWorkDays.to; // 更新は週所定労働日数のパスだけ
+    });
     return patch;
   }
   return {MAX_BYTES:MAX_BYTES,SPEC:SPEC,decode:decode,parse:parse,prepare:prepare,parseDate:parseDate,
@@ -13129,7 +13158,7 @@ function csvImpCommit(kind){
     // 4) 登録後を取り直して確認し、端末側の一覧も最新にする。
     //    ★ ここから先は書き込みが成功している。例外が出ても「何も登録していません」とは出さない。
     var c=fresh.counts;
-    st.done={add:c.add,update:c.update,skip:c.skip,error:c.error,verified:false,lost:[],pinUnset:[],pinLeft:[]};
+    st.done={add:c.add,update:c.update,skip:c.skip,error:c.error,verified:false,lost:[],pinUnset:[],pinLeft:[],wwdBad:[]};
     try{
     var added=fresh.items.filter(function(it){return it.action==="add";}).map(function(it){return it.name;});
     var after=await authFetch(FB_URL+path).then(function(x){return x.ok?x.json():undefined;}).catch(function(){return undefined;});
@@ -13138,6 +13167,15 @@ function csvImpCommit(kind){
     //   追加の添字は「取り直した時点の末尾の次」なので、その直後に別の端末が同じ添字へ追加していると上書きしうる（検出して知らせる）。
     var afterNames=al.ok?al.list.map(function(x){return x.name;}):[];
     var verified=al.ok&&added.every(function(nm){return afterNames.indexOf(nm)>=0;});
+    // 週所定労働日数の更新は、書いた添字の行が登録直前と同じ人で、値が入っていることまで確かめる
+    if(kind==="staff"){
+      var aIdx=al.ok?al.keys.reduce(function(o,k,i){o[k]=al.list[i];return o;},{}):{};
+      fresh.items.forEach(function(it){
+        if(it.action!=="update")return;
+        var r=aIdx[cur.keys[it.idx]];
+        if(!r||r.name!==it.name||parseInt(r.weeklyWorkDays,10)!==it.changes.weeklyWorkDays.to){verified=false;st.done.wwdBad.push(it.name);}
+      });
+    }
     var lost=al.ok?cur.list.filter(function(x){return afterNames.indexOf(x.name)<0;}).map(function(x){return String(x.name||"");}):[];
     if(kind==="fac"){
       if(al.ok)masterFacilities=al.list;
@@ -13148,7 +13186,12 @@ function csvImpCommit(kind){
       }
       applyFacilitiesLocal();
     } else {
-      staffList=al.ok?al.list:cur.list.concat(fresh.items.filter(function(it){return it.action==="add";}).map(function(it){return it.rec;}));
+      if(al.ok)staffList=al.list;
+      else{
+        staffList=cur.list.slice();
+        fresh.items.forEach(function(it){if(it.action==="update")staffList[it.idx]=Object.assign({},staffList[it.idx],{weeklyWorkDays:it.changes.weeklyWorkDays.to});});
+        staffList=staffList.concat(fresh.items.filter(function(it){return it.action==="add";}).map(function(it){return it.rec;}));
+      }
       _lsSet("tc5_staff",JSON.stringify(staffList));
     }
     st.done.verified=verified;st.done.lost=lost;
@@ -13195,6 +13238,7 @@ function csvImpCardHtml(kind,title){
     h+='<div style="margin-top:12px;font-size:.95rem;font-weight:700;color:#166534;">登録しました'+(d.verified?'':'（登録後の確認ができませんでした。画面を再読み込みして一覧を確認してください）')+'</div>'
       +tiles([["新規登録",d.add,"#f0fdf4"],["更新",d.update],["スキップ",d.skip],["失敗（エラーで未登録）",d.error,d.error?"#fff1f2":""]])
       +(d.error?'<div style="font-size:.9rem;font-weight:700;color:#b91c1c;">登録しなかった行（エラー。CSVを直して選び直すと、この行だけが登録されます）</div>'+msgLines(res.items,"error","#b91c1c"):"")
+      +(d.wwdBad&&d.wwdBad.length?'<div style="background:#fff1f2;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;color:#b91c1c;margin-bottom:10px;">次の人の週所定労働日数を登録後に確認できませんでした：'+esc(d.wwdBad.join("、"))+'。スタッフ管理画面で、①この人たちの週所定労働日数、②氏名が空欄の行ができていないか、を確認してください。</div>':"")
       +(d.lost.length?'<div style="background:#fff1f2;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;color:#b91c1c;margin-bottom:10px;">登録前にあった次の'+(kind==="fac"?'施設':'スタッフ')+'が見当たりません（別の端末で同時に保存された可能性があります）：'+esc(d.lost.join("、"))+'。一覧を確認し、必要なら登録し直してください。</div>':"")
       +'<div style="font-size:.9rem;color:#475569;margin-bottom:10px;">他の端末で開いたままの管理画面は、念のため再読み込みしてから編集してください（更新前の版の画面から保存すると、今回の登録分が消えることがあります）。</div>'
       +(d.pinUnset.length?'<div style="background:#fffbeb;border:1px solid #fcd34d;padding:10px 12px;font-size:.92rem;color:#92400e;margin-bottom:10px;">PIN未設定：'+d.pinUnset.length+'名。スタッフ管理の各行から PIN を設定してください（本人が初回打刻時に設定することもできます）。</div>':"")
@@ -13211,15 +13255,16 @@ function csvImpCardHtml(kind,title){
     h+='<div style="font-size:.92rem;font-weight:700;color:#0f172a;margin-top:6px;">登録・更新する内容</div><ul style="margin:6px 0 12px;padding-left:20px;font-size:.9rem;color:#0f172a;line-height:1.7;">'
       +planned.map(function(it){
         var r=it.rec,t;
-        if(it.action==="update")t="更新："+it.name+"　"+Object.keys(it.changes).map(function(k){return ({code:"施設コード",formalName:"正式名称",postalCode:"郵便番号",address:"住所",tel:"電話番号"})[k]+(it.changes[k].from?"「"+it.changes[k].from+"」":"（空欄）")+"→「"+it.changes[k].to+"」";}).join("／");
+        if(it.action==="update"&&kind==="staff"){var wc=it.changes.weeklyWorkDays;t="更新："+it.name+"　週所定労働日数 "+(wc.from?"「"+weeklyWorkDaysLabel(wc.from)+"」":"（未設定）")+"→「"+weeklyWorkDaysLabel(wc.to)+"」";}
+        else if(it.action==="update")t="更新："+it.name+"　"+Object.keys(it.changes).map(function(k){return ({code:"施設コード",formalName:"正式名称",postalCode:"郵便番号",address:"住所",tel:"電話番号"})[k]+(it.changes[k].from?"「"+it.changes[k].from+"」":"（空欄）")+"→「"+it.changes[k].to+"」";}).join("／");
         else if(kind==="fac")t="新規："+r.name+(r.formalName?"（"+r.formalName+"）":"");
-        else t="新規："+r.name+"（"+r.yomi+"）　"+[r.employeeId?"社員コード "+r.employeeId:"社員コード未設定",r.location||"施設未設定",r.employmentType,r.status,r.hireDate?"入社 "+r.hireDate:""].filter(Boolean).join("／");
+        else t="新規："+r.name+"（"+r.yomi+"）　"+[r.employeeId?"社員コード "+r.employeeId:"社員コード未設定",r.location||"施設未設定",r.employmentType,r.status,r.hireDate?"入社 "+r.hireDate:"",r.weeklyWorkDays?weeklyWorkDaysLabel(r.weeklyWorkDays):""].filter(Boolean).join("／");
         return '<li>'+esc(it.line+"行目　"+t)+'</li>';
       }).join("")+'</ul>';
   }
   if(st.failMsg)h+='<div style="background:#fff1f2;color:#b91c1c;border:1px solid #fecdd3;padding:10px 12px;font-size:.92rem;margin-bottom:10px;">'+esc(st.failMsg)+'</div>';
   if(busy)h+='<div style="font-size:.95rem;font-weight:700;color:#475569;">登録中…</div>';
-  else if(planned.length)h+='<button onclick="csvImpCommit(\''+kind+'\')" '+btn+'>登録する（新規'+c.add+'件'+(c.update?'・更新'+c.update+'件':'')+'）</button> <button onclick="csvImpClear(\''+kind+'\')" '+sub+'>やめる</button>';
+  else if(planned.length)h+='<button onclick="csvImpCommit(\''+kind+'\')" '+btn+'>登録する（'+[c.add?'新規'+c.add+'件':'',c.update?'更新'+c.update+'件':''].filter(Boolean).join('・')+'）</button> <button onclick="csvImpClear(\''+kind+'\')" '+sub+'>やめる</button>';
   else h+='<div style="font-size:.92rem;color:#475569;margin-bottom:8px;">登録・更新する行はありません。</div><button onclick="csvImpClear(\''+kind+'\')" '+sub+'>閉じる</button>';
   return h+'</div>';
 }
@@ -13260,7 +13305,7 @@ function csvImpHtml(){
   if(!csvImpCanWrite())return '<div class="admin-card"><div class="admin-title">CSV一括登録</div><div style="font-size:.92rem;color:#475569;">この画面では使えません。管理者PINまたは管理者URLで入ってください。</div></div>';
   return '<div class="admin-card"><div class="admin-title">CSV一括登録</div>'
     +'<div style="font-size:.92rem;color:#475569;line-height:1.7;">①施設 → ②従業員 → ③有給残日数 の順に登録してください。ファイルを選ぶと内容を確認できます（この時点では登録されません）。</div></div>'
-    +csvImpCardHtml("fac","① 施設CSV")+csvImpCardHtml("staff","② 従業員CSV")
+    +csvImpCardHtml("fac","① 施設CSV")+csvImpCardHtml("staff","② 従業員CSV（週所定労働日数の列は任意）")
     +csvImpCardHtml("pl","③ 有給残日数CSV（列：社員番号・氏名・有給残日数・年間出勤日数・直近付与日数・前回付与日数）");
 }
 // ===== 資料管理 =====

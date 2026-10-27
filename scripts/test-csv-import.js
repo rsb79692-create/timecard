@@ -215,6 +215,52 @@ const DEPTS = ["調理"];
   check("組み込み名でも例外にならず通常どおり判定", rr.items[1].action === "add");
 }
 
+console.log("■ 従業員CSV: 週所定労働日数の列（任意）");
+{
+  const H = STAFF_HEAD + ",週所定労働日数";
+  const existing = [
+    { name: "既存太郎", employeeId: "900", weeklyWorkDays: 3 },  // 0
+    { name: "既存花子", employeeId: "901" },                     // 1
+    { name: "既存次郎", employeeId: "" },                        // 2 社員コード未設定
+    { name: "重複一郎", employeeId: "903" }, { name: "重複一郎", employeeId: "904" }, // 3,4 同名が複数
+    { name: "既存三郎", employeeId: "905", weeklyWorkDays: 5 },  // 5
+  ];
+  const t = H + "\r\n"
+    + "900,既存,太郎,きそん たろう,在籍,,,あんず苑,パート,,,5\r\n"     // 2 更新 3→5
+    + "901,既存,花子,きそん はなこ,在籍,,,あんず苑,パート,,,週4日\r\n" // 3 更新 未設定→4
+    + "902,既存,次郎,きそん じろう,在籍,,,あんず苑,パート,,,2\r\n"     // 4 登録済みの社員コードが空欄 → 更新しない
+    + "903,重複,一郎,ちょうふく いちろう,在籍,,,あんず苑,パート,,,2\r\n" // 5 同名が複数 → 更新しない
+    + "905,既存,三郎,きそん さぶろう,在籍,,,あんず苑,パート,,,5日以上\r\n" // 6 同じ値 → 変更なし
+    + "999,既存,六郎,きそん ろくろう,在籍,,,あんず苑,パート,,,\r\n"     // 7 新規・空欄
+    + "906,新人,一子,しんじん いちこ,在籍,,,あんず苑,パート,,,1\r\n"   // 8 新規に週所定を付ける
+    + "907,新人,二子,しんじん にこ,在籍,,,あんず苑,パート,,,6\r\n"      // 9 範囲外
+    + "908,新人,三子,しんじん みこ,在籍,,,あんず苑,パート,,,3日以上\r\n" // 10 「以上」は5だけ
+    + "909,既存,四郎,きそん しろう,在籍,,,あんず苑,パート,,,\r\n";      // 11 新規・空欄
+  const p = prep("staff", t);
+  check("週所定労働日数の列は想定外の列として警告しない", p.ok && !p.fileWarnings.length, JSON.stringify(p.fileWarnings));
+  const r = C.validateStaff(p.rows, existing, FACS, DEPTS, TODAY, p.fileWarnings);
+  const at = line => r.items.find(x => x.line === line);
+  check("登録済み・氏名と社員コードが一致 → 週所定だけ更新予定", at(2).action === "update" && at(2).idx === 0 && at(2).changes.weeklyWorkDays.from === 3 && at(2).changes.weeklyWorkDays.to === 5 && at(2).rec === null, msgs(r, 2));
+  check("社員コードが一致しない登録済みは更新しない（警告）", (() => { const x = C.validateStaff(prep("staff", H + "\r\n111,既存,太郎,きそん たろう,在籍,,,あんず苑,パート,,,5\r\n").rows, existing, FACS, DEPTS, TODAY, []); return x.items[0].action === "skip" && /社員コードが一致しない/.test(x.items[0].msgs.map(m => m.t).join()); })());
+  check("「週4日」表記を 4 として読む・未設定からの更新", at(3).action === "update" && at(3).idx === 1 && at(3).changes.weeklyWorkDays.from === null && at(3).changes.weeklyWorkDays.to === 4, msgs(r, 3));
+  check("登録済みの社員コードが空欄なら更新しない（警告）", at(4).action === "skip" && /社員コードが一致しない/.test(msgs(r, 4)));
+  check("同じ氏名が複数登録済みなら更新しない（警告）", at(5).action === "skip" && /複数/.test(msgs(r, 5)));
+  check("同じ値は変更なしでスキップ（「5日以上」表記）", at(6).action === "skip" && /同じ/.test(msgs(r, 6)));
+  check("新規の行に週所定労働日数を入れる", at(8).action === "add" && at(8).rec.weeklyWorkDays === 1);
+  check("1〜5以外はエラー", at(9).action === "error" && /1〜5/.test(msgs(r, 9)));
+  check("「以上」は5のときだけ", at(10).action === "error");
+  check("空欄の新規は weeklyWorkDays を持たない", at(11).action === "add" && !("weeklyWorkDays" in at(11).rec));
+  check("件数（更新2・スキップ3・エラー2・新規3）", r.counts.update === 2 && r.counts.skip === 3 && r.counts.error === 2 && r.counts.add === 3, JSON.stringify(r.counts));
+  const cur = C.normalizeList({ "0": existing[0], "1": existing[1], "2": existing[2], "3": existing[3], "4": existing[4], "5": existing[5] });
+  const patch = C.buildStaffPatch(r, cur);
+  check("PATCH は更新を週所定労働日数のパスだけにする（既存行を丸ごと書かない）", patch["0/weeklyWorkDays"] === 5 && patch["1/weeklyWorkDays"] === 4 && !("0" in patch) && !("1" in patch) && Object.keys(patch).filter(k => k.includes("/")).length === 2, JSON.stringify(patch));
+  check("PATCH の新規は末尾の次から", patch["6"] && patch["6"].name === "既存六郎" && patch["7"].weeklyWorkDays === 1 && patch["8"].name === "既存四郎", JSON.stringify(patch));
+  // 列が無い従来のCSVは従来どおり（登録済みはスキップ・更新0）
+  const q = prep("staff", STAFF_HEAD + "\r\n901,既存,花子,きそん はなこ,在籍,,,あんず苑,パート,,\r\n");
+  const rq = C.validateStaff(q.rows, existing, FACS, DEPTS, TODAY, q.fileWarnings);
+  check("列が無いCSVは登録済みを従来どおりスキップ", rq.items[0].action === "skip" && rq.counts.update === 0);
+}
+
 console.log("■ 取得データの形");
 {
   check("null は空", C.normalizeList(null).ok && C.normalizeList(null).next === 0);
@@ -360,6 +406,26 @@ async function runCommit(env, kind, text) {
     };
     const st = await runCommit(env, "staff", staffCsv);
     check("登録後に既存の行が消えていたら利用者へ知らせる", st.done && st.done.lost.join() === "既存太郎", JSON.stringify(st.done) + st.failMsg);
+  }
+  {
+    // 登録済みスタッフの週所定労働日数だけを更新する（ほかの項目・ほかの人は変えない）
+    const env = makeEnv({ facilities: { "0": FACS[0] }, staff: { "0": { name: "既存太郎", employeeId: "900", status: "在籍", location: "あんず苑" }, "1": { name: "別人花子", employeeId: "901" } } });
+    const st = await runCommit(env, "staff", STAFF_HEAD + ",週所定労働日数\r\n900,既存,太郎,きそん たろう,退職,,,あんず苑,社員,2020-01-01,2025-01-01,4\r\n");
+    const s0 = env.db["/tc5_staff.json"]["0"];
+    check("登録処理: 週所定労働日数だけを更新し、登録後の確認も通る", st.done && st.done.update === 1 && st.done.verified === true && s0.weeklyWorkDays === 4, JSON.stringify(st.done) + st.failMsg);
+    check("登録処理: 在籍状態など他の項目は CSV の値で上書きしない", s0.status === "在籍" && !("retireDate" in s0) && s0.employeeId === "900" && env.db["/tc5_staff.json"]["1"].name === "別人花子" && !("weeklyWorkDays" in env.db["/tc5_staff.json"]["1"]));
+    check("登録処理: 端末の一覧にも反映", env.c.staffList.find(s => s.name === "既存太郎").weeklyWorkDays === 4);
+  }
+  {
+    // PATCH の直前に別端末が削除して末尾を詰め替えた想定: 書いた添字が別の人になっていれば、その氏名を知らせる
+    const env = makeEnv({ facilities: { "0": FACS[0] }, staff: { "0": { name: "既存太郎", employeeId: "900" }, "1": { name: "別人花子", employeeId: "901" } } });
+    const origFetch = env.c.authFetch;
+    env.c.authFetch = async (url, o) => {
+      if (o && o.method === "PATCH") env.db["/tc5_staff.json"] = { "0": { name: "別人花子", employeeId: "901" } };
+      return origFetch(url, o);
+    };
+    const st = await runCommit(env, "staff", STAFF_HEAD + ",週所定労働日数\r\n900,既存,太郎,きそん たろう,在籍,,,あんず苑,パート,,,5日以上\r\n");
+    check("登録後の確認で添字の行が別人なら確認済みにせず、対象の氏名を示す", st.done && st.done.verified === false && st.done.wwdBad.join() === "既存太郎", JSON.stringify(st.done) + st.failMsg);
   }
   {
     const env = makeEnv({ facilities: { "0": { name: "既存苑", token: "KEEP" } }, staff: {} });
