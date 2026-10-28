@@ -5481,6 +5481,10 @@ function getUnapprovedSummary(){
 function goUnapprovedRecords(){
   adminTab="records";showUnapprovedOnly=true;render();
 }
+// 修正申請（承認待ち）は勤怠一覧タブの先頭に出るため、勤怠一覧へ移って先頭を見せる
+function goCorrectionRequests(){
+  setTab("records");window.scrollTo(0,0);
+}
 // セキュリティ: 申請IDは onclick 文字列・DOM id へ素で埋め込むため、英数字・ハイフン・アンダースコアのみ許可。
 // 不正文字を含む場合は空文字を返し、呼び出し側でハイライト・行idを付けない（既存の賄いカードと同じ方針）。
 function plSafeId(id){var s=String(id==null?"":id);return /^[A-Za-z0-9_-]+$/.test(s)?s:"";}
@@ -8338,17 +8342,21 @@ function _renderInner(){
         +'<div style="font-size:.7rem;color:#8496a7;">'+(recordsHistoryReady()?"件":"件（集計中）")+'</div>'
         +'<button onclick="goUnapprovedRecords()" style="margin-top:8px;background:#dc2626;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
         +'</div>'
-        +'<div style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;">'
+        // 件数があるときはカード全体を押すと一覧へ移動する（中の［一覧へ］はクリックをカードへ伝えるだけ）
+        +'<div'+(_nc.pendingCorrectionRequests>0?' onclick="goCorrectionRequests()"':'')+' style="background:#fffbeb;border-radius:8px;padding:12px;text-align:center;'+(_nc.pendingCorrectionRequests>0?'cursor:pointer;':'')+'">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">修正申請待ち</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:#92400e;">'+_nc.pendingCorrectionRequests+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
+        +(_nc.pendingCorrectionRequests>0
+          ?'<button type="button" style="margin-top:8px;background:#b45309;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
+          :'')
         +'</div>'
-        +'<div style="background:'+(_nc.pendingPaidLeave>0?"#f0fdf4":"#f8fafc")+';border-radius:8px;padding:12px;text-align:center;">'
+        +'<div'+(_nc.pendingPaidLeave>0?' onclick="goPaidLeaveRequests()"':'')+' style="background:'+(_nc.pendingPaidLeave>0?"#f0fdf4":"#f8fafc")+';border-radius:8px;padding:12px;text-align:center;'+(_nc.pendingPaidLeave>0?'cursor:pointer;':'')+'">'
         +'<div style="font-size:.75rem;color:#8496a7;margin-bottom:4px;">有給申請待ち</div>'
         +'<div style="font-size:1.5rem;font-weight:900;color:'+(_nc.pendingPaidLeave>0?"#166534":"#8496a7")+';">'+_nc.pendingPaidLeave+'</div>'
         +'<div style="font-size:.7rem;color:#8496a7;">件</div>'
         +(_nc.pendingPaidLeave>0
-          ?'<button onclick="goPaidLeaveRequests()" style="margin-top:8px;background:#166534;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
+          ?'<button type="button" style="margin-top:8px;background:#166534;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:.75rem;cursor:pointer;font-family:inherit;">一覧へ</button>'
           :'')
         +'</div>'
         +'<div style="background:#f0f9ff;border-radius:8px;padding:12px;text-align:center;">'
