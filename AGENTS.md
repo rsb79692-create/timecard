@@ -53,7 +53,7 @@
 | index.html（app shell）のキャッシュ・`sw.js`・配信版の自動更新 | [`app-shell-cache.md`](docs/features/app-shell-cache.md) | `node scripts/test-records-range.js` / `node scripts/test-app-auto-update.js` |
 | 打刻の端末保存と自動再送 | [`punch-outbox.md`](docs/features/punch-outbox.md) | `node scripts/test-punch-outbox.js` |
 | 承認済み有給の日の本人打刻禁止 | [`punch-leave-guard.md`](docs/features/punch-leave-guard.md) | `node scripts/test-punch-leave-guard.js` |
-| 管理者による勤怠編集・打刻漏れの修正 | [`admin-attendance-edit.md`](docs/features/admin-attendance-edit.md) | `node scripts/test-admin-attendance-edit.js` / `node scripts/test-punch-miss-fix.js` |
+| 管理者による勤怠編集・打刻漏れの修正・施設変更の押し忘れ | [`admin-attendance-edit.md`](docs/features/admin-attendance-edit.md) | `node scripts/test-admin-attendance-edit.js` / `node scripts/test-punch-miss-fix.js` / `node scripts/test-manual-facility-change.js` |
 | 退勤前の賄い確認 | [`meal-clockout.md`](docs/features/meal-clockout.md) | `node scripts/test-meal-clockout.js` |
 | 打刻時の顔撮影 | [`face-photo.md`](docs/features/face-photo.md) | `node scripts/test-face-photo.js` |
 | 施設端末の持ち出し検知 | [`device-watch.md`](docs/features/device-watch.md) | `node scripts/test-device-watch.js` |
