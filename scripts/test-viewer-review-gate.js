@@ -1,0 +1,55 @@
+/**
+ * 労務士（閲覧用URL）画面の精査ゲートの回帰テスト
+ * 依存パッケージなし・送信なし・本番データ非アクセス
+ *
+ * 実行: node scripts/test-viewer-review-gate.js
+ *
+ * 目的:
+ *   管理者が勤怠精査を完了していない月は、労務士画面で CSV だけでなく
+ *   日次の打刻表・有給申請・賄い回数も出さないことを固定する（2026-10-29 ユーザー指摘）。
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+const html = fs.readFileSync(path.join(__dirname, "..", "index.html"), "utf8").replace(/\r\n/g, "\n");
+
+let pass = 0, fail = 0;
+function check(name, cond) {
+  if (cond) { pass++; console.log("  PASS  " + name); }
+  else { fail++; console.log("  FAIL  " + name); }
+}
+
+const S = html.indexOf("  if(viewerMode){\n    var DAYS_V=");
+const E = S < 0 ? -1 : html.indexOf("loadDocumentList(function(docs){", S);
+if (S < 0 || E < 0) { console.error("ERROR: 労務士画面の描画ブロックが見つかりません。"); process.exit(1); }
+const V = html.slice(S, E);
+
+console.log("\n[1] 日次の打刻表");
+check("表示日の月が精査完了か判定する", V.includes("vDayReviewed=monthReviewed(vDayYm)"));
+check("未精査の月は打刻を表に使わない", /var dRecsV=records\.filter\(function\(r\)\{return vDayReviewed&&/.test(V));
+check("未精査の月は表の代わりに案内を出す", V.includes("+(!vDayReviewed?vNotReviewedRow(colCount,vDayYm):"));
+
+console.log("\n[2] 対象月の打刻・有給・賄い");
+check("未精査の月は対象月の打刻を空にする", V.includes("var vMRecs=vReviewed?records.filter("));
+check("精査判定は打刻の抽出より前", V.indexOf("var vReviewed=monthReviewed(reviewMonth);") >= 0 && V.indexOf("var vReviewed=monthReviewed(reviewMonth);") < V.indexOf("var vMRecs="));
+check("未精査の月は有給申請を出さない", V.includes("var vPlRowsHtml=!vReviewed?vNotReviewedRow(3,reviewMonth):"));
+check("未精査の月は賄い回数を出さない", V.includes("var vMealRowsHtml=!vReviewed?vNotReviewedRow(3,reviewMonth):"));
+
+console.log("\n[3] CSV（既存のゲートを保つ）");
+check("CSVボタンは精査完了のときだけ出す", V.includes("+(vReviewed\n        ?'<button id=\"btn-viewer-csv-daily\""));
+const gates = (V.match(/if\(!monthReviewed\(reviewMonth\)\)\{showAlert\(/g) || []).length;
+check("日次・月次・人別明細CSVは押したときも精査を確かめる（3か所）", gates === 3);
+
+console.log("\n[4] 取得");
+const R = html.slice(html.indexOf("function ensureAdminRecordRanges(){"), html.indexOf("}else if(screen===\"staffDetail\""));
+check("労務士は精査完了の月だけ取得する", R.includes("if(monthReviewed(reviewMonth))addMonth(reviewMonth);") && R.includes("if(selDate&&monthReviewed(monthKey(selDate)))"));
+check("10秒ごとの当日取得も、労務士は未精査の月なら取らない", html.includes("var _pd=recToday();\n      if(viewerMode&&!monthReviewed(monthKey(_pd)))return;"));
+check("精査状態のノードが無くても読み終えた扱いにし、精査済みの表示を消す",
+  html.includes("if(val===null||(val && typeof val===\"object\"))reviewStatusLoaded=true;\n        if(val===null)val={};"));
+check("精査状態の取得失敗（HTTPエラー）は精査状態に使わない",
+  html.includes("/tc5_monthly_review_status.json\")\n      .then(function(r){if(!r.ok)throw new Error("));
+
+console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
+process.exit(fail ? 1 : 0);

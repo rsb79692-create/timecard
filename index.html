@@ -3400,8 +3400,9 @@ function ensureAdminRecordRanges(){
   var need=[],today=recToday();
   var addMonth=function(ym){if(ym&&/^\d{4}-\d{2}$/.test(ym))need.push([ym+"-01",recMonthEnd(ym)]);};
   if(viewerMode){
-    addMonth(reviewMonth);
-    if(selDate)need.push([selDate,selDate]);
+    // 労務士は精査完了した月の打刻だけを取る（未精査の月は手元へ持たない）
+    if(monthReviewed(reviewMonth))addMonth(reviewMonth);
+    if(selDate&&monthReviewed(monthKey(selDate)))need.push([selDate,selDate]);
   }else if(screen==="staffDetail"||screen==="csvPreview"){
     addMonth(selMonth);
   }else{
@@ -3627,9 +3628,11 @@ function listenFirebase() {
     // 管理者の「精査完了」押下を、開きっぱなしの労務士(viewer)/管理者/スタッフ画面へ最大10秒で反映し、
     // CSVダウンロード制限を解除する。読み取り専用の反映のため再描画は安全（入力状態には触れない）。
     authFetch(FB_URL + "/tc5_monthly_review_status.json")
-      .then(function(r){return r.json();})
+      .then(function(r){if(!r.ok)throw new Error("HTTP "+r.status);return r.json();})
       .then(function(val){if(writePolicy==="sandbox")return;
-        if(val && typeof val==="object")reviewStatusLoaded=true;
+        // 一度も精査していない会社はノードが無く null が返る。取得は成功しているので読み終えた扱いにする（労務士画面の「読み込み中...」を出し続けない）
+        if(val===null||(val && typeof val==="object"))reviewStatusLoaded=true;
+        if(val===null)val={}; // ノードが消えたら精査済みの表示も消す（フェイルクローズ）
         if(val && typeof val==="object" && JSON.stringify(val)!==JSON.stringify(reviewStatus)){
           reviewStatus=val;
           if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing) render();
@@ -3685,6 +3688,7 @@ function listenFirebase() {
     //   ※ 別の管理者が過去日を編集した場合、その反映は次に画面を開き直すまで遅れる。
     (function(){
       var _pd=recToday();
+      if(viewerMode&&!monthReviewed(monthKey(_pd)))return; // 労務士は未精査の月の打刻を取らない
       fetchRecordsRange(_pd,_pd).then(function(val){
         if(val===null||val===undefined||savingCount!==0)return;
         var incoming=Array.isArray(val)?val.filter(Boolean):Object.values(val).filter(Boolean);
@@ -6059,7 +6063,10 @@ function _renderInner(){
     var sdMOptsV=[1,2,3,4,5,6,7,8,9,10,11,12].map(function(m){return'<option value="'+m+'"'+(m===sdMoV?' selected':'')+'>'+m+'月</option>';}).join('');
     var sdDOptsV='';for(var sdiv=1;sdiv<=sdMaxDayV;sdiv++){sdDOptsV+='<option value="'+sdiv+'"'+(sdiv===sdDyV?' selected':'')+'>'+sdiv+'日</option>';}
     // 日次勤怠テーブル（読み取り専用・シンプル）
-    var dRecsV=records.filter(function(r){return r.date===selDate&&!r.deleted;})
+    // 労務士は精査完了した月だけを見られる（CSVと同じゲート）
+    var vDayYm=monthKey(selDate),vDayReviewed=monthReviewed(vDayYm);
+    var vNotReviewedRow=function(cols,ym){return '<tr><td colspan="'+cols+'" style="padding:24px;text-align:center;color:#92400e;background:#fef3c7;font-size:.9rem;font-weight:700;">'+(reviewStatusLoaded?esc(ym)+' の勤怠精査が完了していないため、まだ表示できません':'読み込み中...')+'</td></tr>';};
+    var dRecsV=records.filter(function(r){return vDayReviewed&&r.date===selDate&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
     var allStaffV=staffList.filter(function(s){return !s.status||s.status==="在籍";}).sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
     var hasBrkV=dRecsV.some(function(r){return r.type==="breakStart"||r.type==="breakEnd";});
@@ -6099,11 +6106,11 @@ function _renderInner(){
     var vMonths=recordsMonthOptions([reviewMonth]);
     if(vMonths.indexOf(reviewMonth)<0)vMonths.unshift(reviewMonth);
     var vMonthOpts=vMonths.map(function(m){return'<option value="'+esc(m)+'"'+(m===reviewMonth?" selected":"")+'>'+esc(m)+'</option>';}).join("");
-    var vMRecs=records.filter(function(r){return monthKey(r.date)===reviewMonth&&!r.deleted;});
+    var vReviewed=monthReviewed(reviewMonth);
+    var vMRecs=vReviewed?records.filter(function(r){return monthKey(r.date)===reviewMonth&&!r.deleted;}):[];
     var vStaff=staffList.filter(function(s){return !s.status||s.status==="在籍";})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
-    // 労務士CSVゲート: 締め対象月(reviewMonth)が精査完了済みのときのみCSVボタンを表示
-    var vReviewed=monthReviewed(reviewMonth);
+    // 労務士CSVゲート: 締め対象月(reviewMonth)が精査完了済みのときのみCSVボタンを表示（vReviewed は上で算出）
     // 月締め対象の有給申請（表示のみ）: 取得日が選択月(selMonth)に含まれる承認済/申請中の申請を抽出。
     // 複数日申請は対象月に含まれる取得日だけを1行ずつ展開（翌月以降の取得日は混ぜない）。
     var vPlTd="padding:8px 10px;font-size:.85rem;text-align:center;vertical-align:middle;border-bottom:1px solid #e9ecef;";
@@ -6119,7 +6126,7 @@ function _renderInner(){
       });
     });
     vPlItems.sort(function(a,b){return a.date.localeCompare(b.date)||a.name.localeCompare(b.name,"ja");});
-    var vPlRowsHtml=vPlItems.length
+    var vPlRowsHtml=!vReviewed?vNotReviewedRow(3,reviewMonth):vPlItems.length
       ?vPlItems.map(function(x){
           var sl=vPlStLabel[x.status]||x.status;
           var sc=vPlStColor[x.status]||"#475569";
@@ -6143,7 +6150,7 @@ function _renderInner(){
     }
     var vMealStaff=staffList.filter(function(s){return s.status!=="退職"&&!!s.mealRequired;})
       .slice().sort(function(a,b){return (a.yomi||"").localeCompare(b.yomi||"","ja");});
-    var vMealRowsHtml=vMealStaff.length
+    var vMealRowsHtml=!vReviewed?vNotReviewedRow(3,reviewMonth):vMealStaff.length
       ?vMealStaff.map(function(s){
           var cnt=mealCountOf(s.employeeId,reviewMonth);
           return '<tr style="background:#fff;">'
@@ -6188,7 +6195,7 @@ function _renderInner(){
       +'<th style="'+thSV+'color:var(--brand);">勤務時間</th>'
       +'<th style="'+thSV+'">承認状態</th>'
       +'</tr></thead>'
-      +'<tbody>'+(vRowsD||'<tr><td colspan="'+colCount+'" style="padding:24px;text-align:center;color:#8496a7;font-size:.9rem;">この日の打刻データはありません</td></tr>')+'</tbody>'
+      +'<tbody>'+(!vDayReviewed?vNotReviewedRow(colCount,vDayYm):vRowsD||'<tr><td colspan="'+colCount+'" style="padding:24px;text-align:center;color:#8496a7;font-size:.9rem;">この日の打刻データはありません</td></tr>')+'</tbody>'
       +'</table></div>'
       +'<div style="margin-top:20px;padding:0 4px;">'
       +'<div style="font-size:1rem;font-weight:900;color:#0f172a;margin-bottom:12px;">この月の有給申請<span style="font-size:.72rem;font-weight:700;color:#64748b;margin-left:8px;">（'+reviewMonth+' 月締め対象）</span></div>'
