@@ -51,5 +51,11 @@ check("精査状態のノードが無くても読み終えた扱いにし、精�
 check("精査状態の取得失敗（HTTPエラー）は精査状態に使わない",
   html.includes("/tc5_monthly_review_status.json\")\n      .then(function(r){if(!r.ok)throw new Error("));
 
+console.log("\n[5] 労務士の端末に打刻・承認を残さない");
+check("端末保存（打刻・承認）は労務士URLでは行わない", html.includes('if((k==="tc5_records"||k==="tc5_approvals")&&_isViewerUrl())return;'));
+check("起動時・日付変更時の当日取得は労務士URLでは行わない", html.includes("function loadPunchRecords(){if(_isViewerUrl())return Promise.resolve(null);"));
+check("労務士URLでは当日取得の再試行もしない", html.includes("if(_isViewerUrl()){recordsReady=true;recordsStale=false;return true;}"));
+check("労務士URLでは端末キャッシュを読まず、残っていた分を消す", html.includes('var records=_isViewerUrl()?[]:loadData("tc5_records",[]);') && html.includes('TLS.removeItem("tc5_records");TLS.removeItem("tc5_approvals");') && html.includes('var approvals=_isViewerUrl()?{}:loadData("tc5_approvals",{});'));
+
 console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);

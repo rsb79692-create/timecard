@@ -7,7 +7,8 @@
  * そこで参照を本ファイルへ隔離し、次を機械的に守る:
  *
  *   ・**読み取りだけ**（dbPut / dbPatch / dbPatchRoot を一切呼ばない）
- *   ・参照するのは tc5_records と tc5_correction_requests の2つだけ
+ *   ・参照するのは tc5_records と tc5_correction_requests と tc5_monthly_review_status の3つだけ
+ *     （tc5_monthly_review_status は労務士へ返す月を「勤怠精査が完了した月」に絞るためだけに読む）
  *   ・tc5_staff / tc5_pins は参照しない（誰でも書けるため、本人特定に使うと成りすましが成立する。
  *     社員番号の解決は従来どおり /mileage/identity だけを正本とする）
  *
@@ -18,6 +19,8 @@
  * したがって自動集計の金額は「打刻データと同じ信頼度」までしか保証できない。
  * これは勤務時間・賃金の計算が既に置かれている前提と同一であり、本機能で新たに下がるものではない。
  * 管理者が月次確定の前に日別の集計結果を確認する運用で担保する。
+ * tc5_monthly_review_status（勤怠精査の完了フラグ）も /honomi にあり、職員（role "s"）でも書ける。
+ * 労務士へ返す月の絞り込みは業務上の区切りであり、改ざんに対する保証ではない（Rules は変えない判断。2026-10-29）。
  */
 "use strict";
 
@@ -86,4 +89,20 @@ async function loadPendingCorrections(ym, nameSet) {
   return out;
 }
 
-module.exports = { loadMonthPunches, loadPendingCorrections, toArray };
+/**
+ * 勤怠精査が完了した月を { "YYYY-MM": true } で返す（労務士へ返す月を絞るためだけに使う）。
+ * ★ reviewed === true の月だけを入れる。取得失敗は呼び出し側へ例外として返す（空とみなして開けない）。
+ */
+async function loadReviewedMonths() {
+  const raw = await G.dbGet("tc5_monthly_review_status");
+  const out = Object.create(null);
+  if (!raw || typeof raw !== "object") return out;
+  for (const k of Object.keys(raw)) {
+    if (!/^\d{4}-\d{2}$/.test(k)) continue;
+    const e = raw[k];
+    if (e && typeof e === "object" && e.reviewed === true) out[k] = true;
+  }
+  return out;
+}
+
+module.exports = { loadMonthPunches, loadPendingCorrections, loadReviewedMonths, toArray };

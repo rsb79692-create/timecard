@@ -683,7 +683,7 @@ section("8. index.html 側の結線");
   const wired = [
     ["管理・労務士画面の入口が ensureAdminRecordRanges を呼ぶ", /\n\s*ensureAdminRecordRanges\(\);/],
     ["入口の全件取得（ensureRecordsFull）が残っていない", /^(?!.*ensureRecordsFull)/s],
-    ["起動時の打刻取得は当日のみ", /function loadPunchRecords\(\)\{var d=recToday\(\);return fetchRecordsRange\(d,d\);\}/],
+    ["起動時の打刻取得は当日のみ（労務士URLでは取らない）", /function loadPunchRecords\(\)\{if\(_isViewerUrl\(\)\)return Promise\.resolve\(null\);var d=recToday\(\);return fetchRecordsRange\(d,d\);\}/],
     ["10秒ポーリングは当日分だけ取る", /var _pd=recToday\(\);\s*\n(?:\s*if\(viewerMode&&!monthReviewed\(monthKey\(_pd\)\)\)return;[^\n]*\n)?\s*fetchRecordsRange\(_pd,_pd\)/],
     ["朝出勤確認の更新も当日分だけ取る", /mRefBtn\.textContent="更新中…"[\s\S]{0,300}?fetchRecordsRange\(_d,_d\)/],
     ["全件取得のヘルパを残していない（使えるところにあると必ず使われる）", /^(?!.*function fetchRecordsAll)/s],

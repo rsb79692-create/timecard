@@ -994,8 +994,11 @@ function demoWriteBlocked(){
   return true;
 }
 // サンドボックス中は本番用 localStorage キーへ書かない
+function _isViewerUrl(){try{return !!new URLSearchParams(location.search).get("viewer");}catch(e){return false;}}
 function _lsSet(k,v){
   if(writePolicy==="sandbox")return;
+  // 労務士（閲覧用URL）の端末には打刻・承認を残さない（未精査の月を持ち出させない）
+  if((k==="tc5_records"||k==="tc5_approvals")&&_isViewerUrl())return;
   try{TLS.setItem(k,v);}catch(e){}
 }
 async function authFetch(url,opts){
@@ -3185,9 +3188,11 @@ function recordsMonthKnown(ym){
 }
 
 // 起動時の当日取得。打刻ボタンはこれが終わるまで押せない（recordsReady）。
-function loadPunchRecords(){var d=recToday();return fetchRecordsRange(d,d);}
+function loadPunchRecords(){if(_isViewerUrl())return Promise.resolve(null);var d=recToday();return fetchRecordsRange(d,d);}
 function applyPunchRecords(fbRecords){
   var d=recToday();
+  // 労務士は打刻しないので当日分を取らない。打刻の再試行もしない（必要な月は ensureAdminRecordRanges が精査済みの月だけ取る）
+  if(_isViewerUrl()){recordsReady=true;recordsStale=false;return true;}
   if(fbRecords!==null&&fbRecords!==undefined){
     mergeRecordsRange(d,d,fbRecords);
     recordsReady=true;recordsStale=false;_recordsTries=0;_recLoadedDay=d;
@@ -4982,7 +4987,8 @@ function escUrl(u){var v=String(u==null?"":u);return /^https?:\/\//i.test(v)?v:"
 function zipEntryName(n){var v=String(n==null?"":n).replace(/[\\/]/g,"_").replace(/^\.+/,"");return v||"file";}
 // ===== 状態 =====
 var screen="home",staffName=null;
-var records=loadData("tc5_records",[]);
+var records=_isViewerUrl()?[]:loadData("tc5_records",[]);
+if(_isViewerUrl()){try{TLS.removeItem("tc5_records");TLS.removeItem("tc5_approvals");}catch(e){}} // 端末キャッシュだけを消す（サーバのデータには触れない）
 var staffList=mstToList(loadData("tc5_staff",DEF_STAFF));
 // ===== スタッフ管理一覧の並び順（社員番号の数値昇順）=====
 // 数字だけの社員番号は数値として比較する（桁数→文字列。桁数が多くても精度を失わない）。
@@ -5134,7 +5140,7 @@ var selMonth=today.getFullYear()+"-"+pad(today.getMonth()+1);
 var selDate=fmtDateKey(today);
 // 締め対象月（前月）。労務士CSVゲート・精査完了操作の基準月。selMonth/selDate とは独立に管理する。
 var reviewMonth=reviewTargetMonth();
-var approvals=loadData("tc5_approvals",{});
+var approvals=_isViewerUrl()?{}:loadData("tc5_approvals",{});
 var correctionRequests=loadData("tc5_correction_requests",[]);
 var savingCount=0;  // saveRecord 進行中カウンタ（ポーリング巻き戻し防止）
 var newLastName="",newFirstName="",newLastYomi="",newFirstYomi="",newHireDate="";
@@ -16096,6 +16102,10 @@ function mileageViewerCardHtml(){
     +'</div>';
   // ★ 未確定の月。API取得は成功しているので「取得できませんでした」と混同させない。
   //   ダウンロードボタンも出さない（確定前の数値を給与データとして持ち出させない）。
+  if(mileage.viewData.closed!==true&&mileage.viewData.reviewed===false){
+    return '<div class="admin-card">'+headRow
+      +'<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:12px;font-size:.9rem;font-weight:800;color:#92400e;">'+esc(mileageYmLabel(mileage.viewYm))+'の勤怠精査が完了していないため、まだ表示できません</div></div>';
+  }
   if(mileage.viewData.closed!==true){
     return '<div class="admin-card">'+headRow
       +'<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:12px;">'

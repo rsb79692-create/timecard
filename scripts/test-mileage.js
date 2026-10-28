@@ -563,8 +563,8 @@ const apiCode = stripComments(apiSrc);
 // ★ 打刻は読むだけ。書き込み経路を1つも持たせない（勤怠データを壊さない保証）。
 ok("mileage-punch.js は書き込み関数を一切呼ばない",
   !/dbPut|dbPatch|dbPatchRoot|dbRequest/.test(punchSrc));
-ok("mileage-punch.js が参照するのは tc5_records と tc5_correction_requests だけ",
-  [...new Set(punchSrc.match(/tc5_[a-z_]+/g) || [])].sort().join(",") === "tc5_correction_requests,tc5_records",
+ok("mileage-punch.js が参照するのは tc5_records と tc5_correction_requests と tc5_monthly_review_status だけ",
+  [...new Set(punchSrc.match(/tc5_[a-z_]+/g) || [])].sort().join(",") === "tc5_correction_requests,tc5_monthly_review_status,tc5_records",
   JSON.stringify(punchSrc.match(/tc5_[a-z_]+/g)));
 // ★ 本人特定に tc5_staff を使うと成りすましが成立する（誰でも書ける領域のため）。
 ok("打刻の読み取り層も tc5_staff / tc5_pins を参照しない",
@@ -970,16 +970,17 @@ function extractFn(src, sig) {
   }
   return "";
 }
-const reportSrc = extractFn(apiSrc, "async function handleMonthlyReport(body) {");
+const reportSrc = extractFn(apiSrc, "async function handleMonthlyReport(body, role) {");
 let reportTests = Promise.resolve();
 if (!reportSrc) {
   fail++;
   console.log("  FAIL  api/mileage.js から handleMonthlyReport を抽出できませんでした");
 } else {
-  const runReport = function (store, body) {
+  const runReport = function (store, body, role) {
     const calls = [];
     const ctx = {
       M: M, ROOT: "mileage", console: console,
+      P: { loadReviewedMonths: async function () { calls.push("tc5_monthly_review_status"); return store.__reviewed || {}; } },
       G: { dbGet: async function (p) { calls.push(p); return Object.prototype.hasOwnProperty.call(store, p) ? store[p] : null; } },
       H: { str: function (v, n) { return typeof v === "string" ? v.slice(0, n) : ""; } },
       reqPath: function (ym) { return "mileage/requests/" + ym; },
@@ -987,7 +988,7 @@ if (!reportSrc) {
     };
     vm.createContext(ctx);
     vm.runInContext(reportSrc, ctx);
-    return ctx.handleMonthlyReport(body).then(function (r) { return { r: r, calls: calls }; });
+    return ctx.handleMonthlyReport(body, role).then(function (r) { return { r: r, calls: calls }; });
   };
   const closedStore = {
     "mileage/closings": {
@@ -1024,6 +1025,18 @@ if (!reportSrc) {
     eq("日別明細は確定済みスナップショットから作る", o.r.detail.length, 1);
     eq("日別明細の経路", o.r.detail[0].route, "ナナイロ → ハルイロ → ナナイロ");
     ok("closing に closedBy（監査用 actor）を含めない", o.r.closing.closedBy === undefined);
+  // 労務士: 確定済みでも勤怠精査が未完了の月は返さない（2026-10-29）
+  }).then(function () { return runReport(closedStore, { ym: "2026-07", withDetail: true }, "v"); }).then(function (o) {
+    eq("労務士・未精査の月は closed:false", o.r.closed, false);
+    eq("労務士・未精査の月は reviewed:false", o.r.reviewed, false);
+    ok("労務士・未精査の月は行も日別明細も返さない", o.r.rows.length === 0 && o.r.detail === undefined);
+    ok("労務士の確定済み月一覧に未精査の月を入れない", o.r.closedMonths.indexOf("2026-07") < 0, JSON.stringify(o.r.closedMonths));
+  }).then(function () { return runReport(Object.assign({ __reviewed: { "2026-07": true } }, closedStore), { ym: "2026-07", withDetail: true }, "v"); }).then(function (o) {
+    eq("労務士・精査完了の月は closed:true", o.r.closed, true);
+    eq("労務士・精査完了の月は日別明細を返す", o.r.detail.length, 1);
+  }).then(function () { return runReport(closedStore, { ym: "2026-07" }, "a"); }).then(function (o) {
+    eq("管理者は精査に関係なく確定済み月を見られる", o.r.closed, true);
+    ok("管理者では精査状態を読まない", o.calls.indexOf("tc5_monthly_review_status") < 0);
   // 形式不正
   }).then(function () { return runReport(closedStore, { ym: "2026-13" }); }).then(function (o) {
     eq("年月の形式が不正なら 400 bad_ym", String(o.r.status) + ":" + String(o.r.error), "400:bad_ym");
@@ -1065,6 +1078,9 @@ ok("閲覧用カードに取得失敗の表示が別にある", /データを取
   const branch = s > 0 ? extractFn(viewCardSrc.slice(s), "if(mileage.viewData.closed!==true){") : "";
   ok("未確定の分岐にダウンロードボタンを置かない", branch.length > 0 && branch.indexOf("mileageDownload") < 0);
 })();
+ok("労務士カードは精査未完了を未確定と分けて表示する",
+  /if\(mileage\.viewData\.closed!==true&&mileage\.viewData\.reviewed===false\)\{/.test(viewCardSrc) && /の勤怠精査が完了していないため、まだ表示できません/.test(viewCardSrc));
+ok("monthlyReport へ役割を渡す", /case "monthlyReport": r = await handleMonthlyReport\(body, ident\.role\); break;/.test(apiSrc));
 ok("ダウンロードは確定済み（closed）のみ",
   (html.match(/if\(!d\|\|!d\.closed/g) || []).length === 2);
 ok("closed:false の応答を取得失敗として扱わない（viewData へ入れる）",
