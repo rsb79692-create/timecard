@@ -21,7 +21,7 @@ function check(name, cond) {
   else { fail++; console.log("  FAIL  " + name); }
 }
 
-const S = html.indexOf("  if(viewerMode){\n    var DAYS_V=");
+const S = html.indexOf("  if(viewerMode||viewerPreviewOn()){\n    var _vPrev=!viewerMode;");
 const E = S < 0 ? -1 : html.indexOf("loadDocumentList(function(docs){", S);
 if (S < 0 || E < 0) { console.error("ERROR: 労務士画面の描画ブロックが見つかりません。"); process.exit(1); }
 const V = html.slice(S, E);
@@ -56,6 +56,23 @@ check("端末保存（打刻・承認）は労務士URLでは行わない", html
 check("起動時・日付変更時の当日取得は労務士URLでは行わない", html.includes("function loadPunchRecords(){if(_isViewerUrl())return Promise.resolve(null);"));
 check("労務士URLでは当日取得の再試行もしない", html.includes("if(_isViewerUrl()){recordsReady=true;recordsStale=false;return true;}"));
 check("労務士URLでは端末キャッシュを読まず、残っていた分を消す", html.includes('var records=_isViewerUrl()?[]:loadData("tc5_records",[]);') && html.includes('TLS.removeItem("tc5_records");TLS.removeItem("tc5_approvals");') && html.includes('var approvals=_isViewerUrl()?{}:loadData("tc5_approvals",{});'));
+
+console.log("\n[6] 管理者の確認用（労務士画面の見え方）");
+check("確認用は管理者のログイン中・管理画面・労務士でないときだけ", html.includes('function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&screen==="admin");}'));
+check("確認用は労務士と同じ描画を使う", V.length > 0);
+check("確認用には帯と「管理画面に戻る」を出す", V.includes("👀 労務士にはこう見えています") && V.includes('id="btn-viewer-preview-exit"') && V.includes("viewerPreviewSet(false)"));
+check("精査ステータスのカードに入口がある（管理者デモでは出さない）", html.includes(`+(!isAdminAuthenticated||demoMode?'':'<button class="btn-export" id="btn-viewer-preview"`) && html.includes("viewerPreviewSet(true)"));
+check("確認用の打刻の取得は労務士と同じ分岐を通る", R.includes("if(viewerMode||viewerPreviewOn()){"));
+check("確認用の移動距離は労務士と同じ月だけを返してもらう", html.includes('mileageApi("monthlyReport",{ym:ym||"",withDetail:true,asViewer:viewerPreviewOn()})'));
+check("確認用の応答を管理者の表示に残さない", html.includes("mileage.viewLoading=false;\n  if(res.ok&&res.data&&!viewerMode&&viewerPreview!==!!res.data.asViewer)return;"));
+
+console.log("\n[7] 確認用では書き込まない（資料のダウンロードは資料を無効にするため）");
+check("確認用では資料の個別ダウンロードボタンを出さない", html.includes("ダウンロード（確認用のため押せません）") && html.includes("+(_vPrev?'':'<button onclick=\"viewerDownloadAndDelete("));
+check("確認用では一括ダウンロードを出さない", html.includes("if(bulkBtn&&!_vPrev){"));
+check("一括ダウンロードは労務士だけ", html.includes("bulkBtn.onclick=function(){\n          if(!viewerMode)return;"));
+check("資料を無効にする処理は労務士だけ", html.includes("function viewerDownloadAndDelete(url,fileName,docId){\n  if(!viewerMode)return;"));
+check("開閉で移動距離の読み込み中を残さない", html.includes("mileage.viewTried=false;mileage.viewLoading=false;mileage.viewClosedMonths=[];}"));
+check("ログアウト・期限切れで確認用を戻す", html.includes("function _adminStateClear(){\n  viewerPreview=false;") && html.includes("function tenantSessionExpired(){\n  viewerPreview=false;"));
 
 console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);

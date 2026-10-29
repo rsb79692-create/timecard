@@ -634,6 +634,7 @@ async function tenantKioskExchange(){
 /** 新会社の役割トークン（管理者・閲覧など）の業務上の期限が切れた。ログインし直してもらう。 */
 var _tenantExpiredNotified=false;
 function tenantSessionExpired(){
+  viewerPreview=false;
   if(_tenantExpiredNotified)return;
   _tenantExpiredNotified=true;
   isAdminAuthenticated=false;
@@ -761,6 +762,7 @@ _restoreAnonSession();
 // ★ 管理者トークンは端末へ保存していない（_saveAnonSession）ので、メモリから捨てれば残らない。
 /** 管理者の状態だけを落とす（トークンは呼び出し側で差し替える）。 */
 function _adminStateClear(){
+  viewerPreview=false; // 次に入った管理者を確認用の画面で開かない
   isAdminAuthenticated=false;isSystemAdmin=false;pinScope="company";
   _adminElevatePromise=null;
   // 管理者だけが読む一覧（閲覧用・デモ・スタッフテストURL）を画面のメモリに残さない。次に管理画面へ入ったときに取り直す。
@@ -3404,7 +3406,7 @@ function ensureAdminRecordRanges(){
   ensureRecordsOldest();
   var need=[],today=recToday();
   var addMonth=function(ym){if(ym&&/^\d{4}-\d{2}$/.test(ym))need.push([ym+"-01",recMonthEnd(ym)]);};
-  if(viewerMode){
+  if(viewerMode||viewerPreviewOn()){
     // 労務士は精査完了した月の打刻だけを取る（未精査の月は手元へ持たない）
     if(monthReviewed(reviewMonth))addMonth(reviewMonth);
     if(selDate&&monthReviewed(monthKey(selDate)))need.push([selDate,selDate]);
@@ -4337,6 +4339,16 @@ console.log("[TC]","effectiveToken:",(effectiveToken?"(set)":"-"),"facilityName:
 var viewerParam=new URLSearchParams(location.search).get("viewer");
 var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
+// 管理者が「労務士画面の見え方」を確認している間だけ真（管理者のログイン中・管理画面に限る。労務士画面と同じ描画を使う）
+var viewerPreview=false;
+function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&screen==="admin");}
+function viewerPreviewSet(on){
+  viewerPreview=!!on;
+  // 移動距離の表示は管理者と労務士で返る月が違うため、切り替えのたびに取り直す
+  if(typeof mileage==="object"&&mileage){mileage.viewYm="";mileage.viewData=null;mileage.viewTried=false;mileage.viewLoading=false;mileage.viewClosedMonths=[];}
+  window.scrollTo(0,0);
+  render();
+}
 var viewerInvalid=false;
 var viewerExpired=false;
 var viewerIsDemoIssued=false; // デモ画面から発行された閲覧用URLか（true なら完全読み取り専用）
@@ -6056,7 +6068,8 @@ function _renderInner(){
   }
 
   // ── 閲覧専用モード（労務士向け） ──
-  if(viewerMode){
+  if(viewerMode||viewerPreviewOn()){
+    var _vPrev=!viewerMode; // 管理者の確認用（労務士と同じ画面に、上の帯だけ足す）
     var DAYS_V=["日","月","火","水","木","金","土"];
     // 日付ナビゲーション
     var sdPV=selDate.split('-'),sdYV=parseInt(sdPV[0]),sdMoV=parseInt(sdPV[1]),sdDyV=parseInt(sdPV[2]);
@@ -6167,6 +6180,10 @@ function _renderInner(){
         }).join("")
       :'<tr><td colspan="3" style="padding:20px;text-align:center;color:#8496a7;font-size:.85rem;">対象スタッフがいません</td></tr>';
     app.innerHTML='<div class="admin-sticky-bar" style="padding:10px 16px 8px;">'
+      +(_vPrev?'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;background:#7c3aed;color:#fff;margin:-10px -16px 10px;padding:10px 16px;font-size:1rem;font-weight:800;">'
+        +'<span>👀 労務士にはこう見えています</span>'
+        +'<button id="btn-viewer-preview-exit" style="background:#fff;color:#7c3aed;border:none;border-radius:2px;padding:8px 16px;font-size:.95rem;font-weight:800;cursor:pointer;font-family:inherit;">管理画面に戻る</button>'
+        +'</div>':'')
       +tenantBrandBarHtml()
       +'<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:6px;">'
       +'<div style="display:flex;align-items:center;gap:8px;">'
@@ -6248,6 +6265,8 @@ function _renderInner(){
     var bdNextV=document.getElementById("btn-date-next-v");
     if(bdPrevV)bdPrevV.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()-1);selDate=fmtDateKey(d);render();};
     if(bdNextV)bdNextV.onclick=function(){var d=new Date(selDate);d.setDate(d.getDate()+1);selDate=fmtDateKey(d);render();};
+    var vPrevExit=document.getElementById("btn-viewer-preview-exit");
+    if(vPrevExit)vPrevExit.onclick=function(){viewerPreviewSet(false);};
     var vm=document.getElementById("viewer-month");
     // 締め対象月セレクタ: reviewMonth のみ切替（selMonth/selDate は変更しない）。不正値は前月にフォールバック。
     if(vm)vm.onchange=function(){var v=vm.value;reviewMonth=(v&&/^\d{4}-\d{2}$/.test(v))?v:reviewTargetMonth();render();};
@@ -6307,9 +6326,10 @@ function _renderInner(){
       if(!el)return;
       var bulkBtn=document.getElementById("btn-viewer-bulk-dl");
       if(!docs.length){el.innerHTML='<div style="color:#8496a7;font-size:.85rem;text-align:center;padding:16px;">資料がありません</div>';return;}
-      if(bulkBtn){
+      if(bulkBtn&&!_vPrev){ // 確認用では出さない（押すと資料を無効にする書込みが走る）
         bulkBtn.style.display='';
         bulkBtn.onclick=function(){
+          if(!viewerMode)return; // 労務士だけ（開けない側に倒す）
           showConfirm('全'+docs.length+'件の資料をZIPで一括ダウンロードします。よろしいですか？',function(){
             var ov2=document.createElement('div');
             ov2.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;display:flex;align-items:center;justify-content:center;';
@@ -6364,7 +6384,8 @@ function _renderInner(){
           +'</div></div>'
           +'<div style="display:flex;gap:8px;">'
           +(canPreview?'<button onclick="previewFile(&#39;'+safeUrl+'&#39;,&#39;'+escJs(ft)+'&#39;,&#39;'+vSafeDisplayName+'&#39;)" style="flex-shrink:0;background:#7c3aed;color:#fff;border:none;border-radius:2px;padding:8px 12px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;">👁 プレビュー</button>':'')
-          +'<button onclick="viewerDownloadAndDelete(&#39;'+safeUrl+'&#39;,&#39;'+vSafeDisplayName+'&#39;,&#39;'+escJs(d.id)+'&#39;)" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>'
+          +(_vPrev?'<span style="flex:1;display:flex;align-items:center;justify-content:center;background:#e5e7eb;color:#475569;border-radius:2px;padding:8px 14px;font-size:.85rem;font-weight:700;">ダウンロード（確認用のため押せません）</span>':'')
+          +(_vPrev?'':'<button onclick="viewerDownloadAndDelete(&#39;'+safeUrl+'&#39;,&#39;'+vSafeDisplayName+'&#39;,&#39;'+escJs(d.id)+'&#39;)" style="flex:1;background:var(--brand);color:#fff;border:none;border-radius:2px;padding:8px 14px;font-size:.82rem;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap;">📥 DL</button>')
           +'</div>'
           +'</div>';
       }).join('');
@@ -7706,6 +7727,7 @@ function _renderInner(){
              +'<div style="color:#92400e;background:#fef3c7;border:1px solid #fde68a;font-size:.82rem;padding:6px 10px;border-radius:2px;">未精査：労務士はこの月のCSVをダウンロードできません</div>'
              +'<button class="btn-export" id="btn-review-done" style="width:auto;padding:10px 24px;">✓ この月の勤怠精査を完了</button>'
            +'</div>')
+        +(!isAdminAuthenticated||demoMode?'':'<button class="btn-export" id="btn-viewer-preview" style="width:auto;padding:10px 20px;margin-top:10px;background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;">👀 労務士画面の見え方を確認</button>')
         +'</div>';
       tc='<div class="admin-card">'
         +'<div class="admin-title">CSV エクスポート</div>'
@@ -9906,6 +9928,8 @@ function _renderInner(){
     // 締め対象月セレクタ: reviewMonth のみ切替（selMonth/selDate は変更しない）。不正値は前月にフォールバック。
     var selReviewMonthEl=document.getElementById("sel-review-month");
     if(selReviewMonthEl)selReviewMonthEl.onchange=function(){var v=selReviewMonthEl.value;reviewMonth=(v&&/^\d{4}-\d{2}$/.test(v))?v:reviewTargetMonth();render();};
+    var vPrevBtn=document.getElementById("btn-viewer-preview");
+    if(vPrevBtn)vPrevBtn.onclick=function(){viewerPreviewSet(true);};
     var revDoneBtn=document.getElementById("btn-review-done");
     if(revDoneBtn)revDoneBtn.onclick=function(){
       if(viewerMode)return;
@@ -13431,6 +13455,7 @@ function csvImpHtml(){
 }
 // ===== 資料管理 =====
 function viewerDownloadAndDelete(url,fileName,docId){
+  if(!viewerMode)return; // 労務士だけ。管理者の確認用などから資料を無効にしない（開けない側に倒す）
   downloadFile(url,fileName);
   setTimeout(function(){
     Promise.all([
@@ -14186,7 +14211,9 @@ function mileageBootForViewer(){
   mileage.booting=true;
   (async function(){
     // 昇格の開始自体が遅れている場合に備えて、最大2秒だけ待ってから確立を待つ。
-    for(var i=0;i<10&&!_shareElevatePromise;i++){
+    // 管理者の確認用は共有URLの昇格を持たないので待たない（管理者の昇格を待つ）
+    if(!viewerMode&&_adminElevatePromise){try{await _adminElevatePromise;}catch(e){}}
+    for(var i=0;i<10&&viewerMode&&!_shareElevatePromise;i++){
       await mileageSleep(200);
       if(mileageStale(g))return;
     }
@@ -14195,7 +14222,7 @@ function mileageBootForViewer(){
     var res=await mileageBootFetch();
     if(mileageStale(g))return;
     mileageBootApply(res);
-    if(viewerMode)render();
+    if(viewerMode||viewerPreviewOn()||(screen==="admin"&&adminTab==="mileage"&&!mileageBlocksRerender()))render();
   })().catch(function(){mileage.booting=false;mileage.booted=true;});
 }
 
@@ -16013,10 +16040,12 @@ function mileageAdminCardHtml(){
 async function mileageLoadReport(ym){
   var g=mileage.gen;
   mileage.viewLoading=true;mileage.viewTried=true;mileage.viewYm=ym||"";
-  var res=await mileageApi("monthlyReport",{ym:ym||"",withDetail:true});
+  var res=await mileageApi("monthlyReport",{ym:ym||"",withDetail:true,asViewer:viewerPreviewOn()});
   if(mileageStale(g))return;
   if(mileage.viewYm!==(ym||""))return;   // 読み込み中に月が切り替わったら古い応答は捨てる
+  // 確認用で取った応答を管理者の表示に残さない（確認を閉じたあとに届いた応答は捨てる）
   mileage.viewLoading=false;
+  if(res.ok&&res.data&&!viewerMode&&viewerPreview!==!!res.data.asViewer)return;
   if(res.ok&&res.data){
     mileage.viewData=res.data;
     if(Array.isArray(res.data.closedMonths))mileage.viewClosedMonths=res.data.closedMonths;
@@ -16024,7 +16053,7 @@ async function mileageLoadReport(ym){
     mileage.viewData=null;
     if(res.status!==0)showAlert(mileageErrText(res));
   }
-  if(viewerMode)render();
+  if(viewerMode||viewerPreviewOn())render();
 }
 function mileageViewSetYm(v){
   if(!/^\d{4}-\d{2}$/.test(v))return;

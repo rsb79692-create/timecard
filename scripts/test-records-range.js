@@ -59,6 +59,7 @@ function makeCtx(opts) {
     _LAZY_RETRY_MS: 5000,
     screen: opts.screen || "admin",
     viewerMode: !!opts.viewerMode,
+    viewerPreviewOn: () => false,
     writePolicy: opts.writePolicy || "full",
     adminTab: opts.adminTab || "records",
     selMonth: opts.selMonth || "2026-08",

@@ -1037,6 +1037,11 @@ if (!reportSrc) {
   }).then(function () { return runReport(closedStore, { ym: "2026-07" }, "a"); }).then(function (o) {
     eq("管理者は精査に関係なく確定済み月を見られる", o.r.closed, true);
     ok("管理者では精査状態を読まない", o.calls.indexOf("tc5_monthly_review_status") < 0);
+  }).then(function () { return runReport(closedStore, { ym: "2026-07", asViewer: true }, "a"); }).then(function (o) {
+    eq("管理者の確認用（asViewer）は労務士と同じく未精査の月を返さない", String(o.r.closed) + ":" + String(o.r.reviewed), "false:false");
+    eq("確認用の応答には asViewer:true が付く", o.r.asViewer, true);
+  }).then(function () { return runReport(closedStore, { ym: "2026-07", asViewer: true }, "s"); }).then(function (o) {
+    ok("asViewer は管理者以外では使わない（労務士の絞り込みを外す方向には働かない）", o.r.asViewer === false && o.calls.indexOf("tc5_monthly_review_status") < 0);
   // 形式不正
   }).then(function () { return runReport(closedStore, { ym: "2026-13" }); }).then(function (o) {
     eq("年月の形式が不正なら 400 bad_ym", String(o.r.status) + ":" + String(o.r.error), "400:bad_ym");
