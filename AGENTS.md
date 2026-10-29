@@ -63,7 +63,7 @@
 | 有給残日数CSVの一括登録 | [`paid-leave-import.md`](docs/features/paid-leave-import.md) | `node scripts/test-paid-leave-import.js` |
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
 | 打刻と月次書類の連携（穂乃味専用） | [`monthly-docs.md`](docs/features/monthly-docs.md) | `node scripts/test-monthly-docs.js` |
-| 労務士画面の精査ゲート（未精査の月は CSV も表示も出さない） | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-viewer-review-gate.js` / `node scripts/test-records-range.js` |
+| 管理者による労務士画面の見え方の確認 | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-viewer-preview.js` |
 
 テストはすべて依存パッケージなし・送信なし・本番データ非アクセス。**テスト件数は増減するため固定値を規範にしない。**
 各テストの対象範囲と実行条件の詳細は [`docs/features/qa-tests.md`](docs/features/qa-tests.md)。

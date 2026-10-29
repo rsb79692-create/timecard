@@ -79,8 +79,6 @@ function makeCtx(opts) {
     pad: (n) => (n < 10 ? "0" + n : "" + n),
     fmtDateKey: (d) => d.getFullYear() + "-" + sandbox.pad(d.getMonth() + 1) + "-" + sandbox.pad(d.getDate()),
     monthKey: (iso) => (iso ? iso.substring(0, 7) : ""),
-    // 労務士画面は精査完了した月だけを取る。既定は「どの月も精査完了」。
-    monthReviewed: (ym) => (opts.reviewed ? opts.reviewed.indexOf(ym) >= 0 : true),
     addYm: (ym, n) => {
       const p = ym.split("-");
       const t = parseInt(p[0], 10) * 12 + (parseInt(p[1], 10) - 1) + n;
@@ -265,25 +263,6 @@ section("4. 管理・労務士画面の入口（全件取得をしない）");
     t.net.calls.some((u) => /startAt=%222026-07-01%22/.test(u)));
   check("労務士画面で全件取得はしない",
     t.net.calls.filter((u) => /tc5_records\.json$/.test(u)).length === 0);
-}
-
-{
-  // 2026-10-29: 精査が済んでいない月の打刻を労務士の手元へ取らない
-  const t = makeCtx({ handler: () => ({}), viewerMode: true, screen: "admin", reviewed: [],
-                      reviewMonth: "2026-09", selDate: "2026-10-29", ls: { tc5_records_oldest: "2026-04-01" } });
-  t.ctx.ensureAdminRecordRanges();
-  check("労務士画面は未精査の月（対象月・表示日とも）を取得しない",
-    !t.net.calls.some((u) => /startAt=%222026-(09-01|10-29)%22/.test(u)));
-  const t2 = makeCtx({ handler: () => ({}), viewerMode: true, screen: "admin", reviewed: ["2026-09"],
-                       reviewMonth: "2026-09", selDate: "2026-10-29", ls: { tc5_records_oldest: "2026-04-01" } });
-  t2.ctx.ensureAdminRecordRanges();
-  check("精査完了の月は取得する",
-    t2.net.calls.some((u) => /startAt=%222026-09-01%22/.test(u)));
-  t2.ctx._recAddIv("2026-09-01", "2026-09-30");
-  t2.net.calls.length = 0;
-  t2.ctx.ensureAdminRecordRanges();
-  check("未精査の月の表示日は取得しない",
-    !t2.net.calls.some((u) => /startAt=%222026-10-29%22/.test(u)));
 }
 
 section("5. 全期間の分割取得（承認漏れ・有給付与）");
@@ -684,8 +663,8 @@ section("8. index.html 側の結線");
   const wired = [
     ["管理・労務士画面の入口が ensureAdminRecordRanges を呼ぶ", /\n\s*ensureAdminRecordRanges\(\);/],
     ["入口の全件取得（ensureRecordsFull）が残っていない", /^(?!.*ensureRecordsFull)/s],
-    ["起動時の打刻取得は当日のみ（労務士URLでは取らない）", /function loadPunchRecords\(\)\{if\(_isViewerUrl\(\)\)return Promise\.resolve\(null\);var d=recToday\(\);return fetchRecordsRange\(d,d\);\}/],
-    ["10秒ポーリングは当日分だけ取る", /var _pd=recToday\(\);\s*\n(?:\s*if\(viewerMode&&!monthReviewed\(monthKey\(_pd\)\)\)return;[^\n]*\n)?\s*fetchRecordsRange\(_pd,_pd\)/],
+    ["起動時の打刻取得は当日のみ", /function loadPunchRecords\(\)\{var d=recToday\(\);return fetchRecordsRange\(d,d\);\}/],
+    ["10秒ポーリングは当日分だけ取る", /var _pd=recToday\(\);\s*\n\s*fetchRecordsRange\(_pd,_pd\)/],
     ["朝出勤確認の更新も当日分だけ取る", /mRefBtn\.textContent="更新中…"[\s\S]{0,300}?fetchRecordsRange\(_d,_d\)/],
     ["全件取得のヘルパを残していない（使えるところにあると必ず使われる）", /^(?!.*function fetchRecordsAll)/s],
     ["改名は全期間の取得が終わるまで実行しない", /if\(!recordsHistoryReady\(\)\)\{\s*\n\s*ensureRecordsHistory\(\);/],

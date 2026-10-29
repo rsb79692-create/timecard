@@ -1016,41 +1016,28 @@ async function handleReopenMonth(body, actor) {
  * ★ 確定済み（closings に存在する）月のスナップショットだけを返す。
  *   未確定の月は行を返さない＝給与計算用データに未確定分が混入しない。
  * ★ 現在の単価から計算し直さない。スナップショットの値をそのまま返す。
- * ★ 労務士（role "v"）には、移動距離の確定に加えて勤怠精査が完了した月だけを返す
- *   （勤怠の CSV・画面と同じ条件。2026-10-29 ユーザー指示）。
- *   管理者が「労務士画面の見え方を確認」するときは asViewer:true で同じ絞り込みをかける（狭める方向だけ）。
  */
-async function handleMonthlyReport(body, role) {
+async function handleMonthlyReport(body) {
   const ym = H.str(body.ym, 7);
-  const asViewer = role === "v" || (role === "a" && body.asViewer === true);
   const withDetail = body.withDetail === true;
 
   // ★ ym が空のときは確定済み月の一覧を返すだけで monthly を使わない。
   //   /mileage/monthly は全職員×全月の1ノードで、日別内訳 days[] を持つぶん肥大する。
   //   労務士画面は「一覧取得 → 対象月取得」で2回呼ぶため、取って捨てる分をここで削る。
-  const [closingsRaw, monthlyRaw, reviewed] = await Promise.all([
+  const [closingsRaw, monthlyRaw] = await Promise.all([
     G.dbGet(ROOT + "/closings"),
     ym ? G.dbGet(ROOT + "/monthly") : Promise.resolve(null),
-    // 労務士は精査完了の月だけ。取得に失敗したら例外のまま返す（開けない）。
-    asViewer ? P.loadReviewedMonths() : Promise.resolve(null),
   ]);
   const closedMonths = [];
-  let notReviewed = false;
   if (closingsRaw && typeof closingsRaw === "object") {
-    for (const k of Object.keys(closingsRaw)) {
-      if (!M.isYm(k)) continue;
-      if (reviewed && !reviewed[k]) { if (k === ym) notReviewed = true; continue; }
-      closedMonths.push(k);
-    }
+    for (const k of Object.keys(closingsRaw)) if (M.isYm(k)) closedMonths.push(k);
   }
   closedMonths.sort().reverse();
 
-  if (!ym) return { status: 200, ok: true, closedMonths: closedMonths, rows: [], ym: "", asViewer: asViewer };
+  if (!ym) return { status: 200, ok: true, closedMonths: closedMonths, rows: [], ym: "" };
   if (!M.isYm(ym)) return { status: 400, error: "bad_ym" };
   if (closedMonths.indexOf(ym) < 0) {
-    const out0 = { status: 200, ok: true, closedMonths: closedMonths, rows: [], ym: ym, closed: false, asViewer: asViewer };
-    if (notReviewed) out0.reviewed = false; // 確定済みだが勤怠精査が未完了（労務士のみ）
-    return out0;
+    return { status: 200, ok: true, closedMonths: closedMonths, rows: [], ym: ym, closed: false };
   }
 
   const rows = [];
@@ -1078,7 +1065,7 @@ async function handleMonthlyReport(body, role) {
   //   rows と同じく「返す欄を列挙する」方針に揃える。
   const c0 = closingsRaw[ym] || {};
   const out = {
-    status: 200, ok: true, ym: ym, closed: true, asViewer: asViewer,
+    status: 200, ok: true, ym: ym, closed: true,
     closing: {
       closedAt: String(c0.closedAt || ""),
       ratePerKm: Number(c0.ratePerKm) || 0,
@@ -1302,7 +1289,7 @@ module.exports = T.handler(async function handler(req, res) {
       case "reopenRequest": r = await handleRequestStatus(body, actor, "pending"); break;
       case "closeMonth": r = await handleCloseMonth(body, actor); break;
       case "reopenMonth": r = await handleReopenMonth(body, actor); break;
-      case "monthlyReport": r = await handleMonthlyReport(body, ident.role); break;
+      case "monthlyReport": r = await handleMonthlyReport(body); break;
       default: r = { status: 400, error: "bad_action" };
     }
 
