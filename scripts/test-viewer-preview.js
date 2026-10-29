@@ -27,12 +27,14 @@ if (S < 0 || E < 0) { console.error("ERROR: 労務士画面の描画ブロック
 const V = html.slice(S, E);
 
 console.log("\n[1] 入口と描画");
-check("確認用は管理者のログイン中・管理画面・労務士でないときだけ", html.includes('function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&screen==="admin");}'));
+check("確認用は管理者のログイン中・管理画面・労務士でないときだけ", html.includes('function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&!demoMode&&screen==="admin");}'));
 check("精査ステータスのカードに入口がある（管理者デモでは出さない）", html.includes("+(!isAdminAuthenticated||demoMode?'':'<button class=\"btn-export\" id=\"btn-viewer-preview\"") && html.includes("viewerPreviewSet(true)"));
 check("確認用には帯と「管理画面に戻る」を出す", V.includes("👀 労務士にはこう見えています") && V.includes('id="btn-viewer-preview-exit"') && V.includes("viewerPreviewSet(false)"));
 const RR = html.slice(html.indexOf("function ensureAdminRecordRanges(){"), html.indexOf("}else if(screen===\"staffDetail\""));
 check("確認用の打刻の取得は労務士と同じ分岐を通る", RR.includes("if(viewerMode||viewerPreviewOn()){"));
 check("開閉で移動距離の読み込み中を残さない", html.includes("mileage.viewTried=false;mileage.viewLoading=false;mileage.viewClosedMonths=[];}"));
+check("管理画面を離れたら確認用を閉じる", html.includes("  if(viewerPreview&&!viewerPreviewOn())viewerPreview=false;"));
+check("確認用のエラー文言は管理者向け", html.includes("移動距離の読み込みに失敗しました（通信状態をご確認ください）。"));
 check("ログアウト・期限切れで確認用を戻す", html.includes("function _adminStateClear(){\n  viewerPreview=false;") && html.includes("function tenantSessionExpired(){\n  viewerPreview=false;"));
 
 console.log("\n[2] 確認用では書き込まない");

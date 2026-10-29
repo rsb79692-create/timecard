@@ -4332,7 +4332,7 @@ var viewerPending=viewerParam!==null; // Firebase認証待ち
 var viewerMode=false;
 // 管理者が「労務士画面の見え方」を確認している間だけ真（管理者のログイン中・管理画面に限る。労務士画面と同じ描画を使う）
 var viewerPreview=false;
-function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&screen==="admin");}
+function viewerPreviewOn(){return !!(viewerPreview&&!viewerMode&&isAdminAuthenticated&&!demoMode&&screen==="admin");}
 function viewerPreviewSet(on){
   viewerPreview=!!on;
   // 移動距離の労務士カードの状態を切り替えのたびに取り直す
@@ -6058,6 +6058,7 @@ function _renderInner(){
   }
 
   // ── 閲覧専用モード（労務士向け） ──
+  if(viewerPreview&&!viewerPreviewOn())viewerPreview=false; // 管理画面を離れたら確認用を閉じる（戻ったときに確認用のまま開かない）
   if(viewerMode||viewerPreviewOn()){
     var _vPrev=!viewerMode; // 管理者の確認用（労務士と同じ画面に、上の帯だけ足す）
     var DAYS_V=["日","月","火","水","木","金","土"];
@@ -16070,7 +16071,7 @@ function mileageViewerCardHtml(){
   // ★ 閲覧用URLの確認（bootstrap）自体に失敗した場合。「未確定」とは明確に区別する。
   if(mileage.bootFailed){
     return mileageViewShell('<div style="font-size:.85rem;color:#b91c1c;font-weight:700;">移動距離のデータを表示できませんでした。</div>'
-      +'<div style="font-size:.78rem;color:#64748b;margin-top:4px;">閲覧用URLの確認に失敗しました（通信状態、またはURLの有効期限をご確認ください）。</div>'
+      +'<div style="font-size:.78rem;color:#64748b;margin-top:4px;">'+(viewerPreviewOn()?'移動距離の読み込みに失敗しました（通信状態をご確認ください）。':'閲覧用URLの確認に失敗しました（通信状態、またはURLの有効期限をご確認ください）。')+'</div>'
       +retryBtn);
   }
   // ★ 一度だけ取得する。失敗しても再スケジュールしない（render→取得→render の無限ループ防止）
