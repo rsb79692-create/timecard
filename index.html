@@ -5772,7 +5772,7 @@ var DEMO_BLOCK_SELECTORS=[
   // 打刻修正申請の承認・却下
   ".btn-crq-approve",".btn-crq-reject",
   // 有給の承認・却下・引戻・付与・残数編集・削除
-  ".btn-pl-approve",".btn-pl-reject",".btn-pl-withdraw",
+  ".btn-pl-approve",".btn-pl-reject",".btn-pl-withdraw",".btn-pl-cancel",
   ".btn-pl-bal-row-edit",".btn-pl-bal-row-delete","#btn-pl-bal-save",
   "#pl-bal-new-staff","#pl-bal-new-grant-date","#pl-bal-new-granted",
   // 勤怠精査の完了・解除
@@ -6561,7 +6561,7 @@ function _renderInner(){
         var _snRows=_snList.slice(0,10).map(function(n){ // 最大10件
           // 種別で色分け: 却下=注意（赤）／引戻=注意（橙）／承認・付与=成功（緑）／その他=既存の青
           var _snRej=(n.type==="paid_leave_rejected");
-          var _snRev=(n.type==="paid_leave_reverted");
+          var _snRev=(n.type==="paid_leave_reverted"||n.type==="paid_leave_canceled");
           var _snOk=(n.type==="paid_leave_approved"||n.type==="paid_leave_grant");
           var _snAcc=_snRej?"#991b1b":(_snRev?"#92400e":(_snOk?"#166534":"var(--brand-dark)"));
           var _snUnreadBg=_snRej?"background:#fef2f2;":(_snRev?"background:#fffbeb;":(_snOk?"background:#f0fdf4;":"background:var(--brand-soft);"));
@@ -6581,7 +6581,7 @@ function _renderInner(){
         var _snTopType=_snUnread>0?(_snUnreadList[0].type||""):"";
         var _snBnBg='background:var(--brand-soft3);border:1px solid var(--brand-border2);',_snBnFg='var(--brand)';
         if(_snTopType==="paid_leave_rejected"){_snBnBg='background:#fef2f2;border:1px solid #fca5a5;';_snBnFg='#991b1b';}
-        else if(_snTopType==="paid_leave_reverted"){_snBnBg='background:#fffbeb;border:1px solid #fcd34d;';_snBnFg='#92400e';}
+        else if(_snTopType==="paid_leave_reverted"||_snTopType==="paid_leave_canceled"){_snBnBg='background:#fffbeb;border:1px solid #fcd34d;';_snBnFg='#92400e';}
         else if(_snTopType==="paid_leave_approved"||_snTopType==="paid_leave_grant"){_snBnBg='background:#f0fdf4;border:1px solid #86efac;';_snBnFg='#166534';}
         _snHtml='<div onclick="staffNotifReadAndOpen()" style="margin:0 0 12px;padding:11px 14px;border-radius:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;'
           +(_snUnread>0?_snBnBg:'background:#f1f5f9;border:1px solid #cbd5e1;')+'">'
@@ -6882,7 +6882,7 @@ function _renderInner(){
             // 既存申請で pending/approved の日付セット（グレーアウト用）
             var existingDates={};
             paidLeaveRequests.forEach(function(r){
-              if(r.staffName===staffName&&r.status!=="rejected"){
+              if(r.staffName===staffName&&r.status!=="rejected"&&r.status!=="canceled"){
                 getLeaveDates(r).forEach(function(d){existingDates[d]=true;});
               }
             });
@@ -6967,7 +6967,7 @@ function _renderInner(){
         var dupDates=[];
         plFormDates.forEach(function(d){
           var dup=paidLeaveRequests.find(function(r){
-            return r.staffName===staffName&&getLeaveDates(r).indexOf(d)>=0&&r.status!=="rejected";
+            return r.staffName===staffName&&getLeaveDates(r).indexOf(d)>=0&&r.status!=="rejected"&&r.status!=="canceled";
           });
           if(dup)dupDates.push(d);
         });
@@ -8555,8 +8555,9 @@ function _renderInner(){
                 ?'<button class="btn-pl-approve" data-plid="'+esc(r.id)+'" style="background:#16a34a;color:#fff;border:none;'+_plBtn+'margin-right:4px;">承認</button>'
                  +'<button class="btn-pl-reject" data-plid="'+esc(r.id)+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'">却下</button>'
                 :r.status==="approved"
-                  ?'<button class="btn-pl-withdraw" data-plid="'+esc(r.id)+'" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;'+_plBtn+'">引戻</button>'
-                   +'<button class="btn-pl-reject" data-plid="'+esc(r.id)+'" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'margin-left:4px;">却下</button>'
+                  ?'<button class="btn-pl-withdraw" data-plid="'+esc(r.id)+'" title="申請中に戻す" style="background:#dde1e7;color:#475569;border:1px solid #adb5bd;'+_plBtn+'">引戻</button>'
+                   // 承認済みの取り消し（2026-10-29 ユーザー指示。承認後の「却下」を置き換え）
+                   +'<button class="btn-pl-cancel" data-plid="'+esc(r.id)+'" title="承認を取り消す（残日数を戻す）" style="background:#dc2626;color:#fff;border:none;'+_plBtn+'margin-left:4px;">取消</button>'
                   :""
               )
               +'</td></tr>';
@@ -9792,6 +9793,45 @@ function _renderInner(){
             b.disabled=false;
           });
         });
+      };
+    });
+    // 有給管理 — 取消（承認済みを取り消す。残日数を戻し「取消済」にする）
+    document.querySelectorAll(".btn-pl-cancel").forEach(function(b){
+      b.onclick=function(){
+        if(paidLeaveBalanceSaving)return;
+        var plId=b.dataset.plid;
+        // 途中で失敗した取消は、読み込み直して残日数を確かめるまで押させない（残日数を二重に戻さない）
+        if(_plCancelFailed[plId]){showAlert("前回の取消が途中で失敗しています。画面を読み込み直してから操作してください。");return;}
+        if(!plId||/[.#$\/\[\]]/.test(plId))return;
+        var req=paidLeaveRequests.find(function(r){return r.id===plId;});
+        if(!req||req.status!=="approved")return;
+        var _ds=getLeaveDates(req)||[];
+        showModal({title:"確認",okLabel:"取り消す",message:(req.staffName||"")+" さんの有給（"+(_ds.length?plDatesLabel(_ds):"")+"）を取り消します。残日数は戻ります。よろしいですか？",onOK:function(){
+          // 確認中に一覧が取り直されていることがあるため、最新の申請で判定する（別の操作で取消・却下済みなら二重に戻さない）
+          req=paidLeaveRequests.find(function(r){return r.id===plId;});
+          if(paidLeaveBalanceSaving||!req||req.status!=="approved")return;
+          paidLeaveBalanceSaving=true;
+          b.disabled=true;
+          var snapshot=req.consumedSnapshot||[];
+          var nowIso=new Date().toISOString();
+          reverseFifoConsumption(snapshot).then(function(rv){
+            // 残日数の戻しに失敗したら申請は承認済みのまま（取消済にしない・通知しない）
+            if(!rv||rv.ok!==true)throw new Error("balance restore failed");
+            return patchPaidLeaveRequest(plId,{status:"canceled",canceledBy:"管理者",canceledAt:nowIso,consumedSnapshot:[]});
+          }).then(function(saved){
+            if(saved!==true)throw new Error("request patch failed");
+            req.status="canceled";req.canceledBy="管理者";req.canceledAt=nowIso;req.consumedSnapshot=[];
+            createPaidLeaveCancelNotification(req,getReqStaffId(req)); // 取消保存成功後のみ・失敗は握りつぶし
+            paidLeaveBalanceSaving=false;
+            _paidLeaveRenderGuard=false;render();_paidLeaveRenderGuard=true;
+          }).catch(function(e){
+            console.error("[PaidLeave] cancel error",e);
+            _plCancelFailed[plId]=true;
+            paidLeaveBalanceSaving=false;
+            showAlert("取消に失敗しました。画面を読み込み直して、残日数と申請の状態を確かめてください。");
+            b.disabled=false;
+          });
+        }});
       };
     });
     // 有給管理 — 引戻
@@ -16352,17 +16392,23 @@ function savePaidLeaveRequest(req){
 }
 
 // \u6709\u7D66\u7533\u8ACB\u306E\u30B9\u30C6\u30FC\u30BF\u30B9\u3092\u66F4\u65B0
+// 保存できたら true、できなければ false で解決する（reject しない。既存の呼び出し元は戻り値を見ない）。
+var _plCancelFailed=Object.create(null); // 取消が途中で失敗した申請id（読み込み直すまで取消を押させない）
 function patchPaidLeaveRequest(id,partial){
   if(demoWriteBlocked())return Promise.resolve(false);
-  var url=FB_URL+"/tc5_paid_leave_requests/"+id+".json";
+  id=String(id||"");
+  // id は申請の値（id 欄）から来るため、パスを変えうる文字を含むものは書かない
+  if(!id||/[.#$\/\[\]]/.test(id)){console.error("[PaidLeave] bad request id",id);return Promise.resolve(false);}
+  var url=FB_URL+"/tc5_paid_leave_requests/"+encodeURIComponent(id)+".json";
   return authFetch(url,{
     method:"PATCH",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify(partial)
   }).then(function(res){
-    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] patch error",res.status,t);});}
-    else{console.log("[PaidLeave] patched",id,partial);}
-  }).catch(function(e){console.error("[PaidLeave] patch network error",e);});
+    if(!res.ok){res.text().then(function(t){console.error("[PaidLeave] patch error",res.status,t);});return false;}
+    console.log("[PaidLeave] patched",id,partial);
+    return true;
+  }).catch(function(e){console.error("[PaidLeave] patch network error",e);return false;});
 }
 
 // \u2500\u2500 \u6709\u7D66\u4ED8\u4E0E\u884C \u30D8\u30EB\u30D1\u30FC\u95A2\u6570\u7FA4 \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -16587,6 +16633,34 @@ function createPaidLeaveRevertNotification(req,staffId){
       .catch(function(e){console.error("[notif] revert network error",e);});
   }catch(e){console.error("[notif] createPaidLeaveRevertNotification error",e);} // 通知失敗は引戻に影響させない
 }
+// 有給申請の「取消（承認済みの取り消し）保存成功後」にのみ呼ぶ。承認通知だけが残って取得できると誤認されるのを防ぐ。
+// staffId未設定はスキップ。失敗は握りつぶし、取消処理・画面に影響させない。
+function createPaidLeaveCancelNotification(req,staffId){
+  try{
+    var sid=(staffId||"").trim();
+    if(!sid)return; // 社員番号未設定 → 通知スキップ
+    var dates=(getLeaveDates(req)||[]).slice().sort();
+    if(!dates.length)return;
+    var first=fmtJPDate(dates[0]);
+    var body=(dates.length<=1)
+      ? first+"の有給（承認済み）が取り消されました。詳細は管理者にご確認ください。"
+      : first+" ほか"+(dates.length-1)+"日の有給（承認済み）が取り消されました。詳細は管理者にご確認ください。";
+    var nid=plNotifId(req,"canceled");
+    var notif={
+      id:nid,staffId:sid,staffName:req.staffName||"",type:"paid_leave_canceled",
+      title:"有給が取り消されました",
+      body:body,
+      leaveDates:dates,
+      createdAt:new Date().toISOString(),read:false
+    };
+    if(!staffNotifications[sid])staffNotifications[sid]={};
+    staffNotifications[sid][nid]=notif; // 即時in-memory反映
+    authFetch(FB_URL+"/tc5_staff_notifications/"+encodeURIComponent(sid)+"/"+encodeURIComponent(nid)+".json",{
+      method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(notif)
+    }).then(function(res){if(!res.ok)console.error("[notif] cancel save failed",res.status);})
+      .catch(function(e){console.error("[notif] cancel network error",e);});
+  }catch(e){console.error("[notif] createPaidLeaveCancelNotification error",e);} // 通知失敗は取消に影響させない
+}
 // 打刻画面: 通知履歴を開く＝開いた時点で本人の通知を既読化（要件: 履歴を開いたら既読）
 function staffNotifReadAndOpen(){
   try{var sid=resolveStaffId(staffName);if(sid)markStaffNotifRead(sid);}catch(e){console.error("[notif] open error",e);}
@@ -16708,7 +16782,7 @@ function reverseFifoConsumption(consumedSnapshot){
       promises.push(patchPaidLeaveBalance(c.id,{usedDays:newUsed,remainDays:newRemain}));
     }
   });
-  return Promise.all(promises).then(function(){return {ok:true};});
+  return Promise.all(promises).then(function(rs){return {ok:rs.every(function(x){return x!==false;})};});
 }
 
 // \u6709\u7D66\u7533\u8ACB\u306E\u53D6\u5F97\u65E5\u914D\u5217\u3092\u8FD4\u3059\uFF08\u65E7\u5F62\u5F0F date \u306E\u307F\u306E\u5834\u5408\u306F [date] \u3068\u3057\u3066\u6271\u3046\uFF09
@@ -17073,7 +17147,7 @@ function plAddDateRange(dates,from,to,exclude){
 function plExistingLeaveDateSet(name){
   var set={};
   paidLeaveRequests.forEach(function(r){
-    if(r.staffName===name&&r.status!=="rejected"){getLeaveDates(r).forEach(function(d){set[d]=true;});}
+    if(r.staffName===name&&r.status!=="rejected"&&r.status!=="canceled"){getLeaveDates(r).forEach(function(d){set[d]=true;});}
   });
   return set;
 }

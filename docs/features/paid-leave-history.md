@@ -125,3 +125,13 @@
 正本を書き換えないこと／表示系ハンドラが通信・書込をしないことを固定する。
 
 ---
+
+## 承認済みの有給を管理者が取り消す（2026-10-29）
+
+有給管理の一覧で、承認済みの行のボタンは「引戻」と「取消」（以前の「却下」を置き換え）。
+
+- 「取消」は確認のうえ、承認時の消化（`consumedSnapshot`）を `reverseFifoConsumption` で戻してから、申請を `status:"canceled"`（`canceledBy`・`canceledAt`・`consumedSnapshot:[]`）にする。一覧では「取消済」として履歴に回る。
+- 保存できたらスタッフへ通知する（`paid_leave_canceled`。引戻と同じ注意の色）。社員番号が無いスタッフには通知しない。
+- 取消済の日は承認済みではないので、打刻の禁止（`punch-leave-guard.md`）からも外れる。
+- 申請中の行は従来どおり「承認」「却下」。
+- 回帰テスト: `node scripts/test-paid-leave-cancel.js`
