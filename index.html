@@ -115,7 +115,7 @@ var TENANT_CONFIGS={
     theme:null,                // 穂乃味は :root の既定値（装飾の色はロゴ色、ボタンの色は従来の青）
     facilityAdminMenu:false,   // 施設URLの打刻トップに「管理者メニュー」を出すか（穂乃味は出さない。従来どおり）
     facePhotoDefault:false,    // 打刻時の顔撮影の既定（スタッフに設定が無いとき）。穂乃味は従来どおり OFF
-    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true}  // monthlyDocs は MDOC_FACILITIES の施設だけ（2026-10-09 ミュゲの泉で再開・2026-10-18 ナナイロ追加・2026-10-20 から他の5施設）
+    features:{mileage:true,deviceWatch:true,monthlyDocs:true,meals:true,supportPick:true}  // monthlyDocs は MDOC_FACILITIES の施設だけ（2026-10-09 ミュゲの泉で再開・2026-10-18 ナナイロ追加・2026-10-20 から他の5施設）
   },
   mantel:{
     id:"mantel",legacy:false,
@@ -145,7 +145,7 @@ var TENANT_CONFIGS={
     facilityAdminMenu:true,    // 施設URLの打刻トップにも「管理者メニュー」を出す（2026-10-13 ユーザー指示）
     facePhotoDefault:true,     // 打刻時の顔撮影はスタッフ全員を既定で ON（2026-10-13 ユーザー指示）。個別に OFF にしたスタッフ（facePhoto:false）だけ撮らない
     // ★ 移動距離・端末持ち出し監視は運用準備ができるまで無効（サーバ側 api/_lib/tenant.js と同じ値）
-    features:{mileage:false,deviceWatch:false,monthlyDocs:false,meals:false}
+    features:{mileage:false,deviceWatch:false,monthlyDocs:false,meals:false,supportPick:false}
   }
 };
 var TENANT_INVALID=false;
@@ -5157,6 +5157,8 @@ var docList=[];var docLoading=false;var selectedDocFile=null;
 var selectedStaffDocIds=new Set();
 var staffUploadFile=null;var staffUploadMsg=null;
 var selectedWorkFacility=null;
+// 応援ありのスタッフが、今日の出勤先を「施設を選ぶ画面」で選んだか（supportPick。スタッフが替わると戻す）
+var workFacilityPicked=false;
 var facilityChangeTo=null; // 施設変更モーダルで選択された移動先施設（打刻直前のみ有効）
 var _fcModalOpen=false;    // 施設変更モーダルの多重表示防止
 var masterDepts=loadData("tc_master_depts",[]);
@@ -6529,6 +6531,8 @@ function _renderInner(){
     // 承認済み有給の日は勤務打刻ボタンを押せなくする（表示だけ。保存は _execPunch で必ず止める）
     var _plBlock=punchOutboxEnabled()&&punchLeaveBlocked(staffName,dk);
     if(_plBlock){ci=false;co=false;cbs=false;cbe=false;cfc=false;}
+    // ★ 応援ありのスタッフは、その日最初の出勤を「施設を選ぶ画面」から始める（穂乃味。2026-11-02 ユーザー指示）
+    if(supportPickNeeded(_pso,_anyCin,_plBlock)){app.innerHTML=supportPickHtml(_hf2||_pso.location||"");return;}
     // 打刻直前の有給確認の待ち（最大2秒）は、ボタン・顔撮影の枠を動かさず画面下に重ねて出す
     //（押しても _punchSaving で受け付けない）。枠を消すと顔撮影のプレビューが止まるため。
     var _plCheckHtml=_plChecking
@@ -6775,7 +6779,9 @@ function _renderInner(){
             +'</div>'
           :(_crossFacilityCin
             ?'<div style="text-align:center;padding:10px 16px;background:#fffbeb;border:1px solid #fcd34d;border-radius:6px;margin:0 0 12px;font-size:.9rem;font-weight:700;color:#92400e;">'+(_onBreak?'休憩中：':'出勤中：')+esc(_crossFacilityCin.facilityName||"他施設")+'</div>'
-            :((_pso.canSupportWork&&!_openCin&&!_plBlock)
+            :((_pso.canSupportWork&&!_openCin&&!_plBlock&&tenantFeature("supportPick"))
+              ?supportPickChosenHtml()
+            :(_pso.canSupportWork&&!_openCin&&!_plBlock)
               ?'<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
                 +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:6px;">📍 出勤先施設</div>'
                 +'<select id="sel-work-facility" onchange="selectedWorkFacility=this.value" style="font-size:.95rem;font-weight:700;padding:6px 12px;border:1px solid #7dd3fc;border-radius:4px;background:#fff;color:#0f172a;font-family:inherit;outline:none;width:100%;max-width:220px;">'
@@ -10943,7 +10949,7 @@ function toggleViewerExpand(nm){viewerExpandedStaff=(viewerExpandedStaff===nm)?n
 function goHome(){
   faceCamClose();   // ★ 打刻直後に「もどる」を押しても、スタッフ一覧の上に表示を残さない
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
-  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;staffNotifOpen=false;
+  staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;workFacilityPicked=false;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;staffNotifOpen=false;
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
   screen="home";render();
 }
@@ -11740,7 +11746,7 @@ async function _execPunch(type,d,meal){
     // ★ 画面がホーム（スタッフ一覧）へ戻る時点で撮影表示を必ず閉じる。
     //   残すと、見えていないスタッフ名を次の人が押せる（pointer-events:none のため）。
     faceCamClose();
-    punchMsg=null;staffName=null;selectedWorkFacility=null;facilityChangeTo=null;
+    punchMsg=null;staffName=null;selectedWorkFacility=null;workFacilityPicked=false;facilityChangeTo=null;
     // サンドボックス中はホームではなくスタッフ選択画面へ戻す
     screen=staffDemoMode?"staffDemoPick":"home";
     render();
@@ -11846,6 +11852,50 @@ function doPunch(type){
 // ===== 施設変更 =====
 // 勤務中に別施設へ移動したことを現在時刻で記録する。
 // 2026-10-22 から移動元を出る前に押してもらう運用（移動時間は変更後の施設へ計上。移動元の日中の温度をこのとき聞く。MONTHLY-DOCS）。
+// ── 応援ありのスタッフの「施設を選ぶ画面」（機能フラグ supportPick。穂乃味。2026-11-02 ユーザー指示）──
+// ★ その日まだどこでも出勤していない応援ありのスタッフは、PIN の次にこの画面を出し、出勤する施設を押してもらう。
+//   出勤先のプルダウンは目立たず、変え忘れると元の施設の出勤として記録されるため。
+// ★ この端末の施設（施設URLの施設。無ければ所属）を目立たせて先頭に置く（ユーザー指示 A）。
+// ★ 打刻画面には選んだ施設を表示し、「施設を選び直す」で戻れる（ユーザー指示 B）。
+// ★ 出勤後（休憩・退勤・施設変更）はこの画面を出さない。承認済み有給の日も出さない（打刻できないため）。
+function supportPickNeeded(so,anyCin,plBlock){
+  return !!(tenantFeature("supportPick")&&so&&so.canSupportWork&&!anyCin&&!plBlock&&!punchMsg&&!workFacilityPicked&&masterLocs.length>0);
+}
+function supportPickHtml(homeFac){
+  var locs=masterLocs.slice();
+  var hi=locs.indexOf(homeFac);
+  if(hi>0){locs.splice(hi,1);locs.unshift(homeFac);}
+  var btns=locs.map(function(l){
+    var home=(hi>=0&&l===homeFac);
+    return '<button type="button" class="btn-support-pick" data-fac="'+esc(l)+'" onclick="pickWorkFacility(this.dataset.fac)" style="display:block;width:100%;margin:0 0 10px;padding:'+(home?'18px':'14px')+' 12px;font-size:'+(home?'1.25rem':'1.08rem')+';font-weight:800;font-family:inherit;cursor:pointer;border-radius:6px;'
+      +(home?'background:var(--brand);color:#fff;border:2px solid var(--brand-dark);':'background:#fff;color:#0f172a;border:1px solid #94a3b8;')+'">'
+      +(home?'<div style="font-size:.78rem;font-weight:700;opacity:.9;margin-bottom:2px;">この端末の施設</div>':'')
+      +esc(l)+'</button>';
+  }).join("");
+  return (TENANT.legacy
+      ?'<div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px;"><button class="btn-back" onclick="goHome()">← もどる</button>'+honomiLogoHtml(58,"hn-logo-punch")+'</div>'
+      :'<button class="btn-back" onclick="goHome()">← もどる</button>')
+    +'<div class="center" style="margin-bottom:14px;padding-top:4px;">'
+    +'<div style="font-size:2.4rem;font-weight:900;letter-spacing:-1px;">'+esc(staffName)+'</div>'
+    +'<div style="font-size:1.15rem;font-weight:800;color:#0f172a;margin-top:10px;">📍 今日はどこで出勤しますか？</div>'
+    +'</div>'
+    +'<div id="support-pick" style="margin:0 8px;">'+btns+'</div>';
+}
+function supportPickChosenHtml(){
+  return '<div style="margin:0 16px 12px;padding:10px 12px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;text-align:center;">'
+    +'<div style="font-size:.75rem;color:#0369a1;font-weight:700;margin-bottom:4px;">📍 出勤先施設</div>'
+    +'<div id="support-pick-chosen" style="font-size:1.1rem;font-weight:800;color:#0f172a;margin-bottom:8px;">'+esc(selectedWorkFacility||"")+'</div>'
+    +'<button type="button" onclick="repickWorkFacility()" style="background:#fff;color:#0369a1;border:1px solid #7dd3fc;border-radius:4px;padding:7px 16px;font-size:.9rem;font-weight:700;cursor:pointer;font-family:inherit;">施設を選び直す</button>'
+    +'</div>';
+}
+function pickWorkFacility(fac){
+  if(screen!=="punch"||!staffName||masterLocs.indexOf(fac)<0)return;
+  selectedWorkFacility=fac;workFacilityPicked=true;render();
+}
+function repickWorkFacility(){
+  if(screen!=="punch"||!staffName)return;
+  workFacilityPicked=false;render();
+}
 function openFacilityChangeModal(){
   if(!tokenValid)return;
   if(viewerMode){console.warn("[viewerMode] write blocked");return;}
@@ -11971,7 +12021,7 @@ function _sandboxLoad(name){
 }
 function _sandboxResetUiState(){
   if(punchTimer){clearTimeout(punchTimer);punchTimer=null;}
-  selectedWorkFacility=null;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;
+  selectedWorkFacility=null;workFacilityPicked=false;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;
   punchMsg=null;staffNotifOpen=false;staffUploadFile=null;staffUploadMsg=null;
   mealFormOpen=false;monthPunchOpen=false;mealFormMonth="";
 }
@@ -12006,7 +12056,7 @@ function exitStaffDemo(){
     paidLeaveRequests=s.paidLeaveRequests;paidLeaveBalances=s.paidLeaveBalances;
     mealsData=s.mealsData;mealConfData=s.mealConfData;staffNotifications=s.staffNotifications;
     tokenValid=s.tokenValid;facilityName=s.facilityName;
-    mealFormOpen=s.mealFormOpen;monthPunchOpen=s.monthPunchOpen;selectedWorkFacility=s.selectedWorkFacility;
+    mealFormOpen=s.mealFormOpen;monthPunchOpen=s.monthPunchOpen;selectedWorkFacility=s.selectedWorkFacility;workFacilityPicked=false;
     writePolicy=s.writePolicy;
     if(uiMode==="adminDemo")adminTab=s.adminTab||"records";
   }
