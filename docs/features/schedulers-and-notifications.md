@@ -45,7 +45,7 @@
   **外部スケジューラの設定は Agent から変更しない**（変更が必要なら人間に依頼）。
 - **GitHub PAT**: 本リポジトリ内に PAT（`ghp_…` / `github_pat_…`）や `api.github.com` / `dispatches` 呼び出しは**見つからない（未確認）**。アプリから GitHub API を叩く実装は確認できなかった。
 - **通知系まとめ**:
-  - LINE Push: GitHub Actions（`morning-check` / `notify-check`）から直接送信（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID`）。アップロード通知は Vercel `api/line-notify.js`。
+  - LINE Push: GitHub Actions（`morning-check` / `notify-check` / `paid-leave-notify`）から直接送信（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID`）。`paid-leave-notify`（有給の付与日。2026-11-03 追加）は cron `40 22 * * *` の1本だけで、外部スケジューラからは呼ばない（通知記録を持たないため二重になる）。詳細: [`paid-leave-grant-notify.md`](paid-leave-grant-notify.md)。アップロード通知は Vercel `api/line-notify.js`。
   - Discord Webhook: Vercel `api/discord-notify.js`（`DISCORD_WEBHOOK_URL`）。`index.html` がアップロード時に呼ぶ。
   - FCM Push: GitHub Actions `fcm-notify` → `scripts/fcm-check.js`（`FIREBASE_SERVICE_ACCOUNT_KEY`）。
   - 通知のテストは必ず **dryRun**（`DRY_RUN=true` / `workflow_dispatch` の `dryRun`）で行い、実送信は人間の承認を得る。

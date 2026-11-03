@@ -29,7 +29,7 @@
 - 画面は URL の **`?c=<会社ID>`** で会社を選ぶ。無ければ穂乃味（**既存の穂乃味の URL・QR は一切変わらない**）。未知の会社IDは穂乃味へ倒さず「このURLは正しくありません」で止まる。
 - `/tenantReg` と `/srv` は Rules 未定義＝クライアントから読み書き不可（Rules が内部で参照するだけ）。
 - ★ **会社を増やすときにコードをコピーしない。** 次の4か所に1件ずつ足す（`scripts/test-multitenant.js` が一致を検査する）:
-  `api/_lib/tenant.js` の `TENANTS` ／ `index.html` の `TENANT_CONFIGS` ／ `sw.js` の `TENANT_NOTIFY` ／ `scripts/notify-check.js`・`scripts/morning-check.js` の会社表。
+  `api/_lib/tenant.js` の `TENANTS` ／ `index.html` の `TENANT_CONFIGS` ／ `sw.js` の `TENANT_NOTIFY` ／ `scripts/notify-check.js`・`scripts/morning-check.js`・`scripts/paid-leave-notify.js` の会社表。
   あわせて画面の会社設定の `facilityAdminMenu`（施設URLの打刻トップに管理者メニューを出すか）を決める。
   そのうえで `scripts/bootstrap-tenant.js` で `/tenantReg/<id>` と `/srv/<id>/authz` を作る。
 
@@ -154,6 +154,7 @@ PIN レコードはこの2つで作る必要があるため、**PIN の値はす
 | 持ち出し検知（`api/_lib/device.js`） | 同上の環境変数。定期スイープは全社を回し、各社のコンテキストで判定・送信（機能が無効な会社・停止中の会社は回さない） |
 | 朝の未打刻（`scripts/morning-check.js`） | `TENANT_ID` 環境変数（未指定＝穂乃味＝従来どおり）。施設・判定時刻・除外施設・見出しは `MORNING_TENANTS`。**マンテールは施設と判定時刻が決まるまで `enabled:false`**。送信記録は `/srv/<cid>/morningNotify` |
 | 通知確認（`scripts/notify-check.js`）・FCM（`scripts/fcm-check.js`） | `TENANT_ID` 環境変数。FCM の通知には会社IDが入り、`sw.js` がその会社の画面へ遷移する |
+| 有給の付与日（`scripts/paid-leave-notify.js`） | `TENANT_ID` 環境変数。他社は `/tenants/<cid>` を読み `LINE_*__<CID>` へ送る。未設定なら止まる（[`paid-leave-grant-notify.md`](paid-leave-grant-notify.md)） |
 
 ★ ワークフロー（`.github/workflows/`）は**変更していない**（穂乃味は従来どおり）。マンテールの定期通知を動かすには、`TENANT_ID=mantel` のジョブと `__MANTEL` の Secrets の追加が要る（人間の確認が必要）。
 

@@ -48,6 +48,7 @@
 | 外部スケジューラ・通知系 | [`schedulers-and-notifications.md`](docs/features/schedulers-and-notifications.md) | — |
 | 移動距離申請 | [`mileage.md`](docs/features/mileage.md) | `node scripts/test-mileage.js` |
 | 有給取得履歴・有給申請の期間指定・承認済みの取消 | [`paid-leave-history.md`](docs/features/paid-leave-history.md) | `node scripts/test-paid-leave-history.js` / `node scripts/test-paid-leave-range.js` / `node scripts/test-paid-leave-cancel.js` |
+| 有給の付与日 LINE通知（毎朝・毎週月曜） | [`paid-leave-grant-notify.md`](docs/features/paid-leave-grant-notify.md) | `node scripts/test-paid-leave-notify.js` |
 | 有給残日数・打刻・月別出勤日数の注意点 | [`business-data-notes.md`](docs/features/business-data-notes.md) | `node scripts/test-paid-leave-grant-edit.js` |
 | `tc5_records` の取得範囲・承認漏れ集計 | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-records-range.js` / `node scripts/test-unapproved-summary.js` |
 | index.html（app shell）のキャッシュ・`sw.js`・配信版の自動更新 | [`app-shell-cache.md`](docs/features/app-shell-cache.md) | `node scripts/test-records-range.js` / `node scripts/test-app-auto-update.js` |
@@ -99,6 +100,7 @@
 
 **有給（`business-data-notes.md` / `paid-leave-history.md`）**
 - 残日数の正本は `remainDays`。**`grantedDays - usedDays` で再計算しない**（登録前の消化分が復活する）。`usedDays` は FIFO 消化関数以外から書き換えない。
+- 付与日の LINE 通知（`scripts/paid-leave-notify.js`）の付与日・未登録の判定は `calcPaidLeaveSchedule` / `getPaidLeaveUnregistered` と同じにする（片方だけ直さない）。通知記録を持たないので起動元（cron）を増やさない。
 - 取得履歴は `tc5_paid_leave_requests` から表示のたびに組み立てる（二重保存しない）。社員番号があれば番号一致だけで突き合わせる。pending を取得済みにしない。「本システムで承認した分のみ」の注記・改名時の重複表示抑止を外さない。
 
 **管理者の勤怠編集（`admin-attendance-edit.md`）**

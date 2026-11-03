@@ -1,0 +1,57 @@
+name: 有給付与日 LINE通知
+
+on:
+  schedule:
+    # 1日1回だけ。通知記録を持たない（RTDB へ書かない）ので、起動元を増やすと同じ日に2通になる。
+    # ⚠ 外部スケジューラ（cron-job.org）からこのワークフローを呼ばないこと（cron と重なって二重通知になる）。
+    # ⚠ schedule の cron は1〜2時間遅れることがある（schedulers-and-notifications.md）。
+    #    遅れても JST の同じ日のうちに届く。取りこぼした日の分は、月曜のまとめ通知で拾う。
+    - cron: "40 22 * * *"  # 毎日 22:40 UTC = 07:40 JST
+  workflow_dispatch:
+    inputs:
+      testNotify:
+        description: "テスト通知を送る（Firebase を読まない）。dryRun を OFF にすると実際に LINE へ送ります"
+        required: false
+        default: false
+        type: boolean
+      dryRun:
+        description: "dryRun=true にすると LINE 送信せず判定ログだけ出す（氏名・付与日は伏せ字）"
+        required: false
+        default: true
+        type: boolean
+      targetDate:
+        description: "基準日 yyyy-mm-dd（空欄 = JST 今日）"
+        required: false
+        default: ""
+        type: string
+
+# サービスアカウント鍵を受け取るジョブなので、GITHUB_TOKEN の権限は読み取りだけに絞る
+permissions:
+  contents: read
+
+jobs:
+  paid-leave-notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run paid-leave-notify
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_TO_ID: ${{ secrets.LINE_TO_ID }}
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          # tc5_paid_leave_balances は役割トークンが要る領域なので、notify-check と同じくサービスアカウントで読む（GET のみ）
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
+          DRY_RUN: ${{ github.event.inputs.dryRun || 'false' }}
+          TARGET_DATE: ${{ github.event.inputs.targetDate || '' }}
+          LANG: C.UTF-8
+          LC_ALL: C.UTF-8
+        run: node scripts/paid-leave-notify.js

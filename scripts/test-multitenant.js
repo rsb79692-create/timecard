@@ -767,6 +767,9 @@ async function main() {
       Object.keys(server).every(function (k) { return new RegExp("\\n  " + k + ": \\{").test(nc); }));
     check("morning-check.js の会社一覧がサーバと一致",
       Object.keys(server).every(function (k) { return new RegExp("\\n  " + k + ": \\{").test(mc); }));
+    const pn = fs.readFileSync(path.join(ROOT, "scripts", "paid-leave-notify.js"), "utf8");
+    check("paid-leave-notify.js の会社一覧がサーバと一致",
+      Object.keys(server).every(function (k) { return new RegExp("\\n  " + k + ": \\{").test(pn); }));
     Object.keys(server).filter(function (k) { return !server[k].legacy; }).forEach(function (k) {
       check(k + ": manifest とロゴが在る",
         fs.existsSync(path.join(ROOT, client[k].manifest)) && fs.existsSync(path.join(ROOT, client[k].logo.src)));

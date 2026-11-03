@@ -10,7 +10,7 @@
 2. 変更した `.js` に `node --check`、`manifest.json` / `database.rules.json` に JSON 検証
 3. `sw.js` を変えた場合は `CACHE_NAME` の更新と `OFFLINE_URLS` の参照先の実在を確認する
 4. 「機能の詳細文書」の表から、変更に関係する回帰テストをすべて実行する（全件 PASS / 0 FAIL。1件でも FAIL なら「要修正」で出荷しない。関係しないテストは実施不要と報告する）
-5. 通知スクリプトの変更は dryRun で確認する（`DRY_RUN=true node scripts/morning-check.js`。判定時刻ごとに `CHECK_HOUR=6` / `7`）
+5. 通知スクリプトの変更は dryRun で確認する（`DRY_RUN=true node scripts/morning-check.js`。判定時刻ごとに `CHECK_HOUR=6` / `7`）。有給の付与日通知（`scripts/paid-leave-notify.js`）は回帰テストが https を模擬して実行全体を確かめる。Actions の手動実行は `dryRun` が既定で ON
 6. GitHub Actions の YAML を変えた場合は、構文・cron・`secrets` 参照名・`node-version` を確認する
 7. **instruction files を変えた場合**（`AGENTS.md` / `CLAUDE.md` / `.claude/rules/`）は `node ../_shared_claude/config/githooks/instruction-size.js --repo .` が FAIL でないことを確認する
 
