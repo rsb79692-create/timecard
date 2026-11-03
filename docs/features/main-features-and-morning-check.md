@@ -24,9 +24,9 @@
         移動距離申請が `master/locations` をサーバ側の判断材料にしていないのと同じ理由。施設マスタは「どの施設が在るか」の正本としてだけ使う。
       - 施設マスタの施設名との突き合わせは `normalizeFacility`（NFKC＋空白除去）で行い、`LATE_CHECK_FACILITIES` に書いた施設名が
         マスタに見当たらない場合は `findMissingLateFacilities` が `[WARN]` を出す（改名・表記ゆれの検知）。
-      - 有効な判定時刻は `CHECK_HOURS = [6, 7]` だけ。`CHECK_HOUR` が不正なら**既定へ倒さず `exit 1`**（黙って6時として走ると、6時の施設へ二重通知しつつ7時の施設が誰にも判定されない）。
-      - ⚠ **`CHECK_HOURS` へ時刻を足すときは `morning-check.yml` の cron も必ず足す。** cron の無い時刻を指定した施設は誰にも判定されず、通知が消える。
-        この対応は `scripts/test-morning-check.js` が `CHECK_HOURS` から導出して機械的に検証する。
+      - 有効な判定時刻は会社ごと（`MORNING_TENANTS.<会社ID>.runHours` → `CHECK_HOURS`。2026-11-03 に会社ごとへ移した）。**穂乃味は `[6, 7]` だけ**（値・挙動は従来と同じ）。`CHECK_HOUR` が不正なら**既定へ倒さず `exit 1`**（黙って6時として走ると、6時の施設へ二重通知しつつ7時の施設が誰にも判定されない）。
+      - ⚠ **穂乃味の `runHours` へ時刻を足すときは `morning-check.yml` の cron と case も必ず足す。** cron の無い時刻を指定した施設は誰にも判定されず、通知が消える。
+        この対応は `scripts/test-morning-check.js` が `CHECK_HOURS` から導出して機械的に検証する（マンテールは `morning-check-mantel.yml` の allowlist と照合する。下記「マンテール」）。
       - ⚠⚠ **`scripts/morning-check.js` の `DEFAULT_FACILITIES` と `index.html` の `DEFAULT_FACILITIES` は
         同名だが役割が違う。同期してはならない。**
         `index.html` 側は**空配列**である（実施設名を配布物へ埋め込まないため）。
@@ -125,6 +125,37 @@
         - 本番の条件付き書き込みの確認は `workflow_dispatch` の **`selfTest=true`**（LINE は送らない。`/morningNotify/_selftest` だけを書く）。
         - 記録は日付ごとに増える（1日2ノード・数KB）。自動削除はしていない。
       - ⚠ **外部スケジューラ（cron-job.org 等）の設定はリポジトリ外にあり、Agent からは変更しない**（本書の禁止事項）。必要なら人間に依頼する。
+    - **マンテール（会社ID `mantel`）の朝出勤確認**（2026-11-03 実装。オーナー承認済み）
+      - 処理は穂乃味と同じ `scripts/morning-check.js` を `TENANT_ID=mantel` で動かす（コードは複製しない）。ワークフローは別ファイル **`.github/workflows/morning-check-mantel.yml`**（穂乃味の `morning-check.yml` は変えていない）。
+      - 設定（正本は `MORNING_TENANTS.mantel`）:
+
+        | 項目 | 値 |
+        |---|---|
+        | 施設（12） | あんず苑 / こもれびの里 / ``Kiyomi`s郷あゆむ`` / 小春の里 / 小春日和 / はるぞら / つむぎの里 / ふたばの里 / 笑福 / さざんか / 清美の郷 / せせらぎの里 |
+        | 判定時刻 | **あんず苑 = 5時**（`lateCheckFacilities`）、その他11施設 = 6時（`defaultHour`）。`runHours = [5, 6]` |
+        | 除外施設 | なし |
+        | 通知の見出し | `【マンテール タイムカード】` |
+        | 宛先 | `LINE_CHANNEL_ACCESS_TOKEN__MANTEL` / `LINE_TO_ID__MANTEL`（**穂乃味の LINE の Secret はワークフローへ渡していない**） |
+        | 判定データ | `/tenants/mantel`（`tc5_records` / `master/locations`）をサービスアカウントで読む（匿名認証は使わない） |
+        | 通知記録 | `/srv/mantel/morningNotify/{日付}/h5`・`h6`（Rules 未定義＝クライアント不可） |
+        | 利用状態 | 起動のたびに `/tenantReg/mantel/active` を読み、**`true` 以外なら何も読まず・送らずに終了（exit 0、`[SKIP] 会社 mantel は利用停止中です`）**。読めないときは exit 1。テスト通知・selfTest もこの確認の後 |
+
+      - ⚠ 施設名は**スタッフ一覧の表示どおり**で、施設マスタ（`/tenants/mantel/master/locations`）の表記と一致するかは**未確認**。
+        dryRun の `[FAC]` ログで12施設が5時1件・6時11件に分かれること、`[WARN] DEFAULT_FACILITIES に無い施設` と「設定異常」が出ないことを確かめる。
+        ``Kiyomi`s郷あゆむ`` は半角のバッククォートを含む。全角の「｀」は NFKC で同じ施設として照合されるが、アポストロフィ「'」などは別の施設になる（その場合はマスタかコードの表記を合わせる）。
+      - 穂乃味と同じく、シフト・休日は見ない（毎日、出勤の打刻が1件も無い施設を通知する）。施設名は公開リポジトリの Actions ログに出る（穂乃味と同じ）。
+      - ⚠ **起動は今のところ `workflow_dispatch` だけ**（`schedule` の cron は無い。オーナーのテスト送信の後に保険として足すかを決める）。定時の起動は cron-job.org から（手順: [`schedulers-and-notifications.md`](schedulers-and-notifications.md)「マンテールの朝出勤確認」）。
+      - ワークフローの入力:
+
+        | 入力 | 既定 | 意味 |
+        |---|---|---|
+        | `checkHour` | 空 | `"5"` または `"6"`。**判定する回で空なら exit 1**（既定の時刻へ倒さない。5時の呼び出しの設定ミスが6時の二重判定になるのを防ぐ）。テスト通知・selfTest のときだけ空でよい |
+        | `dryRun` | **true** | 既定は送らない（穂乃味と逆）。実際に送る回は外す（REST では `"dryRun":"false"`） |
+        | `testNotify` | false | 判定せず固定のテスト文を送る（dryRun が ON なら本文をログに出すだけ） |
+        | `selfTest` | false | `/srv/mantel/morningNotify/_selftest` で条件付き書き込みを確かめる（LINE は送らない。dryRun に関係なく書く） |
+        | `targetDate` | 空 | 判定対象日（穂乃味と同じ。未来日は dryRun だけ） |
+
+      - ⚠ **判定時刻より前の手動の実送信は、その日の枠を先に送信済みにする**（穂乃味と同じ既知の制限）。朝の確認は dryRun で行う。
   - 通知確認 LINE通知（`scripts/notify-check.js`、`.github/workflows/notify-check.yml`、手動 `workflow_dispatch` のみ）
   - 打刻修正申請 FCM Push通知（`scripts/fcm-check.js`、`.github/workflows/fcm-notify.yml`、JST 8–22時に30分間隔）
   - 写真アップロード通知（管理者向け。LINE: `api/line-notify.js` / Discord: `api/discord-notify.js`、いずれも Vercel）

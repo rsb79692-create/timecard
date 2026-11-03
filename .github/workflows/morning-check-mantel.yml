@@ -1,0 +1,115 @@
+name: 朝出勤確認 LINE通知（マンテール）
+
+# マンテール株式会社（会社ID mantel）の朝出勤確認。処理は穂乃味と同じ scripts/morning-check.js を TENANT_ID=mantel で動かす。
+# 判定時刻: あんず苑 = 5時 / その他11施設 = 6時（施設と判定時刻の正本は scripts/morning-check.js の MORNING_TENANTS.mantel）。
+#
+# ★ 起動は workflow_dispatch だけ（2026-11-03 時点）。schedule の cron は、オーナーのテスト送信の後に足す。
+#    定時の起動は外部スケジューラ（cron-job.org）から REST で行う（docs/features/schedulers-and-notifications.md の手順）:
+#      20:03 UTC（05:03 JST）… {"ref":"main","inputs":{"checkHour":"5","dryRun":"false"}}
+#      21:03 UTC（06:03 JST）… {"ref":"main","inputs":{"checkHour":"6","dryRun":"false"}}
+#    ⚠ 値はすべて文字列。checkHour を数値で送ると GitHub API が 422 を返し、run が作られない（Actions に何も出ない）。
+#    ⚠ dryRun の既定は true（送らない）。定時の呼び出しは "dryRun":"false" を必ず付ける。付け忘れると毎朝判定ログだけで LINE は届かない。
+#
+# ⚠ 穂乃味の LINE の Secret（LINE_CHANNEL_ACCESS_TOKEN / LINE_TO_ID）は渡さない。宛先を取り違えて穂乃味へ送らないため。
+# ⚠ concurrency: を足さない（待機中の実行が取り消され、5時分・6時分の取りこぼしになる。二重通知は通知記録で防いでいる）。
+on:
+  workflow_dispatch:
+    inputs:
+      checkHour:
+        description: "判定時刻（5 または 6）。テスト通知・selfTest のときだけ空欄でよい"
+        required: false
+        default: ""
+        type: string
+      testNotify:
+        description: "テスト通知を送る（判定はしない。dryRun を外したときだけ実際に届く）"
+        required: false
+        default: false
+        type: boolean
+      targetDate:
+        description: "判定対象日 yyyy-mm-dd（空欄 = JST 今日）"
+        required: false
+        default: ""
+        type: string
+      dryRun:
+        description: "dryRun（既定 ON = LINE 送信せず判定ログだけ出す）。実際に送るときだけ外す"
+        required: false
+        default: true
+        type: boolean
+      selfTest:
+        description: "二重通知防止の条件付き書き込みが本番で機能するかだけを確認する（LINE は送らない）"
+        required: false
+        default: false
+        type: boolean
+
+# サービスアカウント鍵を受け取るジョブなので、GITHUB_TOKEN の権限は読み取りだけに絞る
+permissions:
+  contents: read
+
+jobs:
+  morning-check-mantel:
+    runs-on: ubuntu-latest
+    # スクリプト側の上限（待機・再試行）は、全通信がタイムアウトし続けた計算上の最悪でも約36分。止まった場合の保険。
+    # 途中で打ち切られても、次の実行が同じ retry key で再送するので二重通知にはならない。
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # 判定時刻はこのステップだけが決める。
+      # ⚠ 実行時の現在時刻からは決めない（Actions の起動は遅れることがあるため）。
+      # ⚠ 判定する回で checkHour が空なら既定へ倒さず失敗させる。黙って6時で走らせると、
+      #    5時の回の呼び出しの設定ミスが「6時の施設へ二重に判定・あんず苑は誰も判定しない」になり success で終わる。
+      #    判定をしないテスト通知・selfTest だけは空欄を許す（スクリプトはそれらの回で判定時刻を使わない）。
+      - name: 判定時刻を決める
+        env:
+          INPUT_CHECK_HOUR: ${{ github.event.inputs.checkHour }}
+          INPUT_TEST_NOTIFY: ${{ github.event.inputs.testNotify }}
+          INPUT_SELF_TEST: ${{ github.event.inputs.selfTest }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+          if [ -n "${INPUT_CHECK_HOUR}" ]; then
+            # 手動実行・外部スケジューラからの workflow_dispatch で明示指定された場合
+            HOUR="${INPUT_CHECK_HOUR}"
+            SRC="inputs.checkHour"
+          elif [ "${INPUT_TEST_NOTIFY}" = "true" ] || [ "${INPUT_SELF_TEST}" = "true" ]; then
+            # 判定をしない回（テスト通知・selfTest）。スクリプトの起動に値が要るだけで、判定には使われない。
+            HOUR=6
+            SRC="テスト通知・selfTest（判定はしない）"
+          else
+            echo "::error::checkHour が空です（${EVENT_NAME}）。マンテールは判定時刻 5 または 6 を必ず指定してください。"
+            echo "::error::外部スケジューラの本文は {\"ref\":\"main\",\"inputs\":{\"checkHour\":\"5\",\"dryRun\":\"false\"}} の形（値は文字列）です。"
+            exit 1
+          fi
+          # GITHUB_ENV へ書く前に許可値へ丸める。改行を含む値による環境変数注入も同時に塞ぐ。
+          case "${HOUR}" in
+            5|6) ;;
+            *)
+              echo "::error::判定時刻は 5 または 6 のみ指定できます（受け取った値は不正です）。"
+              exit 1
+              ;;
+          esac
+          echo "CHECK_HOUR=${HOUR}" >> "$GITHUB_ENV"
+          echo "判定時刻: ${HOUR}時（決定元: ${SRC}）"
+
+      - name: Run morning-check（マンテール）
+        env:
+          TENANT_ID: mantel
+          # ★ マンテールの宛先だけ。穂乃味の LINE_CHANNEL_ACCESS_TOKEN / LINE_TO_ID はここへ書かない。
+          LINE_CHANNEL_ACCESS_TOKEN__MANTEL: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN__MANTEL }}
+          LINE_TO_ID__MANTEL: ${{ secrets.LINE_TO_ID__MANTEL }}
+          # 判定データ（/tenants/mantel）・会社の利用状態（/tenantReg/mantel/active）・
+          # 通知記録（/srv/mantel/morningNotify）はすべてサービスアカウントで読み書きする（匿名認証は使わない）。
+          FIREBASE_DATABASE_URL: ${{ secrets.FIREBASE_DATABASE_URL }}
+          FIREBASE_SERVICE_ACCOUNT_KEY: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_KEY }}
+          TEST_NOTIFY: ${{ github.event.inputs.testNotify || 'false' }}
+          TARGET_DATE: ${{ github.event.inputs.targetDate || '' }}
+          # 既定は送らない（入力が無い・壊れているときも true へ倒す）
+          DRY_RUN: ${{ github.event.inputs.dryRun || 'true' }}
+          DEDUPE_SELFTEST: ${{ github.event.inputs.selfTest || 'false' }}
+        run: node scripts/morning-check.js

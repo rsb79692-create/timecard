@@ -1,138 +1,71 @@
-# LINE_TO_ID の取得方法 / 自動取得モード解説
+# LINE_TO_ID の取得方法（朝出勤確認 LINE 通知の送り先）
 
-## TL;DR — 最速セットアップ
+> 2026-11-03 改訂。以前の版にあった「`LINE_TO_ID` を設定しなければフォロワー全員へ自動送信する（自動取得モード）」は
+> **実装されていない**（`scripts/morning-check.js` に Followers API・multicast の処理は無い）。誤りなので削除した。
 
-**LINE_TO_ID は設定しなくてもよい（推奨）。**  
-Bot を友だち追加した全員へ自動で通知されます。
+## 結論
 
-必要な GitHub Secret は 3 つだけです:
+**`LINE_TO_ID` は必須。** 未設定または値が `temp` のとき、`scripts/morning-check.js` は
+`[ERROR] LINE_TO_ID が未設定です` を出して `exit 1` で止まり、何も送らない（フォロワー全員へ送る動きは無い）。
+マンテールでは `[ERROR] LINE_TO_ID__MANTEL が未設定です` になる。
+送り先は1か所（1人のユーザーまたは1つのグループ）で、LINE の push API で送る。
 
-| Secret 名 | 値 |
-|-----------|---|
-| `LINE_CHANNEL_ACCESS_TOKEN` | LINE Developers のチャネルアクセストークン |
-| `FIREBASE_API_KEY` | Firebase ウェブ API キー |
-| `FIREBASE_DATABASE_URL` | `https://honomi-timecard-default-rtdb.asia-southeast1.firebasedatabase.app/honomi` |
+## 会社ごとの Secret 名
 
-`LINE_TO_ID` を登録しない（または値を `temp` にする）と **自動取得モード** になります。
+| 会社 | ワークフロー | LINE の Secret | その他に使う Secret |
+|---|---|---|---|
+| 穂乃味（既定） | `.github/workflows/morning-check.yml` | `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` | `FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` |
+| マンテール（`mantel`） | `.github/workflows/morning-check-mantel.yml` | `LINE_CHANNEL_ACCESS_TOKEN__MANTEL` / `LINE_TO_ID__MANTEL` | `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` |
 
----
+他社は名前の末尾に `__<会社ID大文字>` を付ける。未設定なら止まる（穂乃味の宛先へは倒さない）。
+値はログ・文書・commit に書かない。
 
-## 自動取得モードの仕組み
+## 送り先 ID の調べ方
 
-`LINE_TO_ID` が未設定または `temp` のとき、`morning-check.js` は以下を実行します。
+| 送り先 | ID の形式 | 調べ方 |
+|---|---|---|
+| 個人ユーザー | `U` + 32文字 | 方法A |
+| グループ | `C` + 32文字 | 方法B |
 
-```
-LINE Messaging API
-GET https://api.line.me/v2/bot/followers/ids
-→ Bot を友だち追加したユーザーの userId 一覧を取得
-→ 全員へ multicast で一括送信
-```
-
-- Webhook サーバー・ngrok・手動 ID 確認は**不要**です
-- フォロワーが増えても自動的に全員へ届きます
-- フォロワーが 0 人の場合はエラーになります（Bot を友だち追加してください）
-
----
-
-## 必要な前提条件
-
-| 条件 | 説明 |
-|------|------|
-| Bot を友だち追加 | 通知を受け取りたい人が LINE で Bot を友だち追加している |
-| プラン確認 | Followers API はほぼ全プランで使用可能（Messaging API チャネル） |
-
----
-
-## LINE_TO_ID を手動指定したい場合
-
-特定の個人またはグループにだけ送りたいときは `LINE_TO_ID` を設定します。
-
-| 送信先 | ID の形式 | 取得方法 |
-|--------|---------|---------|
-| 個人ユーザー | `U` + 32文字 | 下記「方法A」参照 |
-| グループ | `C` + 32文字 | 下記「方法B」参照 |
-
-### 方法A: 管理者自身の userId（最速）
+### 方法A: 管理者自身の userId
 
 1. [LINE Developers](https://developers.line.biz/) にログイン
-2. 対象チャネル → **Messaging API 設定** → **Your user ID** を確認
-3. その値を `LINE_TO_ID` に登録する
+2. 対象チャネル → **Messaging API 設定**（または チャネル基本設定）→ **Your user ID** を確認
+3. その値を `LINE_TO_ID`（マンテールは `LINE_TO_ID__MANTEL`）に登録する
 
-これで Bot 管理者だけに通知が届きます。
+これでその管理者だけに通知が届く（Bot を友だち追加しておくこと）。
 
-### 方法B: グループへの送信
+### 方法B: グループの groupId
 
-1. LINE でグループを作成し、Bot チャネルを招待する
-2. グループ内でメッセージを1件送る
-3. Webhook で `event.source.groupId`（`C` から始まる ID）を取得する
-4. その値を `LINE_TO_ID` に登録する
+1. LINE でグループを作り、Bot（公式アカウント）を招待する
+2. 一時的な Webhook で `event.source.groupId` を受け取る。リポジトリの `scripts/line-webhook-id.js` が使える
+   （手順はファイル冒頭のコメント。ローカルで動かし、トンネルの URL を LINE Developers の Webhook URL に一時設定する）
+3. グループ内でメッセージを1件送ると、ターミナルに groupId が表示される
+4. その値を `LINE_TO_ID`（マンテールは `LINE_TO_ID__MANTEL`）に登録する
+5. Webhook URL を元に戻し、サーバーを止める
 
-Webhook で groupId を取得する最小コード（ローカルで一時的に動かすだけ）:
-
-```js
-// get-line-id.js（一時利用。本番コードには含めない）
-const http = require("http");
-http.createServer((req, res) => {
-  let body = "";
-  req.on("data", (c) => (body += c));
-  req.on("end", () => {
-    try {
-      const j = JSON.parse(body);
-      (j.events || []).forEach((e) => {
-        if (e.source.groupId)  console.log("groupId :", e.source.groupId);
-        if (e.source.roomId)   console.log("roomId  :", e.source.roomId);
-        if (e.source.userId)   console.log("userId  :", e.source.userId);
-      });
-    } catch (_) {}
-    res.end("OK");
-  });
-}).listen(3000, () => console.log("listening on :3000"));
-```
-
-ID が取得できたら `get-line-id.js` は削除して構いません。
-
----
-
-## GitHub Secrets への登録手順
+## GitHub Secrets への登録
 
 ```
 リポジトリ → Settings → Secrets and variables → Actions → New repository secret
 ```
 
-| Secret 名 | 自動モード | 手動指定モード |
-|-----------|-----------|--------------|
-| `LINE_CHANNEL_ACCESS_TOKEN` | 必須 | 必須 |
-| `FIREBASE_API_KEY` | 必須 | 必須 |
-| `FIREBASE_DATABASE_URL` | 必須 | 必須 |
-| `LINE_TO_ID` | 不要 | 任意（設定すると優先される） |
+登録は人が行う（Agent は GitHub Secrets を変更しない）。
 
----
-
-## morning-check.js の動作フロー
+## morning-check.js の動作（要約）
 
 ```
 起動
   ↓
-必須 Secrets チェック（LINE_TOKEN / FB_API_KEY / FB_DB_URL）
-  ↓ 不足あり → エラー出力して終了 (exit 1)
-  ↓ 問題なし
-Firebase Anonymous Auth → RTDB から records・施設マスタ取得
+必須 Secret の確認（会社ごとの名前。LINE_TO_ID が未設定・temp なら exit 1）
   ↓
-本日の clockIn を集計 → 未確認施設を抽出
-  ↓ 未確認なし → "未確認施設なし" を出力して正常終了 (exit 0)
-  ↓ 未確認あり
-LINE_TO_ID が設定済み? → YES → その ID へ push (1件)
-             ↓ NO（または "temp"）
-Followers API で全フォロワー取得 → multicast で一括送信
+（他社のみ）/tenantReg/<会社ID>/active が true でなければ何もせず終了
   ↓
-正常終了 (exit 0)
+RTDB から打刻・施設マスタを取得（穂乃味は匿名認証、他社はサービスアカウント）
+  ↓
+判定時刻の施設のうち、当日の出勤打刻が無い施設を抽出
+  ↓ 無ければ送らずに終了
+通知記録（同一日・同一施設・同一判定時刻で最大1回）を確保して LINE_TO_ID へ push
 ```
 
----
-
-## 注意事項
-
-- `LINE_CHANNEL_ACCESS_TOKEN` は絶対にログへ出力しない（スクリプト内で保証済み）
-- `LINE_TO_ID` に `temp` を設定しても自動取得モードとして動作する
-- Bot がどのユーザーにも友だち追加されていない場合、自動モードはエラーになる
-- Channel secret は今回のスクリプトでは使わない（Push/Multicast には不要）
+詳細は `docs/features/main-features-and-morning-check.md`。

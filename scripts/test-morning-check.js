@@ -1399,6 +1399,360 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
     }
   }
 
+  // =====================================================================
+  // マンテール（TENANT_ID=mantel）の朝出勤確認（2026-11-03 有効化）
+  // 判定ブロックを会社IDを変えて読み込み直し、会社ごとの設定・判定時刻・記録の置き場所・本文を確かめる。
+  // 送信なし・本番データ非アクセス（会社の利用状態の読み取りは模擬の request で確かめる）。
+  // =====================================================================
+  const TENANTREG_BLOCK = extractBlock(SRC, "// MORNING-CHECK-TENANTREG-BEGIN", "// MORNING-CHECK-TENANTREG-END")
+    .split(String.fromCharCode(13) + String.fromCharCode(10))
+    .join(String.fromCharCode(10));
+  const MANTEL_WF_PATH = path.join(ROOT, ".github", "workflows", "morning-check-mantel.yml");
+  // 改行コードは LF へ揃える（作業ツリーが CRLF でも同じ検査になるように）
+  const LFonly = (s) => String(s).split(String.fromCharCode(13) + String.fromCharCode(10)).join(String.fromCharCode(10));
+  const MWF = LFonly(fs.existsSync(MANTEL_WF_PATH) ? fs.readFileSync(MANTEL_WF_PATH, "utf8") : "");
+  // ⚠ バッククォートを含む施設名。テンプレートリテラルへ直書きしない
+  const KIYOMI = "Kiyomi" + String.fromCharCode(0x60) + "s郷あゆむ";
+  const MANTEL_FACILITIES = [
+    "あんず苑", "こもれびの里", KIYOMI, "小春の里", "小春日和", "はるぞら",
+    "つむぎの里", "ふたばの里", "笑福", "さざんか", "清美の郷", "せせらぎの里",
+  ];
+  // 会社IDを指定して判定ブロック一式を読み込む。設定不正なら { exitCode } を返す。
+  function loadTenant(tenantId, src) {
+    const out = {};
+    const c = makeContext(out);
+    c.process.env = tenantId === undefined ? {} : { TENANT_ID: tenantId };
+    try {
+      vm.runInContext(
+        (src || BLOCK) + "\n" + DEDUPE_BLOCK + "\n" + TENANTREG_BLOCK +
+          "\nout.M = { MORNING_CFG, MORNING_TENANTS, DEFAULT_FACILITIES, NOTIFY_EXCLUDE, DEFAULT_CHECK_HOUR, CHECK_HOURS," +
+          " LATE_CHECK_FACILITIES, resolveCheckHour, selectFacilitiesForHour, expectedFacilityCountForHour," +
+          " findMonitoringAnomalies, findMissingLateFacilities, isValidCheckHour, safeFacilityLabel, normalizeFacility, facilityEntryName," +
+          " DEDUPE_ROOT, dedupePath, dedupeSlotKey, buildMorningMessage, MORNING_MESSAGE_PREFIX, planDedupe," +
+          " tenantRegActiveUrl, readTenantActive };",
+        c
+      );
+    } catch (e) {
+      if (e && e.exitCode !== undefined) return { exitCode: e.exitCode };
+      throw e;
+    }
+    return out.M;
+  }
+  const arr = (a) => JSON.stringify(Array.from(a || []));
+
+  section("マンテール: 会社ごとの朝の設定");
+  const MT = loadTenant("mantel");
+  {
+    eq("マンテールの朝出勤確認は有効", MT.MORNING_CFG.enabled, true);
+    eq("通知の見出しはマンテール タイムカード", MT.MORNING_CFG.appName, "マンテール タイムカード");
+    eq("施設はオーナー決定の12施設（順序も含めて一致）", arr(MT.DEFAULT_FACILITIES), JSON.stringify(MANTEL_FACILITIES));
+    eq("朝通知の除外施設は無い", arr(MT.NOTIFY_EXCLUDE), "[]");
+    eq("判定時刻は 5時 と 6時", arr(MT.CHECK_HOURS), "[5,6]");
+    eq("既定の判定時刻は6時", MT.DEFAULT_CHECK_HOUR, 6);
+    eq("既定と異なる判定時刻を持つのは あんず苑（5時）だけ", JSON.stringify(MT.LATE_CHECK_FACILITIES), JSON.stringify({ "あんず苑": 5 }));
+    check("施設名に重複が無い（正規化後）",
+      new Set(MT.DEFAULT_FACILITIES.map(MT.normalizeFacility)).size === MANTEL_FACILITIES.length);
+    check("判定時刻の指定のキーは正規化済み",
+      Object.keys(MT.LATE_CHECK_FACILITIES).every((k) => MT.normalizeFacility(k) === k));
+  }
+
+  section("マンテール: 施設ごとの判定時刻（あんず苑 5時・その他 6時）");
+  {
+    eq("あんず苑 は5時", MT.resolveCheckHour({ name: "あんず苑", token: "t" }), 5);
+    MANTEL_FACILITIES.filter((n) => n !== "あんず苑").forEach((n) => {
+      eq(n + " は6時", MT.resolveCheckHour({ name: n, token: "t" }), 6);
+    });
+    const master = MANTEL_FACILITIES.map((n, i) => ({ name: n, token: "t" + i }));
+    const m5 = MT.selectFacilitiesForHour(master, 5).map(MT.facilityEntryName);
+    const m6 = MT.selectFacilitiesForHour(master, 6).map(MT.facilityEntryName);
+    eq("5時の回は あんず苑 だけ", JSON.stringify(m5), JSON.stringify(["あんず苑"]));
+    eq("6時の回は残り11施設", m6.length, 11);
+    check("5時と6時の対象が交差しない", m5.every((n) => m6.indexOf(n) === -1));
+    eq("全施設がどちらか一方に属する", m5.length + m6.length, MANTEL_FACILITIES.length);
+    check("6時の回に " + KIYOMI + " を含む（バッククォートの施設名でも判定できる）", m6.indexOf(KIYOMI) !== -1);
+    eq("5時の期待件数は1", MT.expectedFacilityCountForHour(5), 1);
+    eq("6時の期待件数は11", MT.expectedFacilityCountForHour(6), 11);
+    eq("7時はマンテールの判定時刻ではない（期待件数0）", MT.expectedFacilityCountForHour(7), 0);
+    check("マンテールでは7時を判定時刻として受け付けない", !MT.isValidCheckHour(7));
+    check("マンテールでは5時・6時を受け付ける", MT.isValidCheckHour(5) && MT.isValidCheckHour(6));
+    eq("正常なマスタなら5時の回は異常なし", MT.findMonitoringAnomalies(master, 5, 1, null).length, 0);
+    eq("正常なマスタなら6時の回は異常なし", MT.findMonitoringAnomalies(master, 6, 11, null).length, 0);
+    // 施設マスタの表記が違って あんず苑 が見つからない → 5時の回で設定異常として LINE に出る（黙って6時へ落とさない）
+    const renamed = master.filter((f) => f.name !== "あんず苑").concat([{ name: "杏苑" }]);
+    check("あんず苑 が施設マスタに見当たらなければ5時の回で設定異常",
+      MT.findMonitoringAnomalies(renamed, 5, 0, null).some((a) => /施設マスタにありません/.test(a)));
+    check("施設マスタの値（morningCheckHour 等）で あんず苑 の判定時刻は動かない",
+      MT.resolveCheckHour({ name: "あんず苑", morningCheckHour: 6, hour: 6 }) === 5 &&
+      MT.resolveCheckHour({ name: "小春日和", morningCheckHour: 5, hour: 5 }) === 6);
+  }
+
+  section("マンテール: バッククォートを含む施設名");
+  {
+    eq("正規化で施設名が変わらない", MT.normalizeFacility(KIYOMI), KIYOMI);
+    eq("全角のバッククォート（｀）でも同じ施設として照合する",
+      MT.normalizeFacility("Kiyomi" + String.fromCharCode(0xff40) + "s郷あゆむ"), KIYOMI);
+    eq("LINE 本文・ログ用の表示でも施設名が変わらない", MT.safeFacilityLabel(KIYOMI), KIYOMI);
+    check("枠キーは RTDB のキーに使える形", /^f_[0-9a-f]{32}$/.test(MT.dedupeSlotKey(KIYOMI)));
+    const msg = MT.buildMorningMessage({
+      hour: 6, nowStr: "2026/11/04 06:03", anomalySection: "", freshNames: [KIYOMI, "笑福"],
+      suppressedCount: 0, facilitiesCount: 11,
+    });
+    check("本文に施設名がそのまま1行で入る", msg.split("\n").indexOf("・" + KIYOMI) !== -1, msg);
+  }
+
+  section("マンテール: 通知の本文と記録の置き場所");
+  {
+    const now = "2026/11/04 05:03";
+    eq("本文の見出しはマンテール（5時判定）",
+      MT.buildMorningMessage({ hour: 5, nowStr: now, anomalySection: "", freshNames: ["あんず苑"], suppressedCount: 0, facilitiesCount: 1 }),
+      "【マンテール タイムカード】\n朝出勤未確認（5時判定）\n\n確認時刻：" + now + "\n\n" +
+      "未確認施設：1件\n\n・あんず苑\n\nシフトミス・遅刻・事故の可能性があります。確認してください。");
+    eq("再送できる本文の見出しもマンテール", MT.MORNING_MESSAGE_PREFIX, "【マンテール タイムカード】\n朝出勤未確認（");
+    check("本文に穂乃味の見出しが入らない",
+      MT.buildMorningMessage({ hour: 6, nowStr: now, anomalySection: "", freshNames: ["笑福"], suppressedCount: 0, facilitiesCount: 11 })
+        .indexOf("穂乃味") === -1);
+    eq("通知記録は /srv/mantel/morningNotify", MT.DEDUPE_ROOT, "srv/mantel/morningNotify");
+    eq("5時の回の記録の場所", MT.dedupePath("2026-11-04", 5), "srv/mantel/morningNotify/2026-11-04/h5");
+    eq("6時の回の記録の場所", MT.dedupePath("2026-11-04", 6), "srv/mantel/morningNotify/2026-11-04/h6");
+    let threw = false;
+    try { MT.dedupePath("2026-11-04", 7); } catch (_) { threw = true; }
+    check("マンテールの記録は7時の場所を作らない", threw);
+    // 穂乃味の見出しで始まる記録（取り違え）を、マンテールの宛先へ再送しない（多層防御）
+    const p = MT.planDedupe(
+      { slots: { s1: { state: "retry", batch: "b1", attempts: 1 } },
+        batches: { b1: { retryKey: fakeUuid(1), text: "【穂乃味タイムカード】\n朝出勤未確認（6時判定）\n\n…", createdAt: 1000 } } },
+      [{ slot: "s1", kind: "facility", name: "笑福" }],
+      { now: 2000, runId: "r", newBatchId: "b2", newRetryKey: fakeUuid(2), buildText: () => "x" }
+    );
+    check("他社の見出しの本文は再送しない（expired）", p.resend.length === 0 && p.terminal.some((t) => t.reason === "expired"));
+  }
+
+  section("穂乃味: 会社ごとの判定時刻へ移しても従来どおり");
+  {
+    const HN = loadTenant(undefined);
+    const HN2 = loadTenant("honomi");
+    eq("TENANT_ID 未指定は穂乃味", HN.MORNING_CFG.appName, "穂乃味タイムカード");
+    eq("TENANT_ID=honomi も同じ設定", HN2.MORNING_CFG.appName, "穂乃味タイムカード");
+    eq("穂乃味の判定時刻は [6, 7] のまま", arr(HN.CHECK_HOURS), "[6,7]");
+    eq("穂乃味の既定は6時のまま", HN.DEFAULT_CHECK_HOUR, 6);
+    eq("ハルイロ は7時のまま", HN.resolveCheckHour("ハルイロ"), 7);
+    eq("ミュゲの泉 は7時のまま", HN.resolveCheckHour("ミュゲの泉"), 7);
+    eq("ハーベスト は除外のまま", arr(HN.NOTIFY_EXCLUDE), JSON.stringify(["ハーベスト"]));
+    check("穂乃味では5時を判定時刻として受け付けない", !HN.isValidCheckHour(5));
+    eq("穂乃味の通知記録はルート直下の /morningNotify のまま", HN.DEDUPE_ROOT, "morningNotify");
+    eq("穂乃味の施設一覧は変えていない", arr(HN.DEFAULT_FACILITIES),
+      JSON.stringify(["ナナイロ", "ココラ", "ハーベスト", "ミュゲ貝塚", "ミュゲ春木", "ミュゲの泉", "ハルイロ"]));
+    check("マンテールの施設名が穂乃味の判定へ混ざらない",
+      MANTEL_FACILITIES.every((n) => HN.DEFAULT_FACILITIES.indexOf(n) === -1));
+  }
+
+  section("会社ごとの判定時刻の設定不正で起動を止める");
+  {
+    const bad = [
+      ["    runHours: [5, 6],\n    defaultHour: 6,", "    runHours: [5, 6],\n    defaultHour: 7,", "既定が判定時刻に無い"],
+      ["    runHours: [5, 6],", "    runHours: [],", "判定時刻が空"],
+      ["    runHours: [5, 6],", "    runHours: [5, 5, 6],", "判定時刻の重複"],
+      ["    runHours: [5, 6],", "    runHours: [5, 24],", "範囲外の判定時刻"],
+      ["    runHours: [5, 6],", "    runHours: [\"5\", 6],", "数値でない判定時刻"],
+      ['    lateCheckFacilities: {\n      "あんず苑": 5,\n    },', '    lateCheckFacilities: {\n      "あんず苑": 7,\n    },', "判定時刻に無い時刻の施設"],
+    ];
+    bad.forEach(([from, to, why]) => {
+      if (BLOCK.indexOf(from) === -1) { check(`マンテールの設定不正（${why}）で起動を止める`, false, "差し替え元が見つからない"); return; }
+      const r = loadTenant("mantel", BLOCK.replace(from, to));
+      check(`マンテールの設定不正（${why}）で起動を止める`, r && r.exitCode === 1, JSON.stringify(r && r.exitCode));
+    });
+    const r2 = loadTenant("nosuchco");
+    check("朝の設定が無い会社は起動を止める", r2 && r2.exitCode === 1);
+  }
+
+  section("会社の利用状態（/tenantReg/<会社ID>/active）");
+  {
+    const calls = [];
+    let respond = null;
+    const req = async (url, options) => { calls.push({ url, options }); return respond(url, options); };
+    respond = () => ({ status: 200, headers: {}, body: true });
+    eq("active === true なら利用中", await MT.readTenantActive(req, "https://db.example", "mantel", "TOKEN"), true);
+    eq("読むのはルート直下の /tenantReg/mantel/active", calls[0].url, "https://db.example/tenantReg/mantel/active.json");
+    eq("読み取りは GET", calls[0].options.method, "GET");
+    eq("サービスアカウントの Bearer 認証", calls[0].options.headers.Authorization, "Bearer TOKEN");
+    check("トークンを URL に載せない", calls[0].url.indexOf("TOKEN") === -1);
+    check("読み取りにタイムアウトを付ける", calls[0].options.timeoutMs > 0);
+    for (const v of [false, null, "true", 1, {}, []]) {
+      respond = () => ({ status: 200, headers: {}, body: v });
+      eq(`active=${JSON.stringify(v)} は停止扱い（送らない）`, await MT.readTenantActive(req, "https://db.example", "mantel", "T"), false);
+    }
+    for (const st of [401, 403, 404, 500]) {
+      respond = () => ({ status: st, headers: {}, body: null });
+      let err = null;
+      try { await MT.readTenantActive(req, "https://db.example", "mantel", "T"); } catch (e) { err = e; }
+      check(`HTTP ${st} は停止扱いにせずエラー（赤い実行で気づかせる）`, !!err);
+    }
+    let bad = null;
+    try { MT.tenantRegActiveUrl("https://db.example", "../honomi"); } catch (e) { bad = e; }
+    check("会社IDの形式が不正なら読みに行かない", !!bad);
+
+    // 結線: 他社だけが読み、停止中なら判定・テスト通知・selfTest のどれより前に終わる。穂乃味の経路は変えない
+    const SRC_LF = LFonly(SRC);
+    const mainBody = SRC_LF.slice(SRC_LF.indexOf("async function main()"));
+    const gate = mainBody.search(/if \(!TENANT_IS_LEGACY\) \{[\s\S]{0,600}?tenantAccessToken = await getServiceAccessToken\(SERVICE_ACCOUNT\);[\s\S]{0,300}?active = await readTenantActive\(/);
+    check("main() で他社の利用状態を確かめている", gate !== -1);
+    check("利用状態の確認は有効フラグの確認の後", gate > mainBody.indexOf("MORNING_CFG.enabled !== true"));
+    check("利用状態の確認は selfTest・テスト通知・判定データの読み取りより前",
+      gate !== -1 && gate < mainBody.indexOf("if (DEDUPE_SELFTEST)") && gate < mainBody.indexOf("if (TEST_NOTIFY)") &&
+      gate < mainBody.indexOf('fetchRTDB("tc5_records"'));
+    check("停止中なら送らずに return（exit 0）する",
+      /let active = false;[\s\S]{0,900}?active = await readTenantActive\([\s\S]{0,600}?if \(!active\) \{[\s\S]{0,300}?return;/.test(mainBody));
+    // 他社には保険の cron が無いので、一時的な失敗は再試行する（だめなら throw＝赤い実行。停止扱いで緑にしない）
+    {
+      const loop = mainBody.slice(mainBody.indexOf("let active = false;"), mainBody.indexOf("if (!active) {"));
+      check("利用状態の読み取りは一時的な失敗を再試行する（回数は DEDUPE_IO_TRIES）",
+        /for \(let i = 0; ; i\+\+\)/.test(loop) && /if \(i \+ 1 >= DEDUPE_IO_TRIES\) throw e;/.test(loop) &&
+        /await sleep\(DEDUPE_IO_RETRY_MS\[/.test(loop) && /break;/.test(loop), loop.slice(0, 200));
+      check("再試行し尽くしても停止扱い（active=false）へ倒さない", !/catch \(e\) \{[^}]*active = false/.test(loop));
+    }
+    check("利用状態はルート直下（FIREBASE_DATABASE_URL のオリジン）から読む",
+      /readTenantActive\(\s*httpRequest, dedupeBaseUrl\(process\.env\.FIREBASE_DATABASE_URL\), TENANT_ID, tenantAccessToken/.test(mainBody));
+  }
+
+  section("会社ごとの Secret 名");
+  {
+    check("LINE_TO_ID の案内に会社の Secret 名を使う",
+      /"\[ERROR\] LINE_TO_ID" \+ TENANT_ENV_SUFFIX \+ " が未設定です"/.test(SRC) &&
+      /"GitHub Secrets → LINE_TO_ID" \+ TENANT_ENV_SUFFIX \+ " を設定してください"/.test(SRC));
+    const { spawnSync } = require("child_process");
+    const SA = JSON.stringify({ client_email: "a@example.invalid", private_key: "dummy" });
+    const runEnv = (env) => spawnSync(process.execPath, [SRC_PATH], {
+      env: Object.assign({ PATH: process.env.PATH, SystemRoot: process.env.SystemRoot }, env),
+      encoding: "utf8", timeout: 20000,
+    });
+    {
+      // 穂乃味の LINE の Secret があっても、マンテールはそれを使わない
+      const r = runEnv({
+        TENANT_ID: "mantel", CHECK_HOUR: "6", DRY_RUN: "true",
+        LINE_CHANNEL_ACCESS_TOKEN: "dummy", LINE_TO_ID: "Udummy",
+        LINE_CHANNEL_ACCESS_TOKEN__MANTEL: "dummy",
+        FIREBASE_DATABASE_URL: "https://127.0.0.1:1", FIREBASE_SERVICE_ACCOUNT_KEY: SA,
+      });
+      eq("マンテールで LINE_TO_ID__MANTEL が無ければ exit 1（穂乃味の宛先へ倒さない）", r.status, 1);
+      check("案内は LINE_TO_ID__MANTEL を名指しする", /LINE_TO_ID__MANTEL が未設定です/.test(r.stderr) &&
+        /GitHub Secrets → LINE_TO_ID__MANTEL を設定してください/.test(r.stderr), String(r.stderr).slice(0, 200));
+      check("宛先未設定なら通信しない", !/\[RTDB\]|\[LINE\]|\[AUTH\]|\[TENANT\]/.test(String(r.stdout)));
+    }
+    {
+      const r = runEnv({
+        TENANT_ID: "mantel", CHECK_HOUR: "6", DRY_RUN: "true",
+        LINE_CHANNEL_ACCESS_TOKEN: "dummy", LINE_TO_ID__MANTEL: "Udummy",
+        FIREBASE_DATABASE_URL: "https://127.0.0.1:1", FIREBASE_SERVICE_ACCOUNT_KEY: SA,
+      });
+      check("マンテールで LINE_CHANNEL_ACCESS_TOKEN__MANTEL が無ければ exit 1", r.status === 1 &&
+        /LINE_CHANNEL_ACCESS_TOKEN__MANTEL/.test(r.stderr), String(r.stderr).slice(0, 200));
+    }
+    {
+      const r = runEnv({
+        CHECK_HOUR: "6", DRY_RUN: "true",
+        LINE_CHANNEL_ACCESS_TOKEN: "dummy", FIREBASE_API_KEY: "dummy", FIREBASE_DATABASE_URL: "https://127.0.0.1:1",
+      });
+      check("穂乃味の案内は従来どおり LINE_TO_ID", r.status === 1 && /\[ERROR\] LINE_TO_ID が未設定です/.test(r.stderr) &&
+        /GitHub Secrets → LINE_TO_ID を設定してください/.test(r.stderr), String(r.stderr).slice(0, 200));
+    }
+    const mantelBase = {
+      TENANT_ID: "mantel", DRY_RUN: "true",
+      LINE_CHANNEL_ACCESS_TOKEN__MANTEL: "dummy", LINE_TO_ID__MANTEL: "Udummy",
+      FIREBASE_DATABASE_URL: "https://127.0.0.1:1", FIREBASE_SERVICE_ACCOUNT_KEY: SA,
+    };
+    {
+      const r = runEnv(Object.assign({ CHECK_HOUR: "7" }, mantelBase));
+      check("マンテールで CHECK_HOUR=7 は exit 1（通信しない）", r.status === 1 && !/\[RTDB\]|\[TENANT\]|\[AUTH\]/.test(String(r.stdout)) &&
+        /有効値: 5, 6/.test(r.stderr), String(r.stderr).slice(0, 200));
+    }
+    {
+      const r = runEnv(Object.assign({ CHECK_HOUR: "", GITHUB_ACTIONS: "true" }, mantelBase));
+      check("マンテールでも Actions 上で CHECK_HOUR が空なら exit 1", r.status === 1);
+    }
+    {
+      const r = runEnv({
+        CHECK_HOUR: "5", DRY_RUN: "true",
+        LINE_CHANNEL_ACCESS_TOKEN: "dummy", LINE_TO_ID: "Udummy", FIREBASE_API_KEY: "dummy", FIREBASE_DATABASE_URL: "https://127.0.0.1:1",
+      });
+      check("穂乃味で CHECK_HOUR=5 は exit 1（通信しない）", r.status === 1 && !/\[RTDB\]/.test(String(r.stdout)) &&
+        /有効値: 6, 7/.test(r.stderr), String(r.stderr).slice(0, 200));
+    }
+  }
+
+  section("morning-check-mantel.yml の結線");
+  {
+    check("マンテール用のワークフローが在る", MWF !== "");
+    check("TENANT_ID=mantel で起動する", /^\s+TENANT_ID: mantel\s*$/m.test(MWF));
+    const secrets = Array.from(new Set([...MWF.matchAll(/secrets\.([A-Za-z0-9_]+)/g)].map((m) => m[1]))).sort();
+    eq("渡す Secret はマンテールの LINE 2件と Firebase 2件だけ", JSON.stringify(secrets), JSON.stringify([
+      "FIREBASE_DATABASE_URL", "FIREBASE_SERVICE_ACCOUNT_KEY", "LINE_CHANNEL_ACCESS_TOKEN__MANTEL", "LINE_TO_ID__MANTEL",
+    ]));
+    check("穂乃味の LINE の Secret を参照しない",
+      !/secrets\.LINE_CHANNEL_ACCESS_TOKEN\s*\}\}|secrets\.LINE_TO_ID\s*\}\}|secrets\.FIREBASE_API_KEY/.test(MWF));
+    check("Secret は同名の環境変数へ渡す",
+      /LINE_CHANNEL_ACCESS_TOKEN__MANTEL: \$\{\{ secrets\.LINE_CHANNEL_ACCESS_TOKEN__MANTEL \}\}/.test(MWF) &&
+      /LINE_TO_ID__MANTEL: \$\{\{ secrets\.LINE_TO_ID__MANTEL \}\}/.test(MWF) &&
+      /FIREBASE_DATABASE_URL: \$\{\{ secrets\.FIREBASE_DATABASE_URL \}\}/.test(MWF) &&
+      /FIREBASE_SERVICE_ACCOUNT_KEY: \$\{\{ secrets\.FIREBASE_SERVICE_ACCOUNT_KEY \}\}/.test(MWF));
+    check("起動は workflow_dispatch だけ（schedule はオーナーのテスト送信の後に足す）",
+      /^\s+workflow_dispatch:/m.test(MWF) && !/^\s+schedule:/m.test(MWF) && !/cron:/.test(MWF.replace(/^\s*#.*$/gm, "")));
+    check("concurrency で後続の実行を取り消していない", !/^\s*concurrency:/m.test(MWF));
+    check("GITHUB_TOKEN は読み取りだけ", /^permissions:\s*\r?\n\s+contents: read\s*$/m.test(MWF));
+    check("実行コマンドは穂乃味と同じスクリプト", /run: node scripts\/morning-check\.js\s*$/m.test(MWF));
+    // 判定時刻の allowlist はスクリプトのマンテールの判定時刻から導く
+    const allow = MWF.match(/case "\$\{HOUR\}" in\s*\r?\n\s*([0-9|]+)\)/);
+    eq("判定時刻の allowlist がマンテールの判定時刻と一致", allow ? JSON.stringify(allow[1].split("|").map(Number)) : "none",
+      arr(MT.CHECK_HOURS));
+    check("allowlist の検査が GITHUB_ENV への書き込みより前にある",
+      MWF.indexOf('case "${HOUR}" in') !== -1 && MWF.indexOf('case "${HOUR}" in') < MWF.indexOf('>> "$GITHUB_ENV"'));
+    check("CHECK_HOUR を後続ステップへ渡す", /CHECK_HOUR=\$\{HOUR\}" >> "\$GITHUB_ENV"/.test(MWF));
+    check("inputs.checkHour が指定されていれば採用する",
+      /if \[ -n "\$\{INPUT_CHECK_HOUR\}" \][\s\S]{0,300}?HOUR="\$\{INPUT_CHECK_HOUR\}"/.test(MWF));
+    // ⚠ 空の dispatch を黙って既定の時刻で走らせない（5時の呼び出しの設定ミスが6時の二重判定になる）
+    {
+      const step = MWF.slice(MWF.indexOf("- name: 判定時刻を決める"), MWF.indexOf("- name: Run morning-check"));
+      const elseBranch = step.slice(step.indexOf("          else\n"), step.indexOf("          fi\n"));
+      check("判定する回で checkHour が空なら exit 1（既定の時刻へ倒さない）",
+        elseBranch !== "" && /exit 1/.test(elseBranch) && !/HOUR=/.test(elseBranch), elseBranch.slice(0, 200));
+      check("空欄を許すのはテスト通知・selfTest のときだけ",
+        /elif \[ "\$\{INPUT_TEST_NOTIFY\}" = "true" \] \|\| \[ "\$\{INPUT_SELF_TEST\}" = "true" \]; then\s*\r?\n(\s*#.*\r?\n)*\s*HOUR=6/.test(step));
+      eq("判定時刻を決める分岐は3つだけ（指定・テスト系・失敗）", (step.match(/^\s+(if|elif|else)\b/gm) || []).length, 3);
+    }
+    check("inputs を run: へ直接展開していない", !/run:[\s\S]{0,1200}?\$\{\{\s*github\.event\.inputs/.test(MWF.replace(/^\s+[A-Z_]+: \$\{\{ github\.event\.inputs\.[A-Za-z]+( \|\| '[a-z]*')? \}\}\s*$/gm, "")));
+    check("inputs は env: 経由で渡している",
+      /INPUT_CHECK_HOUR: \$\{\{ github\.event\.inputs\.checkHour \}\}/.test(MWF) &&
+      /INPUT_TEST_NOTIFY: \$\{\{ github\.event\.inputs\.testNotify \}\}/.test(MWF) &&
+      /INPUT_SELF_TEST: \$\{\{ github\.event\.inputs\.selfTest \}\}/.test(MWF));
+    check("dryRun の既定は ON（入力が無いときも送らない側へ倒す）",
+      /dryRun:\s*\r?\n\s+description:[^\n]*\r?\n\s+required: false\s*\r?\n\s+default: true/.test(MWF) &&
+      /DRY_RUN: \$\{\{ github\.event\.inputs\.dryRun \|\| 'true' \}\}/.test(MWF));
+    check("testNotify・selfTest・targetDate を渡す",
+      /TEST_NOTIFY: \$\{\{ github\.event\.inputs\.testNotify \|\| 'false' \}\}/.test(MWF) &&
+      /DEDUPE_SELFTEST: \$\{\{ github\.event\.inputs\.selfTest \|\| 'false' \}\}/.test(MWF) &&
+      /TARGET_DATE: \$\{\{ github\.event\.inputs\.targetDate \|\| '' \}\}/.test(MWF));
+    check("外部スケジューラの本文（値は文字列・dryRun を外す）をコメントに残している",
+      MWF.indexOf('{"ref":"main","inputs":{"checkHour":"5","dryRun":"false"}}') !== -1 &&
+      MWF.indexOf('{"ref":"main","inputs":{"checkHour":"6","dryRun":"false"}}') !== -1);
+    {
+      const T = D.HTTP_TIMEOUT_MS;
+      const sum = (a) => a.reduce((x, y) => x + y, 0);
+      const readWorst = D.DEDUPE_IO_TRIES * T + sum(D.DEDUPE_IO_RETRY_MS);
+      const waitWorst = D.DEDUPE_WAIT_MS + D.DEDUPE_POLL_MS + readWorst;
+      const casWorst = D.DEDUPE_CAS_TRIES * (readWorst + T + 200 * D.DEDUPE_CAS_TRIES);
+      const ioWorst = D.DEDUPE_IO_TRIES * (T + readWorst + Math.max.apply(null, D.DEDUPE_IO_RETRY_MS));
+      const sendWorst = D.LINE_SEND_TRIES * T + sum(D.LINE_RETRY_DELAYS_MS);
+      const recordWorst = D.DEDUPE_CAS_TRIES * (2 * T + 1000);
+      // 他社は会社の利用状態の確認（OAuth + 読み取り を最大 DEDUPE_IO_TRIES 回）が加わる
+      const gateWorst = D.DEDUPE_IO_TRIES * 2 * T + sum(D.DEDUPE_IO_RETRY_MS);
+      const worst = readWorst + waitWorst + casWorst + ioWorst + 2 * (sendWorst + recordWorst) + gateWorst;
+      const m = MWF.match(/timeout-minutes:\s*(\d+)/);
+      check("ジョブの上限時間はスクリプトの計算上の最悪時間より長い",
+        !!m && Number(m[1]) * 60 * 1000 > worst, `timeout=${m ? m[1] : "none"}分 worst=${(worst / 60000).toFixed(1)}分`);
+    }
+    check("穂乃味のワークフローに TENANT_ID を足していない（従来どおり既定＝穂乃味）", !/TENANT_ID/.test(WF));
+    check("穂乃味のワークフローはマンテールの Secret を参照しない", !/__MANTEL/.test(WF));
+  }
+
   // ===== 結果 =====
   console.log(`\n========================================`);
   console.log(`合計 ${pass + fail} 件: PASS ${pass} / FAIL ${fail}`);

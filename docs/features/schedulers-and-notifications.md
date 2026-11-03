@@ -43,9 +43,41 @@
   1〜2時間遅れる `schedule` cron だけが残る（Actions は毎日 success のままなので気づきにくい）。
 
   **外部スケジューラの設定は Agent から変更しない**（変更が必要なら人間に依頼）。
+
+### マンテールの朝出勤確認（オーナー作業の手順書）— 2026-11-03
+
+ワークフロー `.github/workflows/morning-check-mantel.yml`（`workflow_dispatch` だけ。`schedule` は無い）。仕様は
+[`main-features-and-morning-check.md`](main-features-and-morning-check.md)「マンテール」。**以下はすべて人（オーナー）が行う。Agent は Secrets・cron-job.org・Firebase を変更しない。**
+
+0. **`morning-check-mantel.yml` を含む変更を main へ取り込む**（出荷は別作業）。ワークフローが main に無いと Run workflow ボタンが出ず、REST も 404 になる。
+1. **GitHub Secrets を登録する**（Settings → Secrets and variables → Actions）: `LINE_CHANNEL_ACCESS_TOKEN__MANTEL`（マンテールの LINE 公式アカウントのチャネルアクセストークン）と `LINE_TO_ID__MANTEL`（送り先の userId `U…` または groupId `C…`。取得方法は `scripts/line-webhook-id-helper.md`）。
+   `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` は穂乃味と共用で登録済み（変更しない）。
+2. **マンテールが「利用中」であることを確かめる**（システム管理者画面の会社一覧）。停止中（`/tenantReg/mantel/active` が `true` でない）のあいだは、以下のどの実行も `[SKIP] 会社 mantel は利用停止中です` で何もせずに終わる。
+3. **判定だけを試す（送らない）**: Actions → 「朝出勤確認 LINE通知（マンテール）」→ Run workflow。`checkHour` = `6`、`dryRun` = ON（既定）。
+   ログの `[FAC]` で施設が11件（6時）に並び、`[WARN] DEFAULT_FACILITIES に無い施設` や「設定異常」が無いことを見る。`checkHour` = `5` でも同様に あんず苑 の1件を確かめる。
+   施設マスタの表記がスタッフ一覧と違えば（特に ``Kiyomi`s郷あゆむ``）、ここで分かる。
+4. **二重通知防止の確認（送らない）**: `selfTest` = ON で実行（`checkHour` は空でよい）。`[SELFTEST] PASS` を確かめる（`/srv/mantel/morningNotify/_selftest` だけを書く）。
+5. **テスト送信（1通だけ届く）**: `testNotify` = ON、`dryRun` = **OFF**、`checkHour` は空でよい。マンテールの宛先へ「【マンテール タイムカード】テスト通知」が1通届くことを確かめる。
+   判定はしない・通知記録も書かない固定文なので、施設の状況とは無関係に安全に試せる（穂乃味の宛先へは送られない）。
+6. **cron-job.org にジョブを2本登録する**（既存の穂乃味のジョブと同じ GitHub 資格情報・同じヘッダーで、URL と本文だけ変える）:
+
+   | 時刻（UTC） | JST | URL（POST） | Body（**値はすべて文字列**） |
+   |---|---|---|---|
+   | 20:03 毎日 | 05:03 | `https://api.github.com/repos/rsb79692-create/timecard/actions/workflows/morning-check-mantel.yml/dispatches` | `{"ref":"main","inputs":{"checkHour":"5","dryRun":"false"}}` |
+   | 21:03 毎日 | 06:03 | 同上 | `{"ref":"main","inputs":{"checkHour":"6","dryRun":"false"}}` |
+
+   - ⚠ **`"dryRun":"false"` を必ず付ける。** このワークフローの dryRun の既定は ON（送らない）なので、`{"checkHour":"5"}` だけでは毎朝判定ログが出るだけで LINE は届かない（失敗にもならないので気づきにくい）。
+     dryRun を付けずに数日運用して判定ログを見てから付ける、という段階的な始め方もできる。
+   - ⚠ `"5"` を数値 `5` で送ると GitHub API が 422 を返し run が作られない（Actions に何も出ない。cron-job.org の実行履歴でしか分からない）。2xx 以外の通知を有効にしておく。
+   - `checkHour` を書き忘れた（空の）呼び出しは run が赤く失敗する（既定の時刻では走らない）。
+   - ⚠ cron-job.org はジョブごとにタイムゾーンを持つ。UTC なら 20:03 / 21:03、Asia/Tokyo なら 05:03 / 06:03 で登録する。
+   - cron-job.org で分かるのは dispatch の応答だけで、Actions の実行が赤く失敗しても分からない。**GitHub の通知設定で Actions の失敗メールを受け取れるようにしておく**（マンテールには保険の cron が無いので、失敗した回の通知はその日は出ない。会社の利用状態の読み取りは一時的な失敗を3回まで再試行する）。
+   - 成功の応答は HTTP 204。初回の発火の後に Actions のログで `判定時刻: 5時（決定元: inputs.checkHour）` / `6時` を1度ずつ目視するまで「稼働確認済み」と扱わない。
+7. （任意・後日）外部スケジューラが止まった日の保険として、`morning-check-mantel.yml` に `schedule` の cron（`3 20 * * *` → 5、`3 21 * * *` → 6）と case を足すかを決める。足しても通知記録で二重通知にはならないが、ワークフローの変更は人の確認が要る。
+
 - **GitHub PAT**: 本リポジトリ内に PAT（`ghp_…` / `github_pat_…`）や `api.github.com` / `dispatches` 呼び出しは**見つからない（未確認）**。アプリから GitHub API を叩く実装は確認できなかった。
 - **通知系まとめ**:
-  - LINE Push: GitHub Actions（`morning-check` / `notify-check` / `paid-leave-notify`）から直接送信（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID`）。`paid-leave-notify`（有給の付与日。2026-11-03 追加）は cron `40 22 * * *` の1本だけで、外部スケジューラからは呼ばない（通知記録を持たないため二重になる）。詳細: [`paid-leave-grant-notify.md`](paid-leave-grant-notify.md)。アップロード通知は Vercel `api/line-notify.js`。
+  - LINE Push: GitHub Actions（`morning-check` / `morning-check-mantel` / `notify-check` / `paid-leave-notify`）から直接送信（`LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID`。マンテールは `__MANTEL` 付き）。`paid-leave-notify`（有給の付与日。2026-11-03 追加）は cron `40 22 * * *` の1本だけで、外部スケジューラからは呼ばない（通知記録を持たないため二重になる）。詳細: [`paid-leave-grant-notify.md`](paid-leave-grant-notify.md)。アップロード通知は Vercel `api/line-notify.js`。
   - Discord Webhook: Vercel `api/discord-notify.js`（`DISCORD_WEBHOOK_URL`）。`index.html` がアップロード時に呼ぶ。
   - FCM Push: GitHub Actions `fcm-notify` → `scripts/fcm-check.js`（`FIREBASE_SERVICE_ACCOUNT_KEY`）。
   - 通知のテストは必ず **dryRun**（`DRY_RUN=true` / `workflow_dispatch` の `dryRun`）で行い、実送信は人間の承認を得る。

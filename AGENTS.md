@@ -109,8 +109,8 @@
 
 **朝出勤確認 LINE 通知（`main-features-and-morning-check.md`）**
 - 施設ごとの判定時刻の正本は `scripts/morning-check.js` の `LATE_CHECK_FACILITIES`（コード側）。**施設マスタ側に持たせない。** `morning-check.js` と `index.html` の同名 `DEFAULT_FACILITIES` を同期しない。
-- `CHECK_HOURS` に時刻を足すときは `morning-check.yml` の cron も足す。`CHECK_HOUR` 不正時は既定へ倒さず `exit 1`。判定時刻を実行時の現在時刻から決めない。
-- 通知の重複抑止記録は `FIREBASE_DATABASE_URL` のオリジン直下 `/morningNotify`（`/honomi` 配下にしない）。未確定の送信を本文と retry key を作り直して送らない。ワークフローへ `concurrency:` を足さない。cron と外部スケジューラのどちらも外さない。
+- 判定時刻は会社ごと（`MORNING_TENANTS.<会社ID>.runHours`。穂乃味 `[6,7]`・マンテール `[5,6]`）。足すときはその会社のワークフロー（`morning-check.yml`／`morning-check-mantel.yml` と起動元）も足す。`CHECK_HOUR` 不正は既定へ倒さず `exit 1`（checkHour 空の dispatch: 穂乃味=6時〔外部スケジューラの経路。変えない〕・マンテール=exit 1）。判定時刻を実行時の現在時刻から決めない。
+- 通知の重複抑止記録は `FIREBASE_DATABASE_URL` のオリジン直下 `/morningNotify`（他社は `/srv/<会社ID>/morningNotify`。`/honomi` 配下にしない）。他社は `/tenantReg/<会社ID>/active` が `true` でなければ送らない。マンテールのワークフローへ穂乃味の LINE の Secret を渡さない。未確定の送信を本文と retry key を作り直して送らない。ワークフローへ `concurrency:` を足さない。cron と外部スケジューラのどちらも外さない。
 
 **従業員・施設マスタの保存（`master-save.md`）**
 - `tc5_staff` / `master/locations` を手元の一覧で全体 PUT しない。保存のたびに最新を取り直し、変える1件の添字だけに書く（追加は `if-match: null_etag`、削除は末尾の1件を移す1回の PATCH で配列に空きを作らない）。
@@ -150,7 +150,7 @@
 
 ## 環境変数名・secret 名（名前のみ。値は表示・記録しない）
 
-- **GitHub Actions Secrets**: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY`
+- **GitHub Actions Secrets**: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `FIREBASE_API_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY`／`LINE_CHANNEL_ACCESS_TOKEN__MANTEL` / `LINE_TO_ID__MANTEL`（マンテールの朝出勤確認。登録状況は未確認）
 - **Vercel**（`api/` が参照する12件）: `LINE_CHANNEL_ACCESS_TOKEN` / `LINE_TO_ID` / `DISCORD_WEBHOOK_URL` / `FIREBASE_SERVICE_ACCOUNT_KEY` / `FIREBASE_DATABASE_URL` / `FIREBASE_PROJECT_ID` / `TC_ENC_KEY` / `TC_PIN_PEPPER` / `DEVICE_SWEEP_KEY` / `MDOC_SUPABASE_URL` / `MDOC_SUPABASE_KEY`（公開キー）/ `MDOC_INGEST_KEY`
   - ⚠ この一覧を「未使用の整理」の根拠にしない（`AUTH.md` §8）。`TC_PIN_PEPPER` を消すと PIN 認証が全滅、`TC_ENC_KEY` を消すと保存済み PIN が復号不能、`DEVICE_SWEEP_KEY` を消すと持ち出し検知の確定の主経路が止まる。
 - **会社ごとの通知用**: 上の通知用の名前に `__<会社ID大文字>` を付ける（例 `DISCORD_WEBHOOK_URL__MANTEL`）。未設定の会社の通知は送らない（穂乃味の宛先へ倒さない）。

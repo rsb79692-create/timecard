@@ -41,8 +41,9 @@ if (missing.length) {
 // LINE_TO_ID: 必須。未設定または "temp" の場合は明確なエラーで停止。
 const LINE_TO_ENV = (process.env["LINE_TO_ID" + TENANT_ENV_SUFFIX] || "").trim();
 if (!LINE_TO_ENV || LINE_TO_ENV === "temp") {
-  console.error("[ERROR] LINE_TO_ID が未設定です");
-  console.error("GitHub Secrets → LINE_TO_ID を設定してください");
+  // ★ 会社ごとの Secret 名で案内する（穂乃味は従来どおり LINE_TO_ID、他社は LINE_TO_ID__<会社ID大文字>）
+  console.error("[ERROR] LINE_TO_ID" + TENANT_ENV_SUFFIX + " が未設定です");
+  console.error("GitHub Secrets → LINE_TO_ID" + TENANT_ENV_SUFFIX + " を設定してください");
   process.exit(1);
 }
 
@@ -101,7 +102,12 @@ const RUN_ID = (
 // ===== 会社ごとの朝の判定設定 =====
 // ★ 施設名・判定時刻・除外施設・通知の見出しは会社ごと。下の共通処理へ直書きしない。
 // ★ 会社の追加は MORNING_TENANTS に1件足すだけ（コードの複製はしない）。
-//   設定が決まるまでは enabled:false（起動しても何も読まず・送らずに終わる）。
+//   設定が決まるまでは enabled:false（起動しても何も読まず・送らずに終わる。テスト通知も送らない）。
+// ★ runHours … その会社のワークフローが実際に回している判定時刻（JST 時）。ここに無い値は採用しない。
+//   defaultHour … lateCheckFacilities に無い施設の判定時刻（runHours のどれか）。
+//   lateCheckFacilities … 既定と異なる判定時刻を持つ施設（名前は歴史的経緯。既定より早い時刻も書ける）。
+//   ⚠ runHours を変えるときは、その会社のワークフローの判定時刻の写像（case）と起動元（cron / 外部スケジューラ）も必ず合わせる。
+//     穂乃味 = .github/workflows/morning-check.yml ／ マンテール = .github/workflows/morning-check-mantel.yml。
 const MORNING_TENANT_ID = (function () {
   const env = (typeof process !== "undefined" && process && process.env) || {};
   return String(env.TENANT_ID || "").trim() || "honomi";
@@ -119,18 +125,30 @@ const MORNING_TENANTS = {
     ],
     // ハーベストは朝の未打刻通知の対象外（打刻機能・管理画面は通常通り）
     notifyExclude: ["ハーベスト"],
+    runHours: [6, 7],
+    defaultHour: 6,
     lateCheckFacilities: {
       "ハルイロ": 7,
       "ミュゲの泉": 7,
     },
   },
-  // マンテール株式会社（施設・判定時刻が決まるまで無効）
+  // マンテール株式会社（2026-11-03 オーナー決定: 12施設・あんず苑だけ5時、その他6時・除外なし）
+  // ⚠ 施設名はスタッフ一覧の表示どおり。施設マスタの表記と一致するかは未確認（dryRun の [FAC] ログで確かめる）。
+  // ⚠ "Kiyomi`s郷あゆむ" はバッククォートを含む。テンプレートリテラルへ直書きしない（文字列は "..." で書く）。
   mantel: {
-    enabled: false,
+    enabled: true,
     appName: "マンテール タイムカード",
-    defaultFacilities: [],
+    defaultFacilities: [
+      "あんず苑", "こもれびの里", "Kiyomi`s郷あゆむ", "小春の里",
+      "小春日和", "はるぞら", "つむぎの里", "ふたばの里",
+      "笑福", "さざんか", "清美の郷", "せせらぎの里",
+    ],
     notifyExclude: [],
-    lateCheckFacilities: {},
+    runHours: [5, 6],
+    defaultHour: 6,
+    lateCheckFacilities: {
+      "あんず苑": 5,
+    },
   },
 };
 if (!Object.prototype.hasOwnProperty.call(MORNING_TENANTS, MORNING_TENANT_ID)) {
@@ -138,6 +156,19 @@ if (!Object.prototype.hasOwnProperty.call(MORNING_TENANTS, MORNING_TENANT_ID)) {
   process.exit(1);
 }
 const MORNING_CFG = MORNING_TENANTS[MORNING_TENANT_ID];
+// 判定時刻の設定そのものの検査。壊れた設定のまま走ると、施設が誰にも判定されず通知が黙って消える。
+(function () {
+  const hs = MORNING_CFG.runHours;
+  const okHour = (h) => typeof h === "number" && Number.isInteger(h) && h >= 0 && h <= 23;
+  if (!Array.isArray(hs) || hs.length === 0 || !hs.every(okHour) || new Set(hs).size !== hs.length) {
+    console.error("[ERROR] MORNING_TENANTS の runHours が不正です（0〜23 の整数を重複なく1件以上）");
+    process.exit(1);
+  }
+  if (!okHour(MORNING_CFG.defaultHour) || hs.indexOf(MORNING_CFG.defaultHour) === -1) {
+    console.error("[ERROR] MORNING_TENANTS の defaultHour が runHours に含まれていません");
+    process.exit(1);
+  }
+})();
 
 // ===== 施設一覧の控え兼「監視が成立しているかの期待値」 =====
 // ⚠⚠ **index.html と同期しないこと。** index.html 側の DEFAULT_FACILITIES は空配列であり
@@ -165,13 +196,14 @@ const NOTIFY_EXCLUDE = MORNING_CFG.notifyExclude;
 //   画面のどこにも出ないフィールドなので、誰も異常に気づけない。
 //   （同じ理由で移動距離申請も master/locations をサーバ側の判断材料にしていない。AGENTS.md 参照）
 //   施設マスタは「どの施設が在るか」の正本として使い、判定時刻はコード側で持つ。
-const DEFAULT_CHECK_HOUR = 6;
+// 既定の判定時刻は会社ごと（穂乃味 6時・マンテール 6時）。
+const DEFAULT_CHECK_HOUR = MORNING_CFG.defaultHour;
 
-// GitHub Actions が実際に回している判定時刻。ここに無い値は採用しない（フェイルクローズ）。
-// ⚠ 値を増やすときは .github/workflows/morning-check.yml の cron も必ず足すこと。
-//   cron の無い時刻を書いても、その施設は誰にも判定されず通知が消える。
+// GitHub Actions が実際に回している判定時刻。ここに無い値は採用しない（フェイルクローズ）。会社ごと（穂乃味 [6, 7]）。
+// ⚠ 値を増やすときは、その会社のワークフロー（穂乃味は .github/workflows/morning-check.yml の cron と case）も必ず足すこと。
+//   起動元の無い時刻を書いても、その施設は誰にも判定されず通知が消える。
 //   この対応は scripts/test-morning-check.js が機械的に検証する。
-const CHECK_HOURS = [6, 7];
+const CHECK_HOURS = MORNING_CFG.runHours.slice();
 
 // 既定（6時）と異なる判定時刻を持つ施設。キーは施設名を normalizeFacility したもの。
 // ここに書いた施設名が施設マスタに見当たらない場合は findMissingLateFacilities が警告する。
@@ -784,6 +816,31 @@ async function dedupeSelfTest(store, runId, now) {
 }
 // MORNING-CHECK-DEDUPE-END
 
+// MORNING-CHECK-TENANTREG-BEGIN
+// ===== 会社の利用状態（/tenantReg/<会社ID>/active） =====
+// ★ 穂乃味（システム会社）は停止の対象外なので読まない（従来の経路を変えない）。
+// ★ 他社は明示的に true のときだけ利用中（未作成・false・その他はすべて停止扱い）。api/_lib/google.js の
+//   _tenantActiveFetch と同じ基準。停止中の会社へは、判定・テスト通知・selfTest のどれも行わない。
+// ⚠ 読めないとき（HTTP 200 以外・通信断）は throw する（exit 1 の赤い実行）。停止扱いで緑に終わらせると、
+//   利用中の会社の朝の通知が黙って消えても誰も気づけない。
+function tenantRegActiveUrl(rootBase, cid) {
+  if (!/^[a-z][a-z0-9]{1,23}$/.test(String(cid))) throw new Error("tenantReg: 会社IDの形式が不正です");
+  return `${rootBase}/tenantReg/${cid}/active.json`;
+}
+
+async function readTenantActive(request, rootBase, cid, accessToken) {
+  const res = await request(tenantRegActiveUrl(rootBase, cid), {
+    method: "GET",
+    headers: { Authorization: `Bearer ${accessToken}` },
+    timeoutMs: HTTP_TIMEOUT_MS,
+  });
+  if (!res || res.status !== 200) {
+    throw new Error(`tenantReg: 会社の利用状態を読めません（HTTP ${res ? res.status : "?"}）`);
+  }
+  return res.body === true;
+}
+// MORNING-CHECK-TENANTREG-END
+
 // ===== この回の判定時刻 =====
 // ワークフローが起動経路（cron 式 / 手動入力）から決めて CHECK_HOUR で渡す。
 // ⚠ 実行時の JST 現在時からは決めない。GitHub Actions のスケジュールは数十分〜数時間遅れるため、
@@ -1099,10 +1156,37 @@ async function main() {
     return;
   }
 
+  // ── 他社は会社の利用状態を確かめる（停止中なら何も読まず・送らずに終わる）。穂乃味は対象外 ──
+  // ★ ここで得たサービスアカウントのトークンを、下の判定データの読み取りにもそのまま使う。
+  let tenantAccessToken = null;
+  if (!TENANT_IS_LEGACY) {
+    // ⚠ 他社には保険の cron が無い。一瞬の失敗でその時刻の通知を落とさないよう、OAuth と読み取りを再試行する
+    //   （送信前の読み取りなので何度試しても二重通知にならない。だめなら throw → exit 1 の赤い実行）。
+    let active = false;
+    for (let i = 0; ; i++) {
+      try {
+        tenantAccessToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+        active = await readTenantActive(
+          httpRequest, dedupeBaseUrl(process.env.FIREBASE_DATABASE_URL), TENANT_ID, tenantAccessToken
+        );
+        break;
+      } catch (e) {
+        if (i + 1 >= DEDUPE_IO_TRIES) throw e;
+        console.warn(`[TENANT] ${e.message}。再試行します`);
+        await sleep(DEDUPE_IO_RETRY_MS[Math.min(i, DEDUPE_IO_RETRY_MS.length - 1)]);
+      }
+    }
+    if (!active) {
+      console.log(`[SKIP]  会社 ${TENANT_ID} は利用停止中です（/tenantReg/${TENANT_ID}/active が true ではありません）。何も送らずに終了します`);
+      return;
+    }
+    console.log(`[TENANT] ${TENANT_ID} は利用中です（/tenantReg/${TENANT_ID}/active === true）`);
+  }
+
   // ── 二重通知防止の自己診断（LINE は送らない） ──
   if (DEDUPE_SELFTEST) {
     console.log(`[SELFTEST] ${DEDUPE_ROOT}/_selftest で条件付き書き込みを確認します`);
-    const accessToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+    const accessToken = tenantAccessToken || await getServiceAccessToken(SERVICE_ACCOUNT);
     const r = await dedupeSelfTest(
       makeRtdbDedupeStore(httpRequest, dedupeBaseUrl(process.env.FIREBASE_DATABASE_URL), `${DEDUPE_ROOT}/_selftest`, accessToken),
       RUN_ID, Date.now()
@@ -1141,7 +1225,7 @@ async function main() {
     idToken = await getFirebaseIdToken();
   } else {
     console.log("[AUTH]  サービスアカウントで認証（会社: " + TENANT_ID + "）");
-    idToken = await getServiceAccessToken(SERVICE_ACCOUNT);
+    idToken = tenantAccessToken || await getServiceAccessToken(SERVICE_ACCOUNT);
   }
   console.log("[AUTH]  idToken 取得完了");
 
