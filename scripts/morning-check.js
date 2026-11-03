@@ -106,6 +106,8 @@ const RUN_ID = (
 // ★ runHours … その会社のワークフローが実際に回している判定時刻（JST 時）。ここに無い値は採用しない。
 //   defaultHour … lateCheckFacilities に無い施設の判定時刻（runHours のどれか）。
 //   lateCheckFacilities … 既定と異なる判定時刻を持つ施設（名前は歴史的経緯。既定より早い時刻も書ける）。
+//   ★ 判定時刻は「時」の整数か、30分の回なら文字列 "H:30"（例 "5:30"）で書く。分は 00 と 30 だけ（parseCheckSlot）。
+//     内部では時の数値（5時30分 = 5.5）で持ち、通知記録の場所は h5 / h5m30 になる（dedupePath）。
 //   ⚠ runHours を変えるときは、その会社のワークフローの判定時刻の写像（case）と起動元（cron / 外部スケジューラ）も必ず合わせる。
 //     穂乃味 = .github/workflows/morning-check.yml ／ マンテール = .github/workflows/morning-check-mantel.yml。
 const MORNING_TENANT_ID = (function () {
@@ -132,7 +134,8 @@ const MORNING_TENANTS = {
       "ミュゲの泉": 7,
     },
   },
-  // マンテール株式会社（2026-11-03 オーナー決定: 12施設・あんず苑だけ5時、その他6時・除外なし）
+  // マンテール株式会社（2026-11-03 オーナー決定: 12施設・除外なし）
+  // 判定時刻（2026-11-03 オーナー指示で変更）: あんず苑・清美の郷 5時 ／ さざんか 5時30分 ／ はるぞら 6時30分 ／ その他 6時
   // ⚠ 施設名はスタッフ一覧の表示どおり。施設マスタの表記と一致するかは未確認（dryRun の [FAC] ログで確かめる）。
   // ⚠ "Kiyomi`s郷あゆむ" はバッククォートを含む。テンプレートリテラルへ直書きしない（文字列は "..." で書く）。
   mantel: {
@@ -144,10 +147,13 @@ const MORNING_TENANTS = {
       "笑福", "さざんか", "清美の郷", "せせらぎの里",
     ],
     notifyExclude: [],
-    runHours: [5, 6],
+    runHours: [5, "5:30", 6, "6:30"],
     defaultHour: 6,
     lateCheckFacilities: {
       "あんず苑": 5,
+      "清美の郷": 5,
+      "さざんか": "5:30",
+      "はるぞら": "6:30",
     },
   },
 };
@@ -156,18 +162,43 @@ if (!Object.prototype.hasOwnProperty.call(MORNING_TENANTS, MORNING_TENANT_ID)) {
   process.exit(1);
 }
 const MORNING_CFG = MORNING_TENANTS[MORNING_TENANT_ID];
+
+// 判定時刻の値（設定・CHECK_HOUR）→ 時の数値。整数の時（6 / "6"）か "H:00" / "H:30" だけを受け付ける。
+// 5時30分は 5.5（2進でも誤差なく表せるので === で比べてよい）。不正なら NaN（呼び出し側でフェイルクローズ）。
+function parseCheckSlot(v) {
+  if (typeof v === "number") {
+    return Number.isInteger(v * 2) && v >= 0 && v < 24 ? v : NaN;
+  }
+  if (typeof v !== "string") return NaN;
+  const m = /^(\d{1,2})(?::(00|30))?$/.exec(v);
+  if (!m) return NaN;
+  const h = Number(m[1]);
+  if (h > 23) return NaN;
+  return h + (m[2] === "30" ? 0.5 : 0);
+}
+// 時の数値 → 表示（"6時" / "5時30分"）。整数の時は従来と1文字も違わない。
+function fmtCheckSlot(h) {
+  return Number.isInteger(h) ? `${h}時` : `${Math.floor(h)}時30分`;
+}
+// 時の数値 → 入力の書き方（"6" / "5:30"）。ワークフローの入力・エラーの案内と同じ形。
+function checkSlotInput(h) {
+  return Number.isInteger(h) ? String(h) : `${Math.floor(h)}:30`;
+}
+
 // 判定時刻の設定そのものの検査。壊れた設定のまま走ると、施設が誰にも判定されず通知が黙って消える。
-(function () {
-  const hs = MORNING_CFG.runHours;
-  const okHour = (h) => typeof h === "number" && Number.isInteger(h) && h >= 0 && h <= 23;
-  if (!Array.isArray(hs) || hs.length === 0 || !hs.every(okHour) || new Set(hs).size !== hs.length) {
-    console.error("[ERROR] MORNING_TENANTS の runHours が不正です（0〜23 の整数を重複なく1件以上）");
+const MORNING_RUN_HOURS = (function () {
+  const raw = MORNING_CFG.runHours;
+  const hs = Array.isArray(raw) ? raw.map(parseCheckSlot) : [];
+  if (hs.length === 0 || !hs.every((h) => !Number.isNaN(h)) || new Set(hs).size !== hs.length) {
+    console.error("[ERROR] MORNING_TENANTS の runHours が不正です（0〜23 の時か \"H:30\" を重複なく1件以上）");
     process.exit(1);
   }
-  if (!okHour(MORNING_CFG.defaultHour) || hs.indexOf(MORNING_CFG.defaultHour) === -1) {
+  const d = parseCheckSlot(MORNING_CFG.defaultHour);
+  if (Number.isNaN(d) || hs.indexOf(d) === -1) {
     console.error("[ERROR] MORNING_TENANTS の defaultHour が runHours に含まれていません");
     process.exit(1);
   }
+  return { hours: hs, defaultHour: d };
 })();
 
 // ===== 施設一覧の控え兼「監視が成立しているかの期待値」 =====
@@ -197,13 +228,13 @@ const NOTIFY_EXCLUDE = MORNING_CFG.notifyExclude;
 //   （同じ理由で移動距離申請も master/locations をサーバ側の判断材料にしていない。AGENTS.md 参照）
 //   施設マスタは「どの施設が在るか」の正本として使い、判定時刻はコード側で持つ。
 // 既定の判定時刻は会社ごと（穂乃味 6時・マンテール 6時）。
-const DEFAULT_CHECK_HOUR = MORNING_CFG.defaultHour;
+const DEFAULT_CHECK_HOUR = MORNING_RUN_HOURS.defaultHour;
 
 // GitHub Actions が実際に回している判定時刻。ここに無い値は採用しない（フェイルクローズ）。会社ごと（穂乃味 [6, 7]）。
 // ⚠ 値を増やすときは、その会社のワークフロー（穂乃味は .github/workflows/morning-check.yml の cron と case）も必ず足すこと。
 //   起動元の無い時刻を書いても、その施設は誰にも判定されず通知が消える。
 //   この対応は scripts/test-morning-check.js が機械的に検証する。
-const CHECK_HOURS = MORNING_CFG.runHours.slice();
+const CHECK_HOURS = MORNING_RUN_HOURS.hours.slice();
 
 // 既定（6時）と異なる判定時刻を持つ施設。キーは施設名を normalizeFacility したもの。
 // ここに書いた施設名が施設マスタに見当たらない場合は findMissingLateFacilities が警告する。
@@ -264,7 +295,7 @@ function facilityCodePoints(name) {
 }
 
 function isValidCheckHour(h) {
-  return typeof h === "number" && Number.isInteger(h) && CHECK_HOURS.indexOf(h) !== -1;
+  return typeof h === "number" && CHECK_HOURS.indexOf(h) !== -1;
 }
 
 // LATE_CHECK_FACILITIES のキーを正規化した索引。
@@ -276,9 +307,9 @@ const LATE_CHECK_BY_NORM = (function () {
   const m = Object.create(null);
   Object.keys(LATE_CHECK_FACILITIES).forEach((k) => {
     const norm = normalizeFacility(k);
-    const hour = LATE_CHECK_FACILITIES[k];
+    const hour = parseCheckSlot(LATE_CHECK_FACILITIES[k]);
     if (!isValidCheckHour(hour)) {
-      console.error(`[ERROR] LATE_CHECK_FACILITIES["${k}"] = ${JSON.stringify(hour)} は判定時刻として無効です。`);
+      console.error(`[ERROR] LATE_CHECK_FACILITIES["${k}"] = ${JSON.stringify(LATE_CHECK_FACILITIES[k])} は判定時刻として無効です。`);
       process.exit(1);
     }
     if (m[norm] !== undefined && m[norm] !== hour) {
@@ -343,7 +374,7 @@ function findMonitoringAnomalies(entries, hour, selectedCount, fallbackReason) {
     (k) => LATE_CHECK_BY_NORM[normalizeFacility(k)] === hour
   );
   if (missing.length > 0) {
-    anomalies.push(`${hour}時に判定するはずの施設が施設マスタにありません: ${missing.map(safeFacilityLabel).join(", ")}`);
+    anomalies.push(`${fmtCheckSlot(hour)}に判定するはずの施設が施設マスタにありません: ${missing.map(safeFacilityLabel).join(", ")}`);
   }
   // ⚠ 「0件」だけを見ては足りない。4件中3件を改名されても残り1件で成立してしまい、
   //    消された施設の未打刻通知が恒久的に消える。期待件数に満たない時点で異常とする。
@@ -351,8 +382,8 @@ function findMonitoringAnomalies(entries, hour, selectedCount, fallbackReason) {
   if (selectedCount < expected) {
     anomalies.push(
       selectedCount === 0
-        ? `${hour}時に判定する施設が1件もありません（本来 ${expected} 件）`
-        : `${hour}時に判定する施設が ${selectedCount} 件しかありません（本来 ${expected} 件）`
+        ? `${fmtCheckSlot(hour)}に判定する施設が1件もありません（本来 ${expected} 件）`
+        : `${fmtCheckSlot(hour)}に判定する施設が ${selectedCount} 件しかありません（本来 ${expected} 件）`
     );
   }
   // 施設マスタを採用できていない＝古い控えで走っている。新設施設は監視外になる。
@@ -436,7 +467,8 @@ function dedupeSlotKey(facilityName) {
 function dedupePath(date, hour) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date))) throw new Error("dedupe: 判定対象日の形式が不正です");
   if (!isValidCheckHour(hour)) throw new Error("dedupe: 判定時刻が不正です");
-  return `${DEDUPE_ROOT}/${date}/h${hour}`;
+  // 整数の時は従来どおり h6 / h7。30分の回は h5m30（RTDB のキーに "." や ":" を使わない）。
+  return `${DEDUPE_ROOT}/${date}/h${Math.floor(hour)}${Number.isInteger(hour) ? "" : "m30"}`;
 }
 
 // LINE の応答 → sent / rejected / transient
@@ -620,7 +652,7 @@ async function sendBatchWithRetry(sendOnce, batch, sleep) {
 // 通知の本文。初回（通知済みの枠が無い）は従来と1文字も違わない。
 // freshNames: 今回はじめて通知する未打刻施設 / suppressedCount: 通知済み等で今回は載せない未打刻施設の数
 function buildMorningMessage(p) {
-  const head = `【${MORNING_CFG.appName}】\n朝出勤未確認（${p.hour}時判定）\n\n` +
+  const head = `【${MORNING_CFG.appName}】\n朝出勤未確認（${fmtCheckSlot(p.hour)}判定）\n\n` +
     (p.targetDate ? `判定対象日：${p.targetDate}（手動指定）\n` : "") +
     `確認時刻：${p.nowStr}\n\n`;
   const names = p.freshNames || [];
@@ -857,12 +889,12 @@ const CHECK_HOUR = (function () {
     // ローカルでの手動実行（DRY_RUN 検証）のためだけの既定。
     return DEFAULT_CHECK_HOUR;
   }
-  const n = Number(CHECK_HOUR_ENV);
+  const n = parseCheckSlot(CHECK_HOUR_ENV);
   if (isValidCheckHour(n)) return n;
   // ⚠ 既定へ倒さない。無効値のまま6時として走ると、6時の施設へ二重通知しつつ
   //   7時の施設は誰にも判定されないまま success で終わり、誰も気づけない。
   console.error(
-    `[ERROR] CHECK_HOUR="${CHECK_HOUR_ENV}" は判定時刻として無効です（有効値: ${CHECK_HOURS.join(", ")}）。`
+    `[ERROR] CHECK_HOUR="${CHECK_HOUR_ENV}" は判定時刻として無効です（有効値: ${CHECK_HOURS.map(checkSlotInput).join(", ")}）。`
   );
   console.error("[ERROR] 判定時刻を確定できないため実行しません（ワークフローの受け渡しを確認してください）。");
   process.exit(1);
@@ -1145,7 +1177,7 @@ async function main() {
   console.log(`[TIME]  現在UTC時刻: ${nowUtc.toISOString()}`);
   console.log(`[TIME]  現在JST時刻: ${getNowJSTWithSeconds()}`);
   console.log(`[CONFIG] TEST_NOTIFY=${TEST_NOTIFY} DRY_RUN=${DRY_RUN} TARGET_DATE="${TARGET_DATE_ENV || "(なし)"}"`);
-  console.log(`[CONFIG] CHECK_HOUR=${CHECK_HOUR}時${CHECK_HOUR_ENV ? "" : "（CHECK_HOUR 未指定 → 既定）"}`);
+  console.log(`[CONFIG] CHECK_HOUR=${fmtCheckSlot(CHECK_HOUR)}${CHECK_HOUR_ENV ? "" : "（CHECK_HOUR 未指定 → 既定）"}`);
   console.log(`[FIREBASE] base URL: ${FB_DB_URL}`);
   console.log(`[TENANT] ${TENANT_ID}`);
   console.log("========================================");
@@ -1289,7 +1321,7 @@ async function main() {
         //   （このリポジトリは PUBLIC で、Actions のログは未認証でも閲覧できる）。
         console.log("[DEBUG] 施設マスタ詳細:");
         entries.forEach((f, i) =>
-          console.log(`  [${i}] name="${safeFacilityLabel(facilityEntryName(f))}" 判定時刻=${resolveCheckHour(f)}時`)
+          console.log(`  [${i}] name="${safeFacilityLabel(facilityEntryName(f))}" 判定時刻=${fmtCheckSlot(resolveCheckHour(f))}`)
         );
       }
     }
@@ -1320,18 +1352,18 @@ async function main() {
   console.log(`[FAC]   施設別の判定時刻（除外後 ${facilityEntries.length} 件）:`);
   facilityEntries.forEach((f) => {
     const h = resolveCheckHour(f);
-    console.log(`  ${safeFacilityLabel(facilityEntryName(f))} … ${h}時${h === CHECK_HOUR ? "（今回の対象）" : "（今回は対象外）"}`);
+    console.log(`  ${safeFacilityLabel(facilityEntryName(f))} … ${fmtCheckSlot(h)}${h === CHECK_HOUR ? "（今回の対象）" : "（今回は対象外）"}`);
   });
 
   // ── この回の判定時刻に属する施設だけを見る ──
   const facilities = selectFacilitiesForHour(facilityEntries, CHECK_HOUR).map(facilityEntryName);
-  console.log(`[FAC]   ${CHECK_HOUR}時の通知対象施設 ${facilities.length} 件:`);
+  console.log(`[FAC]   ${fmtCheckSlot(CHECK_HOUR)}の通知対象施設 ${facilities.length} 件:`);
   facilities.forEach((name, i) => {
     console.log(`  [${i + 1}] ${safeFacilityLabel(name)}`);
   });
   const otherHours = CHECK_HOURS.filter((h) => h !== CHECK_HOUR);
   if (otherHours.length > 0) {
-    console.log(`[FAC]   ${otherHours.join(" / ")}時の施設は今回の対象外です（それぞれ別の実行で判定します）。`);
+    console.log(`[FAC]   ${otherHours.map(fmtCheckSlot).join(" / ")}の施設は今回の対象外です（それぞれ別の実行で判定します）。`);
   }
 
   // ── 監視が成立しているか。落ちているならログではなく LINE で知らせる ──
@@ -1343,7 +1375,7 @@ async function main() {
   //   設定異常を別送にすると、(a) 送信失敗が未打刻通知まで道連れにする、
   //   (b) 異常が続くあいだ通数が倍になり本来の警告が埋もれる、の2つが起きる。
   const anomalySection = anomalies.length > 0
-    ? `■ 設定異常（${CHECK_HOUR}時判定）\n` +
+    ? `■ 設定異常（${fmtCheckSlot(CHECK_HOUR)}判定）\n` +
       anomalies.map((a) => `・${a}`).join("\n") + "\n" +
       "施設マスタ（拠点トークン管理）を確認してください。この回の未打刻チェックは一部の施設について行えていません。\n\n"
     : "";
@@ -1371,7 +1403,7 @@ async function main() {
   };
 
   if (facilities.length === 0) {
-    console.log(`[OK]    ${CHECK_HOUR}時に判定する施設がありません — 未打刻通知はスキップ`);
+    console.log(`[OK]    ${fmtCheckSlot(CHECK_HOUR)}に判定する施設がありません — 未打刻通知はスキップ`);
     if (anomalySection) {
       await deliver([]);
     }
@@ -1459,7 +1491,7 @@ async function main() {
       console.log(`  fac="${label}" (norm="${normalized}") → マッチ OK: "${safeFacilityLabel(matchedOriginal)}"`);
       facilityClockInCount[matchedOriginal]++;
     } else if (otherHour) {
-      console.log(`  fac="${label}" (norm="${normalized}") → 判定時刻 ${otherHour.hour}時のため今回は対象外`);
+      console.log(`  fac="${label}" (norm="${normalized}") → 判定時刻 ${fmtCheckSlot(otherHour.hour)}のため今回は対象外`);
       otherFacilityCount[key] = (otherFacilityCount[key] || 0) + 1;
     } else if (excludedNormSet[normalized]) {
       console.log(`  fac="${label}" (norm="${normalized}") → 朝通知の除外施設のため対象外`);

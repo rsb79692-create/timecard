@@ -152,7 +152,7 @@ PIN レコードはこの2つで作る必要があるため、**PIN の値はす
 |---|---|
 | アップロード通知（`/api/line-notify`・`/api/discord-notify`） | 宛先は環境変数 `<名前>` + `__<会社ID大文字>`（例 `DISCORD_WEBHOOK_URL__MANTEL`）。**未設定なら送らない（穂乃味の宛先へ倒さない）**。新会社はログイン中のトークン必須 |
 | 持ち出し検知（`api/_lib/device.js`） | 同上の環境変数。定期スイープは全社を回し、各社のコンテキストで判定・送信（機能が無効な会社・停止中の会社は回さない） |
-| 朝の未打刻（`scripts/morning-check.js`） | `TENANT_ID` 環境変数（未指定＝穂乃味＝従来どおり）。施設・判定時刻（`runHours` / `defaultHour` / `lateCheckFacilities`）・除外施設・見出しは `MORNING_TENANTS`。**マンテールは 2026-11-03 に有効化**（12施設・あんず苑 5時／その他 6時。ワークフロー `morning-check-mantel.yml`、`workflow_dispatch` のみ）。他社は起動のたびに `/tenantReg/<cid>/active` を読み、`true` 以外なら送らずに終了。送信記録は `/srv/<cid>/morningNotify`（[`main-features-and-morning-check.md`](main-features-and-morning-check.md)「マンテール」） |
+| 朝の未打刻（`scripts/morning-check.js`） | `TENANT_ID` 環境変数（未指定＝穂乃味＝従来どおり）。施設・判定時刻（`runHours` / `defaultHour` / `lateCheckFacilities`）・除外施設・見出しは `MORNING_TENANTS`。**マンテールは 2026-11-03 に有効化**（12施設・あんず苑と清美の郷 5時／さざんか 5時30分／はるぞら 6時30分／その他 6時〔判定時刻は同日オーナー指示で変更〕。ワークフロー `morning-check-mantel.yml`、`workflow_dispatch` のみ）。他社は起動のたびに `/tenantReg/<cid>/active` を読み、`true` 以外なら送らずに終了。送信記録は `/srv/<cid>/morningNotify`（[`main-features-and-morning-check.md`](main-features-and-morning-check.md)「マンテール」） |
 | 通知確認（`scripts/notify-check.js`）・FCM（`scripts/fcm-check.js`） | `TENANT_ID` 環境変数。FCM の通知には会社IDが入り、`sw.js` がその会社の画面へ遷移する |
 | 有給の付与日（`scripts/paid-leave-notify.js`） | `TENANT_ID` 環境変数。他社は `/tenants/<cid>` を読み `LINE_*__<CID>` へ送る。未設定なら止まる（[`paid-leave-grant-notify.md`](paid-leave-grant-notify.md)） |
 

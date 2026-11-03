@@ -109,7 +109,7 @@
 
 **朝出勤確認 LINE 通知（`main-features-and-morning-check.md`）**
 - 施設ごとの判定時刻の正本は `scripts/morning-check.js` の `LATE_CHECK_FACILITIES`（コード側）。**施設マスタ側に持たせない。** `morning-check.js` と `index.html` の同名 `DEFAULT_FACILITIES` を同期しない。
-- 判定時刻は会社ごと（`MORNING_TENANTS.<会社ID>.runHours`。穂乃味 `[6,7]`・マンテール `[5,6]`）。足すときはその会社のワークフロー（`morning-check.yml`／`morning-check-mantel.yml` と起動元）も足す。`CHECK_HOUR` 不正は既定へ倒さず `exit 1`（checkHour 空の dispatch: 穂乃味=6時〔外部スケジューラの経路。変えない〕・マンテール=exit 1）。判定時刻を実行時の現在時刻から決めない。
+- 判定時刻は会社ごと（`MORNING_TENANTS.<会社ID>.runHours`。穂乃味 `[6,7]`・マンテール `[5,"5:30",6,"6:30"]`。30分の回は `"H:30"` で書き、分は 00/30 だけ）。足すときはその会社のワークフロー（`morning-check.yml`／`morning-check-mantel.yml` と起動元）も足す。`CHECK_HOUR` 不正は既定へ倒さず `exit 1`（checkHour 空の dispatch: 穂乃味=6時〔外部スケジューラの経路。変えない〕・マンテール=exit 1）。判定時刻を実行時の現在時刻から決めない。
 - 通知の重複抑止記録は `FIREBASE_DATABASE_URL` のオリジン直下 `/morningNotify`（他社は `/srv/<会社ID>/morningNotify`。`/honomi` 配下にしない）。他社は `/tenantReg/<会社ID>/active` が `true` でなければ送らない。マンテールのワークフローへ穂乃味の LINE の Secret を渡さない。未確定の送信を本文と retry key を作り直して送らない。ワークフローへ `concurrency:` を足さない。cron と外部スケジューラのどちらも外さない。
 
 **従業員・施設マスタの保存（`master-save.md`）**

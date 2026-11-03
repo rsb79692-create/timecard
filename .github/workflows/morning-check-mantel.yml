@@ -1,12 +1,15 @@
 name: 朝出勤確認 LINE通知（マンテール）
 
 # マンテール株式会社（会社ID mantel）の朝出勤確認。処理は穂乃味と同じ scripts/morning-check.js を TENANT_ID=mantel で動かす。
-# 判定時刻: あんず苑 = 5時 / その他11施設 = 6時（施設と判定時刻の正本は scripts/morning-check.js の MORNING_TENANTS.mantel）。
+# 判定時刻: あんず苑・清美の郷 = 5時 / さざんか = 5時30分 / その他8施設 = 6時 / はるぞら = 6時30分
+#   （2026-11-03 オーナー指示。施設と判定時刻の正本は scripts/morning-check.js の MORNING_TENANTS.mantel）。
 #
 # ★ 起動は workflow_dispatch だけ（2026-11-03 時点）。schedule の cron は、オーナーのテスト送信の後に足す。
 #    定時の起動は外部スケジューラ（cron-job.org）から REST で行う（docs/features/schedulers-and-notifications.md の手順）:
 #      20:03 UTC（05:03 JST）… {"ref":"main","inputs":{"checkHour":"5","dryRun":"false"}}
+#      20:33 UTC（05:33 JST）… {"ref":"main","inputs":{"checkHour":"5:30","dryRun":"false"}}
 #      21:03 UTC（06:03 JST）… {"ref":"main","inputs":{"checkHour":"6","dryRun":"false"}}
+#      21:33 UTC（06:33 JST）… {"ref":"main","inputs":{"checkHour":"6:30","dryRun":"false"}}
 #    ⚠ 値はすべて文字列。checkHour を数値で送ると GitHub API が 422 を返し、run が作られない（Actions に何も出ない）。
 #    ⚠ dryRun の既定は true（送らない）。定時の呼び出しは "dryRun":"false" を必ず付ける。付け忘れると毎朝判定ログだけで LINE は届かない。
 #
@@ -16,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       checkHour:
-        description: "判定時刻（5 または 6）。テスト通知・selfTest のときだけ空欄でよい"
+        description: "判定時刻（5 / 5:30 / 6 / 6:30）。テスト通知・selfTest のときだけ空欄でよい"
         required: false
         default: ""
         type: string
@@ -82,20 +85,20 @@ jobs:
             HOUR=6
             SRC="テスト通知・selfTest（判定はしない）"
           else
-            echo "::error::checkHour が空です（${EVENT_NAME}）。マンテールは判定時刻 5 または 6 を必ず指定してください。"
+            echo "::error::checkHour が空です（${EVENT_NAME}）。マンテールは判定時刻 5 / 5:30 / 6 / 6:30 のどれかを必ず指定してください。"
             echo "::error::外部スケジューラの本文は {\"ref\":\"main\",\"inputs\":{\"checkHour\":\"5\",\"dryRun\":\"false\"}} の形（値は文字列）です。"
             exit 1
           fi
           # GITHUB_ENV へ書く前に許可値へ丸める。改行を含む値による環境変数注入も同時に塞ぐ。
           case "${HOUR}" in
-            5|6) ;;
+            5|5:30|6|6:30) ;;
             *)
-              echo "::error::判定時刻は 5 または 6 のみ指定できます（受け取った値は不正です）。"
+              echo "::error::判定時刻は 5 / 5:30 / 6 / 6:30 のみ指定できます（受け取った値は不正です）。"
               exit 1
               ;;
           esac
           echo "CHECK_HOUR=${HOUR}" >> "$GITHUB_ENV"
-          echo "判定時刻: ${HOUR}時（決定元: ${SRC}）"
+          echo "判定時刻: ${HOUR}（決定元: ${SRC}）"
 
       - name: Run morning-check（マンテール）
         env:

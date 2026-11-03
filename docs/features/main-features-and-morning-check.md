@@ -132,16 +132,17 @@
         | 項目 | 値 |
         |---|---|
         | 施設（12） | あんず苑 / こもれびの里 / ``Kiyomi`s郷あゆむ`` / 小春の里 / 小春日和 / はるぞら / つむぎの里 / ふたばの里 / 笑福 / さざんか / 清美の郷 / せせらぎの里 |
-        | 判定時刻 | **あんず苑 = 5時**（`lateCheckFacilities`）、その他11施設 = 6時（`defaultHour`）。`runHours = [5, 6]` |
+        | 判定時刻 | **あんず苑・清美の郷 = 5時／さざんか = 5時30分／はるぞら = 6時30分**（`lateCheckFacilities`）、その他8施設 = 6時（`defaultHour`）。`runHours = [5, "5:30", 6, "6:30"]`（2026-11-03 オーナー指示で変更。当初はあんず苑だけ5時・その他6時） |
         | 除外施設 | なし |
         | 通知の見出し | `【マンテール タイムカード】` |
         | 宛先 | `LINE_CHANNEL_ACCESS_TOKEN__MANTEL` / `LINE_TO_ID__MANTEL`（**穂乃味の LINE の Secret はワークフローへ渡していない**） |
         | 判定データ | `/tenants/mantel`（`tc5_records` / `master/locations`）をサービスアカウントで読む（匿名認証は使わない） |
-        | 通知記録 | `/srv/mantel/morningNotify/{日付}/h5`・`h6`（Rules 未定義＝クライアント不可） |
+        | 通知記録 | `/srv/mantel/morningNotify/{日付}/h5`・`h5m30`・`h6`・`h6m30`（Rules 未定義＝クライアント不可） |
         | 利用状態 | 起動のたびに `/tenantReg/mantel/active` を読み、**`true` 以外なら何も読まず・送らずに終了（exit 0、`[SKIP] 会社 mantel は利用停止中です`）**。読めないときは exit 1。テスト通知・selfTest もこの確認の後 |
 
+      - 30分の回: 判定時刻は「時」の整数か `"H:30"`（分は 00 と 30 だけ。`parseCheckSlot`）。内部では時の数値（5時30分 = 5.5）で持ち、通知の見出しは「5時30分判定」、ワークフローの `checkHour` は `5:30` と書く。
       - ⚠ 施設名は**スタッフ一覧の表示どおり**で、施設マスタ（`/tenants/mantel/master/locations`）の表記と一致するかは**未確認**。
-        dryRun の `[FAC]` ログで12施設が5時1件・6時11件に分かれること、`[WARN] DEFAULT_FACILITIES に無い施設` と「設定異常」が出ないことを確かめる。
+        dryRun の `[FAC]` ログで12施設が5時2件・5時30分1件・6時8件・6時30分1件に分かれること、`[WARN] DEFAULT_FACILITIES に無い施設` と「設定異常」が出ないことを確かめる。
         ``Kiyomi`s郷あゆむ`` は半角のバッククォートを含む。全角の「｀」は NFKC で同じ施設として照合されるが、アポストロフィ「'」などは別の施設になる（その場合はマスタかコードの表記を合わせる）。
       - 穂乃味と同じく、シフト・休日は見ない（毎日、出勤の打刻が1件も無い施設を通知する）。施設名は公開リポジトリの Actions ログに出る（穂乃味と同じ）。
       - ⚠ **起動は今のところ `workflow_dispatch` だけ**（`schedule` の cron は無い。オーナーのテスト送信の後に保険として足すかを決める）。定時の起動は cron-job.org から（手順: [`schedulers-and-notifications.md`](schedulers-and-notifications.md)「マンテールの朝出勤確認」）。

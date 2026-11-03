@@ -351,7 +351,7 @@ check("dryRun で LINE 送信をスキップする経路が残っている",
 check("LINE 本文の施設名をサニタイズしている",
   /names\.map\(\(n\) => `・\$\{safeFacilityLabel\(n\)\}`\)/.test(SRC));
 check("LINE 本文に判定時刻を明示している",
-  /朝出勤未確認（\$\{p\.hour\}時判定）/.test(SRC) && /hour: CHECK_HOUR,/.test(SRC));
+  /朝出勤未確認（\$\{fmtCheckSlot\(p\.hour\)\}判定）/.test(SRC) && /hour: CHECK_HOUR,/.test(SRC));
 {
   // ⚠ 判定経路から sendLineMessage を直接呼ぶと、cron と外部スケジューラの両方で2通になる。
   const mainBody = SRC.slice(SRC.indexOf("async function main()"));
@@ -1447,42 +1447,60 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
     eq("通知の見出しはマンテール タイムカード", MT.MORNING_CFG.appName, "マンテール タイムカード");
     eq("施設はオーナー決定の12施設（順序も含めて一致）", arr(MT.DEFAULT_FACILITIES), JSON.stringify(MANTEL_FACILITIES));
     eq("朝通知の除外施設は無い", arr(MT.NOTIFY_EXCLUDE), "[]");
-    eq("判定時刻は 5時 と 6時", arr(MT.CHECK_HOURS), "[5,6]");
+    eq("判定時刻は 5時・5時30分・6時・6時30分", arr(MT.CHECK_HOURS), "[5,5.5,6,6.5]");
     eq("既定の判定時刻は6時", MT.DEFAULT_CHECK_HOUR, 6);
-    eq("既定と異なる判定時刻を持つのは あんず苑（5時）だけ", JSON.stringify(MT.LATE_CHECK_FACILITIES), JSON.stringify({ "あんず苑": 5 }));
+    eq("既定と異なる判定時刻（2026-11-03 オーナー指示）", JSON.stringify(MT.LATE_CHECK_FACILITIES),
+      JSON.stringify({ "あんず苑": 5, "清美の郷": 5, "さざんか": "5:30", "はるぞら": "6:30" }));
     check("施設名に重複が無い（正規化後）",
       new Set(MT.DEFAULT_FACILITIES.map(MT.normalizeFacility)).size === MANTEL_FACILITIES.length);
     check("判定時刻の指定のキーは正規化済み",
       Object.keys(MT.LATE_CHECK_FACILITIES).every((k) => MT.normalizeFacility(k) === k));
   }
 
-  section("マンテール: 施設ごとの判定時刻（あんず苑 5時・その他 6時）");
+  section("マンテール: 施設ごとの判定時刻（あんず苑・清美の郷 5時／さざんか 5時30分／はるぞら 6時30分／その他 6時）");
   {
-    eq("あんず苑 は5時", MT.resolveCheckHour({ name: "あんず苑", token: "t" }), 5);
-    MANTEL_FACILITIES.filter((n) => n !== "あんず苑").forEach((n) => {
-      eq(n + " は6時", MT.resolveCheckHour({ name: n, token: "t" }), 6);
+    const MANTEL_SLOTS = { "あんず苑": 5, "清美の郷": 5, "さざんか": 5.5, "はるぞら": 6.5 };
+    MANTEL_FACILITIES.forEach((n) => {
+      const want = MANTEL_SLOTS[n] !== undefined ? MANTEL_SLOTS[n] : 6;
+      eq(n + " の判定時刻", MT.resolveCheckHour({ name: n, token: "t" }), want);
     });
     const master = MANTEL_FACILITIES.map((n, i) => ({ name: n, token: "t" + i }));
-    const m5 = MT.selectFacilitiesForHour(master, 5).map(MT.facilityEntryName);
-    const m6 = MT.selectFacilitiesForHour(master, 6).map(MT.facilityEntryName);
-    eq("5時の回は あんず苑 だけ", JSON.stringify(m5), JSON.stringify(["あんず苑"]));
-    eq("6時の回は残り11施設", m6.length, 11);
-    check("5時と6時の対象が交差しない", m5.every((n) => m6.indexOf(n) === -1));
-    eq("全施設がどちらか一方に属する", m5.length + m6.length, MANTEL_FACILITIES.length);
+    const pick = (h) => MT.selectFacilitiesForHour(master, h).map(MT.facilityEntryName);
+    const m5 = pick(5), m530 = pick(5.5), m6 = pick(6), m630 = pick(6.5);
+    eq("5時の回は あんず苑・清美の郷", JSON.stringify(m5), JSON.stringify(["あんず苑", "清美の郷"]));
+    eq("5時30分の回は さざんか だけ", JSON.stringify(m530), JSON.stringify(["さざんか"]));
+    eq("6時30分の回は はるぞら だけ", JSON.stringify(m630), JSON.stringify(["はるぞら"]));
+    eq("6時の回は残り8施設", m6.length, 8);
+    const all = m5.concat(m530, m6, m630);
+    eq("全施設がどれか1つの回にだけ属する", all.length, MANTEL_FACILITIES.length);
+    eq("回をまたいだ重複が無い", new Set(all).size, MANTEL_FACILITIES.length);
     check("6時の回に " + KIYOMI + " を含む（バッククォートの施設名でも判定できる）", m6.indexOf(KIYOMI) !== -1);
-    eq("5時の期待件数は1", MT.expectedFacilityCountForHour(5), 1);
-    eq("6時の期待件数は11", MT.expectedFacilityCountForHour(6), 11);
+    eq("5時の期待件数は2", MT.expectedFacilityCountForHour(5), 2);
+    eq("5時30分の期待件数は1", MT.expectedFacilityCountForHour(5.5), 1);
+    eq("6時の期待件数は8", MT.expectedFacilityCountForHour(6), 8);
+    eq("6時30分の期待件数は1", MT.expectedFacilityCountForHour(6.5), 1);
     eq("7時はマンテールの判定時刻ではない（期待件数0）", MT.expectedFacilityCountForHour(7), 0);
-    check("マンテールでは7時を判定時刻として受け付けない", !MT.isValidCheckHour(7));
-    check("マンテールでは5時・6時を受け付ける", MT.isValidCheckHour(5) && MT.isValidCheckHour(6));
-    eq("正常なマスタなら5時の回は異常なし", MT.findMonitoringAnomalies(master, 5, 1, null).length, 0);
-    eq("正常なマスタなら6時の回は異常なし", MT.findMonitoringAnomalies(master, 6, 11, null).length, 0);
+    check("マンテールでは7時・7時30分を判定時刻として受け付けない", !MT.isValidCheckHour(7) && !MT.isValidCheckHour(7.5));
+    check("マンテールでは5時・5時30分・6時・6時30分を受け付ける",
+      [5, 5.5, 6, 6.5].every((h) => MT.isValidCheckHour(h)));
+    eq("正常なマスタなら5時の回は異常なし", MT.findMonitoringAnomalies(master, 5, 2, null).length, 0);
+    eq("正常なマスタなら5時30分の回は異常なし", MT.findMonitoringAnomalies(master, 5.5, 1, null).length, 0);
+    eq("正常なマスタなら6時の回は異常なし", MT.findMonitoringAnomalies(master, 6, 8, null).length, 0);
+    eq("正常なマスタなら6時30分の回は異常なし", MT.findMonitoringAnomalies(master, 6.5, 1, null).length, 0);
+    // さざんか が施設マスタに見当たらない → 5時30分の回で設定異常（黙って6時へ落とさない）
+    const noSaz = master.filter((f) => f.name !== "さざんか");
+    const a530 = MT.findMonitoringAnomalies(noSaz, 5.5, 0, null);
+    check("さざんか が施設マスタに無ければ5時30分の回で設定異常（表示は「5時30分」）",
+      a530.some((a) => /^5時30分に判定するはずの施設が施設マスタにありません/.test(a)), JSON.stringify(a530));
+    check("さざんか の不在は6時の回の異常にならない",
+      !MT.findMonitoringAnomalies(noSaz, 6, 8, null).some((a) => /施設マスタにありません/.test(a)));
     // 施設マスタの表記が違って あんず苑 が見つからない → 5時の回で設定異常として LINE に出る（黙って6時へ落とさない）
     const renamed = master.filter((f) => f.name !== "あんず苑").concat([{ name: "杏苑" }]);
     check("あんず苑 が施設マスタに見当たらなければ5時の回で設定異常",
       MT.findMonitoringAnomalies(renamed, 5, 0, null).some((a) => /施設マスタにありません/.test(a)));
     check("施設マスタの値（morningCheckHour 等）で あんず苑 の判定時刻は動かない",
       MT.resolveCheckHour({ name: "あんず苑", morningCheckHour: 6, hour: 6 }) === 5 &&
+      MT.resolveCheckHour({ name: "さざんか", morningCheckHour: 6, hour: 6 }) === 5.5 &&
       MT.resolveCheckHour({ name: "小春日和", morningCheckHour: 5, hour: 5 }) === 6);
   }
 
@@ -1514,6 +1532,13 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
     eq("通知記録は /srv/mantel/morningNotify", MT.DEDUPE_ROOT, "srv/mantel/morningNotify");
     eq("5時の回の記録の場所", MT.dedupePath("2026-11-04", 5), "srv/mantel/morningNotify/2026-11-04/h5");
     eq("6時の回の記録の場所", MT.dedupePath("2026-11-04", 6), "srv/mantel/morningNotify/2026-11-04/h6");
+    eq("5時30分の回の記録の場所（RTDB のキーに . や : を使わない）", MT.dedupePath("2026-11-04", 5.5), "srv/mantel/morningNotify/2026-11-04/h5m30");
+    eq("6時30分の回の記録の場所", MT.dedupePath("2026-11-04", 6.5), "srv/mantel/morningNotify/2026-11-04/h6m30");
+    check("4つの回の記録の場所がすべて別", new Set([5, 5.5, 6, 6.5].map((h) => MT.dedupePath("2026-11-04", h))).size === 4);
+    eq("本文の見出し（5時30分判定）",
+      MT.buildMorningMessage({ hour: 5.5, nowStr: "2026/11/04 05:33", anomalySection: "", freshNames: ["さざんか"], suppressedCount: 0, facilitiesCount: 1 })
+        .split("\n").slice(0, 2).join("\n"),
+      "【マンテール タイムカード】\n朝出勤未確認（5時30分判定）");
     let threw = false;
     try { MT.dedupePath("2026-11-04", 7); } catch (_) { threw = true; }
     check("マンテールの記録は7時の場所を作らない", threw);
@@ -1549,12 +1574,15 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
   section("会社ごとの判定時刻の設定不正で起動を止める");
   {
     const bad = [
-      ["    runHours: [5, 6],\n    defaultHour: 6,", "    runHours: [5, 6],\n    defaultHour: 7,", "既定が判定時刻に無い"],
-      ["    runHours: [5, 6],", "    runHours: [],", "判定時刻が空"],
-      ["    runHours: [5, 6],", "    runHours: [5, 5, 6],", "判定時刻の重複"],
-      ["    runHours: [5, 6],", "    runHours: [5, 24],", "範囲外の判定時刻"],
-      ["    runHours: [5, 6],", "    runHours: [\"5\", 6],", "数値でない判定時刻"],
-      ['    lateCheckFacilities: {\n      "あんず苑": 5,\n    },', '    lateCheckFacilities: {\n      "あんず苑": 7,\n    },', "判定時刻に無い時刻の施設"],
+      ['    runHours: [5, "5:30", 6, "6:30"],\n    defaultHour: 6,', '    runHours: [5, "5:30", 6, "6:30"],\n    defaultHour: 7,', "既定が判定時刻に無い"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', "    runHours: [],", "判定時刻が空"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', '    runHours: [5, "5:30", 5.5, 6],', "判定時刻の重複（\"5:30\" と 5.5）"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', "    runHours: [5, 24],", "範囲外の判定時刻"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', '    runHours: ["五", 6],', "数値でない判定時刻"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', '    runHours: [5, "5:15", 6],', "30分以外の分（5:15）"],
+      ['    runHours: [5, "5:30", 6, "6:30"],', "    runHours: [5, 5.25, 6],", "30分以外の端数（5.25）"],
+      ['      "あんず苑": 5,\n      "清美の郷": 5,', '      "あんず苑": 7,\n      "清美の郷": 5,', "判定時刻に無い時刻の施設"],
+      ['      "さざんか": "5:30",', '      "さざんか": "7:30",', "判定時刻に無い30分の施設"],
     ];
     bad.forEach(([from, to, why]) => {
       if (BLOCK.indexOf(from) === -1) { check(`マンテールの設定不正（${why}）で起動を止める`, false, "差し替え元が見つからない"); return; }
@@ -1663,7 +1691,20 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
     {
       const r = runEnv(Object.assign({ CHECK_HOUR: "7" }, mantelBase));
       check("マンテールで CHECK_HOUR=7 は exit 1（通信しない）", r.status === 1 && !/\[RTDB\]|\[TENANT\]|\[AUTH\]/.test(String(r.stdout)) &&
-        /有効値: 5, 6/.test(r.stderr), String(r.stderr).slice(0, 200));
+        /有効値: 5, 5:30, 6, 6:30/.test(r.stderr), String(r.stderr).slice(0, 200));
+    }
+    ["5:15", "5.5", "5:3", "05:30x", "6:60"].forEach((v) => {
+      const r = runEnv(Object.assign({ CHECK_HOUR: v }, mantelBase));
+      check(`マンテールで CHECK_HOUR="${v}" は exit 1（通信しない）`, r.status === 1 && !/\[RTDB\]|\[TENANT\]|\[AUTH\]/.test(String(r.stdout)),
+        String(r.stderr).slice(0, 200));
+    });
+    {
+      const r = runEnv({
+        CHECK_HOUR: "6:30", DRY_RUN: "true",
+        LINE_CHANNEL_ACCESS_TOKEN: "dummy", LINE_TO_ID: "Udummy", FIREBASE_API_KEY: "dummy", FIREBASE_DATABASE_URL: "https://127.0.0.1:1",
+      });
+      check("穂乃味で CHECK_HOUR=6:30 は exit 1（穂乃味は30分の回を持たない）", r.status === 1 && !/\[RTDB\]/.test(String(r.stdout)) &&
+        /有効値: 6, 7/.test(r.stderr), String(r.stderr).slice(0, 200));
     }
     {
       const r = runEnv(Object.assign({ CHECK_HOUR: "", GITHUB_ACTIONS: "true" }, mantelBase));
@@ -1700,9 +1741,17 @@ const FAC = ["ナナイロ", "ココラ", "ミュゲ貝塚", "ミュゲ春木"];
     check("GITHUB_TOKEN は読み取りだけ", /^permissions:\s*\r?\n\s+contents: read\s*$/m.test(MWF));
     check("実行コマンドは穂乃味と同じスクリプト", /run: node scripts\/morning-check\.js\s*$/m.test(MWF));
     // 判定時刻の allowlist はスクリプトのマンテールの判定時刻から導く
-    const allow = MWF.match(/case "\$\{HOUR\}" in\s*\r?\n\s*([0-9|]+)\)/);
-    eq("判定時刻の allowlist がマンテールの判定時刻と一致", allow ? JSON.stringify(allow[1].split("|").map(Number)) : "none",
+    const allow = MWF.match(/case "\$\{HOUR\}" in\s*\r?\n\s*([0-9:|]+)\)/);
+    const slotOf = (v) => { const m = /^(\d+)(?::(30))?$/.exec(v); return m ? Number(m[1]) + (m[2] ? 0.5 : 0) : NaN; };
+    eq("判定時刻の allowlist がマンテールの判定時刻と一致", allow ? JSON.stringify(allow[1].split("|").map(slotOf)) : "none",
       arr(MT.CHECK_HOURS));
+    {
+      // 外部スケジューラの案内（コメント）にも4つの回がそろっている（起動元の無い回を作らない）
+      ["5", "5:30", "6", "6:30"].forEach((v) => {
+        check(`外部スケジューラの案内に checkHour "${v}" の呼び出しがある`,
+          MWF.indexOf('"checkHour":"' + v + '"') !== -1);
+      });
+    }
     check("allowlist の検査が GITHUB_ENV への書き込みより前にある",
       MWF.indexOf('case "${HOUR}" in') !== -1 && MWF.indexOf('case "${HOUR}" in') < MWF.indexOf('>> "$GITHUB_ENV"'));
     check("CHECK_HOUR を後続ステップへ渡す", /CHECK_HOUR=\$\{HOUR\}" >> "\$GITHUB_ENV"/.test(MWF));
