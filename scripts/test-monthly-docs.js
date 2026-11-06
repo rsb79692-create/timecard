@@ -681,9 +681,11 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       check("未登録の人の出勤は従来どおり朝の温度を聞く", c.mdocPlan("clockIn", "未登録", FAC, at(DK, 6)).slot === 0);
     }
     {
+      const c0 = mk([r("開け", "clockIn", 6)], staff);
+      const p0 = c0.mdocPlan("clockOut", "開け", FAC, at(DK, 13));
+      check("開けだけの人の退勤は日中の温度（保存食は聞かない）", p0 && p0.slot === 1 && p0.hozon === false);
       const c = mk([r("開け", "clockIn", 6), r("日中", "clockIn", 9)], staff);
-      const p1 = c.mdocPlan("clockOut", "開け", FAC, at(DK, 13));
-      check("開けだけの人の退勤は日中の温度（保存食は聞かない）", p1 && p1.slot === 1 && p1.hozon === false);
+      check("日中の人が勤務中なら、先に帰る開けの人には日中の温度を聞かない", c.mdocPlan("clockOut", "開け", FAC, at(DK, 13)) === null);
       const p2 = c.mdocPlan("clockOut", "日中", FAC, at(DK, 18));
       check("日中の人は17時以降の退勤でも日中の温度だけ", p2 && p2.slot === 1 && p2.hozon === false);
     }
@@ -692,7 +694,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       const c = mk([r("開け", "clockIn", 6), r("閉め", "clockIn", 13)], staff);
       const p = c.mdocPlan("clockOut", "閉め", FAC, at(DK, 18));
       check("閉めの人の17時以降の退勤: 開けだけの人の勤務中（押し忘れ）は数えず、夕方の温度と保存食", p && p.slot === 2 && p.hozon === true);
-      const p16 = c.mdocPlan("clockOut", "閉め", FAC, at(DK, 16, 30));
+      const p16 = mk([r("閉め", "clockIn", 13)], staff).mdocPlan("clockOut", "閉め", FAC, at(DK, 16, 30));
+      check("既知の弱点: 17時より前は開けの人の勤務中（押し忘れ）も数え、閉めの人に日中の温度を聞かない", c.mdocPlan("clockOut", "閉め", FAC, at(DK, 16, 30)) === null);
       check("閉めの人の17時より前の退勤は日中の温度（保存食は聞かない）", p16 && p16.slot === 1 && p16.hozon === false);
     }
     {
@@ -711,6 +714,26 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       const c2 = mk([r("開け閉め", "clockIn", 6)], staff);
       const p2 = c2.mdocPlan("clockOut", "開け閉め", FAC, at(DK, 12));
       check("開けと閉めの両方の人が昼に退勤: 日中の温度", p2 && p2.slot === 1 && p2.hozon === false);
+    }
+    {
+      // 2026-11-06 ユーザー指示: 日中が入っている人が勤務中なら、先に帰る人には日中の温度を聞かない（ミュゲの泉 谷口 7-9・小山 9-14）
+      const all = ["open", "day", "close", "full", "split"];
+      const st2 = staff.concat([ST("谷口", all), ST("小山", ["day", "close"])]);
+      const c = mk([r("谷口", "clockIn", 7), r("小山", "clockIn", 9)], st2);
+      check("日中＋閉めの人が勤務中なら、9時に帰る人に日中の温度を聞かない", c.mdocPlan("clockOut", "谷口", FAC, at(DK, 9)) === null);
+      const c2 = mk([r("谷口", "clockIn", 7), r("小山", "clockIn", 9), r("谷口", "clockOut", 9)], st2);
+      const pk = c2.mdocPlan("clockOut", "小山", FAC, at(DK, 14));
+      check("残った日中＋閉めの人の17時より前の退勤で日中の温度を聞く", pk && pk.slot === 1 && pk.hozon === false);
+      const c3 = mk([r("谷口", "clockIn", 7), r("閉め", "clockIn", 9)], st2);
+      check("日中の無い閉めの人しか勤務中でなければ、先に帰る人に日中の温度を聞く", c3.mdocPlan("clockOut", "谷口", FAC, at(DK, 9)).slot === 1);
+      const c4 = mk([r("谷口", "clockIn", 7), r("未登録", "clockIn", 9)], st2);
+      check("未登録の人しか勤務中でなければ、先に帰る人に日中の温度を聞く", c4.mdocPlan("clockOut", "谷口", FAC, at(DK, 9)).slot === 1);
+      const c5 = mk([r("開け", "clockIn", 6), r("日中", "clockIn", 8)], staff);
+      const p5 = c5.mdocPlan("clockOut", "開け", FAC, at(DK, 17, 10));
+      check("17時以降は朝からの日中の人の勤務中（押し忘れ）を数えず日中の温度を聞く", p5 && p5.slot === 1);
+      const c6 = mk([r("谷口", "clockIn", 7), r("小山", "clockIn", 9, { workFacility: "ココラ", facilityName: "ココラ" })], st2);
+      const p6 = c6.mdocPlan("clockOut", "谷口", FAC, at(DK, 9));
+      check("別の施設で勤務中の日中の人は数えない", p6 && p6.slot === 1);
     }
     {
       const c = mk([r("間抜け", "clockIn", 6)], staff);

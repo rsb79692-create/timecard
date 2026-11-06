@@ -11337,6 +11337,17 @@ function mdocPlan(type,staff,fac,d){
         return !skip(o,k);
       });
     };
+    // ★ 2026-11-06 ユーザー指示: 同じ施設に、勤務区分に「日中」が入っている人（または開けだけの人）が勤務中なら、
+    //   先に帰る人には日中の温度を聞かずその人に任せる。未登録・日中の無い閉め等の人は数えない。
+    //   既知の弱点（ユーザー了承済み）: 日中と閉めの両方の人が17時以降まで残ると、その人には夕方しか聞かないため日中が空欄になる。
+    //   17時以降は朝からの勤務中（押し忘れ）を数えない。温度を聞かないスタッフも数えない。
+    var dayLater=function(){
+      return Object.keys(open).some(function(k){
+        var o=open[k],kt=mdocShiftTypes(k);
+        if(k===staff||!o.open||o.fac!==fac||!kt.length||!(kt.indexOf("day")>=0||!mdocMayClose(k))||mdocNoTemp(fac,k))return false;
+        return !(hour>=MDOC_FORGOT_OUT_HOUR&&o.inHour!==null&&o.inHour<12);
+      });
+    };
     if(ts.length){
       if(_mdocHas(ts,["close","full","split"])&&hour>=MDOC_CLOSE_HOUR){
         // 勤務中に数えるのは閉めの担当になりうる人。未登録の人は従来どおり、17時以降の朝からの勤務中（押し忘れ）を数えない
@@ -11344,7 +11355,7 @@ function mdocPlan(type,staff,fac,d){
           if(!d2)plan.slot=2;
           if(!hz)plan.hozon=true;
         }
-      } else if(!d1)plan.slot=1;
+      } else if(!d1&&!dayLater())plan.slot=1;
     } else {
       var cinHour=cin?_mdocHour(cin.timestamp):null;
       var dayWorker=(cinHour!==null&&cinHour<12);
@@ -11353,7 +11364,7 @@ function mdocPlan(type,staff,fac,d){
       });
       var last=!othersOpen&&(!dayWorker||hour>=16);
       if(last&&!d2)plan.slot=2;
-      else if(dayWorker&&!last&&!d1)plan.slot=1;
+      else if(dayWorker&&!last&&!d1&&!dayLater())plan.slot=1;
       else if(!dayWorker&&!d2)plan.slot=2;
       if(last&&!hz)plan.hozon=true;
     }
