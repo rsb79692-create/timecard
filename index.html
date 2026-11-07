@@ -247,7 +247,8 @@ function tenantBrandBarHtml(){
   if(TENANT.legacy)return;
   try{
     // ★ 存在しない会社では manifest を外す（穂乃味の manifest へ差し替えると、そのURLから穂乃味のアプリとしてインストールされる）
-    var m=document.querySelector('link[rel="manifest"]');if(m){if(TENANT_INVALID)m.parentNode.removeChild(m);else m.setAttribute("href",TENANT.manifest);}
+    // ★ <head> 先頭で選んだシステム管理者用（manifest-<会社>-sys.json）は会社の manifest で上書きしない（上書きすると ?c=<会社> の打刻アプリとしてインストールされる。2026-11-07）。
+    var m=document.querySelector('link[rel="manifest"]');if(m){if(TENANT_INVALID)m.parentNode.removeChild(m);else if(!/-sys\.json$/.test(m.getAttribute("href")||""))m.setAttribute("href",TENANT.manifest);}
     var ti=document.querySelector('link[rel="apple-touch-icon"]');if(ti)ti.setAttribute("href",TENANT.touchIcon);
     var fi=document.querySelector('link[rel="icon"]');if(fi)fi.setAttribute("href",TENANT.touchIcon);
     var tc=document.querySelector('meta[name="theme-color"]');if(tc)tc.setAttribute("content",TENANT.themeColor);

@@ -87,5 +87,23 @@ check("穂乃味の ?sys は従来どおり manifest.json", manifestFor("?sys", 
 }
 check("不正な会社IDは Android の施設URLでも置かない", manifestFor("?c=Mantel!&token=abc", UA.android) === null);
 
+console.log("■ 読み込み後の差し替え（会社に応じて manifest を差し替える処理）が sys 用を上書きしない");
+{
+  const lm = /    var m=document\.querySelector\('link\[rel="manifest"\]'\);if\(m\)\{[^\r\n]*/.exec(html);
+  check("差し替え処理を抽出できる", !!lm);
+  function afterSwap(href, invalid) {
+    const link = { h: href, removed: false, getAttribute: function () { return this.h; }, setAttribute: function (k, v) { this.h = v; },
+      parentNode: { removeChild: function () { link.removed = true; } } };
+    const ctx = vm.createContext({ document: { querySelector: function () { return link; } }, TENANT: { manifest: "manifest-mantel.json" }, TENANT_INVALID: !!invalid });
+    vm.runInContext(lm[0], ctx);
+    return link.removed ? null : link.h;
+  }
+  if (lm) {
+    check("sys 用の manifest は上書きしない", afterSwap("manifest-mantel-sys.json") === "manifest-mantel-sys.json");
+    check("会社の manifest はそのまま", afterSwap("manifest-mantel.json") === "manifest-mantel.json");
+    check("存在しない会社では外す", afterSwap("manifest.json", true) === null);
+  }
+}
+
 console.log("\n結果: " + pass + " PASS / " + fail + " FAIL");
 process.exit(fail ? 1 : 0);
