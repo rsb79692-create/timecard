@@ -31,6 +31,14 @@
     }catch(e){}
     // 会社の manifest は manifest-<会社ID>.json（TENANT_CONFIGS の manifest と同じ名前にする）。不正な会社IDには置かない。
     href=(cred||!/^[a-z][a-z0-9]{1,23}$/.test(c))?"":("manifest-"+c+".json");
+    // ★ 例外: Android のシステム管理者URL（?c=<会社>&sys だけ）は、&sys 付きで起動する専用の manifest を置く（2026-11-07 ユーザー指示）。
+    //   会社の manifest では start_url（?c=<会社>）で sys が落ちる。PIN は毎回聞くので資格情報は含まない。対象は専用ファイルがある会社だけ。
+    //   sys はクエリ（location.search）のときだけ数える（アプリ本体の sysLoginRequested がクエリしか見ないため。ハッシュでは会社管理者PINになる）。
+    try{
+      var sq=new URLSearchParams(location.search);
+      var sysOnly=sq.get("sys")!==null&&sq.get("c")===c&&["token","admin","viewer","demo","staffDemo"].every(function(k){return sq.get(k)===null&&q.get(k)===null;});
+      if(sysOnly&&["mantel"].indexOf(c)>=0&&/Android/i.test(navigator.userAgent||""))href="manifest-"+c+"-sys.json";
+    }catch(e){}
   }
   if(href)document.write('<link rel="manifest" href="'+href+'">');
 })();

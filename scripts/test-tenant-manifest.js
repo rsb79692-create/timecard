@@ -60,9 +60,30 @@ check("iPad（Mac 表記）は置かない", manifestFor("?c=mantel&token=abc", 
 check("PC は従来どおり置かない", manifestFor("?c=mantel&token=abc", UA.pc) === null);
 
 console.log("■ マンテール: 施設以外の資格情報つきURLは Android でも置かない");
-for (const k of ["admin", "viewer", "demo", "staffDemo", "sys"]) {
+for (const k of ["admin", "viewer", "demo", "staffDemo"]) {
   check(k + " は置かない", manifestFor("?c=mantel&" + k + "=x", UA.android) === null);
   check("token と " + k + " が両方あれば置かない", manifestFor("?c=mantel&token=t&" + k + "=x", UA.android) === null);
+}
+check("sys と token が両方あれば置かない", manifestFor("?c=mantel&token=t&sys", UA.android) === null);
+check("クエリに sys と token・ハッシュに会社の URL は sys 用を置かない", manifestFor("?sys&token=X", UA.android, "#c=mantel") !== "manifest-mantel-sys.json");
+for (const k of ["admin", "viewer", "demo", "staffDemo"]) check("sys と " + k + " が両方あれば置かない", manifestFor("?c=mantel&" + k + "=a&sys", UA.android) === null);
+
+console.log("■ マンテール: システム管理者URL（?c=mantel&sys だけ）");
+check("Android は &sys 付きで起動する専用の manifest", manifestFor("?c=mantel&sys", UA.android) === "manifest-mantel-sys.json");
+check("Android で sys に値があっても同じ", manifestFor("?c=mantel&sys=1", UA.android) === "manifest-mantel-sys.json");
+check("ハッシュの URL は置かない（アプリ本体はクエリの sys しか見ない）", manifestFor("", UA.android, "#c=mantel&sys") === null);
+check("iPhone は従来どおり置かない", manifestFor("?c=mantel&sys", UA.iphone) === null);
+check("iPad（Mac 表記）は従来どおり置かない", manifestFor("?c=mantel&sys", UA.ipad) === null);
+check("PC は従来どおり置かない", manifestFor("?c=mantel&sys", UA.pc) === null);
+check("専用ファイルの無い会社は置かない", manifestFor("?c=other&sys", UA.android) === null);
+check("穂乃味の ?sys は従来どおり manifest.json", manifestFor("?sys", UA.android) === "manifest.json");
+{
+  const sm2 = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest-mantel-sys.json"), "utf8"));
+  const base = JSON.parse(fs.readFileSync(path.join(__dirname, "..", "manifest-mantel.json"), "utf8"));
+  check("専用 manifest の起動URLは ?c=mantel&sys", sm2.start_url === "./?c=mantel&sys");
+  check("専用 manifest の id は打刻アプリと別", sm2.id === "./?c=mantel&sys" && sm2.id !== base.id);
+  check("専用 manifest に資格情報を含めない", !/token=|admin=|viewer=|demo=/.test(JSON.stringify(sm2)));
+  check("アイコンは実在する", sm2.icons.every(function (i) { return fs.existsSync(path.join(__dirname, "..", i.src)); }));
 }
 check("不正な会社IDは Android の施設URLでも置かない", manifestFor("?c=Mantel!&token=abc", UA.android) === null);
 
