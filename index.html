@@ -11281,7 +11281,7 @@ function mdocDiscardDate(dk){
 function _mdocMd(dk){var p=dk.split("-");return (+p[1])+"月"+(+p[2])+"日";}
 
 // ★ 勤務区分（2026-10-22 ユーザー指示。スタッフ編集で登録する tc5_staff の shiftTypes）。未登録の人は従来の判定のまま。
-//   朝の温度＝開け・通し・間抜け／日中＝日中・開けだけの人（退勤時）、間抜け（休憩開始時。昼の抜けを休憩で打刻するため）／
+//   朝の温度＝開け・通し・間抜け／日中＝日中・開けだけの人（退勤時）、間抜け・通し（休憩開始時。昼の抜けを休憩で打刻するため）／
 //   夕方＋保存食＝閉め・通し・間抜け（17時以降の退勤。17時より前は日中として聞く）。
 var MDOC_SHIFT_KEYS=["open","day","close","full","split"];
 var MDOC_CLOSE_HOUR=17; // 閉めの担当の人に夕方の温度・保存食を聞く時刻（これより前の退勤は日中）
@@ -11297,7 +11297,7 @@ function mdocMayClose(staff){var ts=mdocShiftTypes(staff);return !ts.length||_md
 // 何を聞くか（聞くものが無ければ null＝従来どおりすぐ打刻）。
 // 出勤: 本人のその日最初の確認なら衛生・新興感染症。施設のその日の朝の温度が未記録で正午より前なら朝の温度（slot 0。出勤の確定後に聞く）。
 //       勤務区分が登録済みなら、朝の温度は開け・通し・間抜けの人だけに聞く。
-// 休憩開始: 勤務区分が間抜けの人だけ。日中の温度（slot 1）が未記録なら聞く。
+// 休憩開始: 勤務区分が間抜け・通しの人だけ。日中の温度（slot 1）が未記録なら聞く。
 // 施設変更: 移動元の施設（fac）の日中の温度（slot 1）が未記録なら聞く（2026-10-22 ユーザー指示。移動元を出る前に押す運用）。
 // 退勤（勤務区分が登録済み）: 閉め・通し・間抜けの人が17時以降に退勤し、同じ施設に閉めの担当になりうる人（mdocMayClose）が
 //       勤務中でなければ、夕方の温度と保存食（未記録なら）。勤務中なら聞かない。17時より前の退勤・開けや日中だけの人は日中の温度（未記録なら）。
@@ -11324,7 +11324,8 @@ function mdocPlan(type,staff,fac,d){
     }
     if(hour<12&&!tempDone(0)&&(!ts.length||_mdocHas(ts,["open","full","split"])))plan.slot=0;
   } else if(type==="breakStart"){
-    if(ts.indexOf("split")>=0&&!tempDone(1))plan.slot=1;
+    // ★ 2026-11-09 ユーザー指示: 通しの人も休憩開始で日中の温度を聞く（17時以降の退勤では夕方しか聞かず、日中を書く場面が無かった）
+    if(_mdocHas(ts,["split","full"])&&!tempDone(1))plan.slot=1;
   } else if(type==="facilityChange"){
     if(!tempDone(1))plan.slot=1;
   } else {

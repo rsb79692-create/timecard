@@ -741,7 +741,11 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       check("間抜けの人の休憩開始: 日中の温度を聞く（衛生・保存食は聞かない）", pb && pb.slot === 1 && pb.hyg === false && pb.hozon === false);
       const c2 = mk([r("間抜け", "clockIn", 6), r("開け", "clockOut", 11, { mdoc: { f: FAC, temp: { s: 1, d: [] } } })], staff);
       check("日中の温度が記録済みなら休憩開始では聞かない", c2.mdocPlan("breakStart", "間抜け", FAC, at(DK, 12)) === null);
-      check("間抜け以外（未登録を含む）の休憩開始では何も聞かない", c.mdocPlan("breakStart", "開け", FAC, at(DK, 12)) === null && c.mdocPlan("breakStart", "未登録", FAC, at(DK, 12)) === null);
+      check("間抜け・通し以外（未登録を含む）の休憩開始では何も聞かない", c.mdocPlan("breakStart", "開け", FAC, at(DK, 12)) === null && c.mdocPlan("breakStart", "未登録", FAC, at(DK, 12)) === null && c.mdocPlan("breakStart", "閉め", FAC, at(DK, 12)) === null && c.mdocPlan("breakStart", "日中", FAC, at(DK, 12)) === null);
+      const ct = mk([r("通し", "clockIn", 6)], staff);
+      const pt = ct.mdocPlan("breakStart", "通し", FAC, at(DK, 12));
+      check("通しの人の休憩開始: 日中の温度を聞く（衛生・保存食は聞かない）", pt && pt.slot === 1 && pt.hyg === false && pt.hozon === false);
+      check("通しの人も日中が記録済みなら休憩開始では聞かない", c2.mdocPlan("breakStart", "通し", FAC, at(DK, 12)) === null);
       const c3 = mk([r("間抜け", "clockIn", 6), r("間抜け", "breakStart", 12), r("間抜け", "breakEnd", 15)], staff);
       const po = c3.mdocPlan("clockOut", "間抜け", FAC, at(DK, 18, 30));
       check("間抜けの人の17時以降の退勤: 夕方の温度と保存食", po && po.slot === 2 && po.hozon === true);
@@ -749,6 +753,8 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
     {
       const nf = makeClient({ facilityName: "ココラ" }); nf.staffList = [ST("松本香織", ["split"])];
       check("温度を聞かないスタッフ（ココラの松本香織さん）は間抜けでも休憩開始で聞かない", nf.mdocPlan("breakStart", "松本香織", "ココラ", at(DK, 12)) === null);
+      const nf2 = makeClient({ facilityName: "ココラ" }); nf2.staffList = [ST("松本香織", ["full"])];
+      check("温度を聞かないスタッフ（ココラの松本香織さん）は通しでも休憩開始で聞かない", nf2.mdocPlan("breakStart", "松本香織", "ココラ", at(DK, 12)) === null);
     }
     {
       // 施設変更（移動元を出る前に押す）: 移動元の日中の温度を聞く。区分によらない
