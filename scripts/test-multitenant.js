@@ -754,6 +754,11 @@ async function main() {
       client && Object.keys(server).every(function (k) {
         return JSON.stringify(server[k].features) === JSON.stringify(client[k].features);
       }));
+    // ★ 他社は平文PINを端末に置かない（getStoredPin の plain が常に null）。PIN確認ボタンの表示条件を plain だけにすると
+    //   サーバで復号する経路（tenantAdminViewPin）へ到達できない（2026-11-10 マンテールで発生）。
+    check("他社のスタッフ一覧で登録済みならPIN確認ボタンを出す", /else if\(_sp\.plain\|\|!TENANT\.legacy\)\{[^\n]*\n[^\n]*\n\s*\+'<button class="btn-pin-view"/.test(html));
+    check("他社のスタッフ編集画面で登録済みならPIN確認ボタンを出す", /var _canView=!!\(_msp\.plain\|\|\(!TENANT\.legacy&&_msp\.hash\)\);/.test(html) && /if\(nm&&_msp\.hash&&_canView\)\{/.test(html));
+    check("他社のPIN確認はサーバで復号する経路へ渡す", /function adminViewPin\(nm\)\{\r?\n  if\(!TENANT\.legacy\)\{tenantAdminViewPin\(nm\);return;\}/.test(html));
     check("穂乃味だけが legacy（従来配置）", Object.keys(server).filter(function (k) { return server[k].legacy; }).join(",") === "honomi"
       && client && Object.keys(client).filter(function (k) { return client[k].legacy; }).join(",") === "honomi");
     const sw = fs.readFileSync(path.join(ROOT, "sw.js"), "utf8");

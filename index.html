@@ -7818,7 +7818,7 @@ function _renderInner(){
             +'<span style="color:#9ca3af;font-size:.78rem;margin-right:6px;">未設定</span>'
             +'<button class="btn-pin-reset" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#fef3c7;color:#92400e;border:1px solid #fcd34d;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN再設定</button>'
             +'</td>';
-        } else if(_sp.plain){
+        } else if(_sp.plain||!TENANT.legacy){ // ★ 他社は平文を端末に置かないため、登録済みなら常に出す（押したときサーバで復号。2026-11-10 ユーザー指示）
           pinTd='<td style="padding:0 14px;white-space:nowrap;">'
             +'<button class="btn-pin-view" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:var(--brand-soft);color:var(--brand);border:1px solid var(--brand-border);padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;margin-right:4px;">PIN確認</button>'
             +'<button class="btn-pin-change" data-nm="'+_nmEsc+'" onclick="event.stopPropagation();" style="background:#f0fdf4;color:#166534;border:1px solid #86efac;padding:2px 7px;border-radius:4px;font-size:.72rem;font-weight:700;cursor:pointer;font-family:inherit;">PIN変更</button>'
@@ -10932,9 +10932,10 @@ function openHrmEdit(nm){
   var pinDiv=document.getElementById("modal-pin-area");
   if(pinDiv){
     var _msp=nm?getStoredPin(nm):{hash:null,plain:null};
-    var _pinStatus=!_msp.hash?"未設定":(_msp.plain?"確認可":"設定済み");
+    var _canView=!!(_msp.plain||(!TENANT.legacy&&_msp.hash)); // 他社は登録済みなら確認できる（サーバで復号）
+    var _pinStatus=!_msp.hash?"未設定":(_canView?"確認可":"設定済み");
     pinDiv.innerHTML='<span style="color:#8496a7;font-size:13px;">PIN</span><strong style="margin:0 8px;font-family:monospace;">'+_pinStatus+'</strong>';
-    if(nm&&_msp.hash&&_msp.plain){
+    if(nm&&_msp.hash&&_canView){
       var pv=document.createElement("button");
       pv.textContent="PIN確認";
       pv.style.cssText="background:var(--brand-soft);color:var(--brand);border:1px solid var(--brand-border);padding:3px 10px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;margin-right:6px;";
