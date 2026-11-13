@@ -193,6 +193,8 @@ const pollTests = (async () => {
     c.recToday = () => D;
     c.fetchRecordsRange = (f, t) => { c.__fetched++; return Promise.resolve(o.server === undefined ? {} : o.server); };
     c.mergeRecordsRange = (f, t, v) => { c.__merged = [f, t, v]; };
+    // 取り直しの上限タイマーは手動で発火させる（既定の即時実行だと応答より先に打ち切られる）
+    c.__timers = []; c.setTimeout = (fn) => { c.__timers.push(fn); return c.__timers.length; }; c.clearTimeout = () => {};
     return c;
   };
   const tick = () => new Promise((r) => setImmediate(r));
@@ -220,6 +222,28 @@ const pollTests = (async () => {
     c8.document = { querySelector: () => null }; c8.recToday = () => D; c8.fetchRecordsRange = () => { c8.__f++; return Promise.resolve({}); };
     c8.mdocPollToday(); await tick();
     check("穂乃味以外では取り直さない", c8.__f === 0);
+    // 2026-11-13: 応答が返らないまま残っても取り直しが止まらない（ナナイロ 11/3・11/12 の閉めの未記録）
+    const c9 = mk({});
+    let sig = null;
+    c9.fetchRecordsRange = (f, t, o) => { c9.__fetched++; sig = o && o.signal; return new Promise(() => {}); };
+    c9.mdocPollToday(); await tick();
+    check("取り直しの通信に打ち切り用の signal を渡す", !!sig && sig.aborted === false);
+    c9.mdocPollToday(); await tick();
+    check("応答待ちの間は重ねて取りに行かない", c9.__fetched === 1);
+    c9.__timers.forEach((fn) => fn()); await tick(); await tick();
+    check("上限を過ぎたら通信を打ち切り、手元を書き換えない", sig.aborted === true && c9.__merged === null);
+    c9.fetchRecordsRange = (f, t) => { c9.__fetched++; return Promise.resolve({ z: rec("B", "clockOut", D, 15) }); };
+    c9.mdocPollToday(); await tick(); await tick();
+    check("打ち切りの後の次の回は取り直しを再開する", c9.__fetched === 2 && c9.__merged && c9.__merged[0] === D);
+    const c10 = mk({ records: [rec("C", "clockIn", D, 6)] });
+    let late = null;
+    c10.fetchRecordsRange = () => { c10.__fetched++; return new Promise((r) => { late = r; }); };
+    c10.mdocPollToday(); await tick();
+    c10.__timers.forEach((fn) => fn()); await tick();
+    late({ y: rec("C", "clockOut", D, 15) }); await tick(); await tick();
+    check("打ち切りの後に遅れて届いた応答は手元へ反映しない", c10.__merged === null);
+    check("上限は MDOC_POLL_TIMEOUT_MS（8秒）", c9.MDOC_POLL_TIMEOUT_MS === 8000);
+    check("fetchRecordsRange は opts を authFetch へ渡す", /function fetchRecordsRange\(from,to,opts\)\{[\s\S]{0,300}?return authFetch\(url,opts\|\|undefined\)/.test(html));
     check("打刻画面の10秒ポーリングから呼ばれる（管理画面の当日取得より前）", /mdocPollToday\(\);\s*\n\s*if\(screen!=="admin" && screen!=="staffDetail" && !viewerMode\) return;/.test(html));
   })();
 })();
