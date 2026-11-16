@@ -1207,6 +1207,35 @@ console.log("\n[25] 自宅からの距離：点検の指摘への対処");
   ok("CSV の選択はボタンから開く（キーボードでも操作できる）", /function mileageHomeCsvOpen\(\)/.test(html) && !/mileageHomeCsvPick\(this\)" style="display:none;"/.test(html));
 }
 
+console.log("\n[26] 2026-12-01 以降の手入力（例外）の日も自宅からの差を足す（2026-11-16 ユーザー指示 A）");
+{
+  const HOME = { base: "p_nana", km: { p_nana: 4, p_haru: 7, p_myu: 2 } };
+  const man = function (date, status, ids, km) {
+    const o = {}; o[date] = { status: status, totalKm: km, routeText: "ナナイロ → ハルイロ",
+      placeIds: ids, startName: "ナナイロ", endName: "ハルイロ" }; return o;
+  };
+  const m1 = AU.merge({}, man("2026-12-05", "approved", ["p_nana", "p_haru"], 5), {}, HOME);
+  eq("承認済みの手入力に帰りの差を足す（5＋3）", m1.rows[0].km, 8);
+  eq("手入力の日も自動計算と同じく確定対象", m1.rows[0].status, "manual");
+  eq("手入力の日の表示にも差を添える", m1.rows[0].routeText, "ナナイロ → ハルイロ（基準施設より遠い分 帰り+3km）");
+  eq("月合計に手入力の差が入る", m1.totalKm, 8);
+  const m2 = AU.merge({}, man("2026-12-05", "approved", ["p_haru", "p_myu"], 3), {}, HOME);
+  eq("行きの差（7-4=3）を足し、近い施設の帰りの差は0", m2.rows[0].km, 6);
+  const m3 = AU.merge({}, man("2026-12-05", "approved", ["p_nana", "p_haru"], 5), {}, null);
+  eq("自宅からの距離が未登録なら手入力の日も要確認", m3.rows[0].status, "missing_home");
+  eq("要確認の手入力は合計に入れない（0km）", m3.totalKm, 0);
+  ok("要確認の手入力は確定を止める", m3.blockers.length === 1 && m3.blockers[0].status === "missing_home");
+  const m4 = AU.merge({}, man("2026-11-30", "approved", ["p_nana", "p_haru"], 5), {}, HOME);
+  eq("11/30 までの手入力は従来どおり（差を足さない）", m4.rows[0].km, 5);
+  const m5 = AU.merge({}, man("2026-12-05", "pending", ["p_nana", "p_haru"], 5), {}, HOME);
+  ok("未処理の手入力は従来どおり確定を止め、見込みの距離には差を入れる", m5.rows[0].status === "pending_request" && m5.rows[0].km === 8);
+  ok("サーバの手入力の索引に地点IDと最初・最後の地点名を入れる", /placeIds: r\.placeIds \|\| \[\],/.test(apiSrc) && /startName: lg\.length/.test(apiSrc));
+  ok("サーバの集計で手入力にも職員ごとの自宅からの距離を渡す", /A\.merge\(auto\.days, manual, \(pendCorrByName\[t\.staffName\] \|\| \{\}\), homes\[t\.employeeId\] \|\| null\)/.test(apiSrc));
+  ok("承認画面の手入力に、支給に足す自宅からの差を示す", html.indexOf("+mileageManualHomeNote(st.employeeId,r)") >= 0 && html.indexOf("function mileageManualHomeNote(eid,r)") >= 0);
+  ok("画面の集計で手入力にも自宅からの距離を渡す", /return mileageAutoMerge\(auto\.days,mileageAutoManualOf\(manualList\),corr,home\|\|null\);/.test(html)
+    && /placeIds:Array\.isArray\(r\.placeIds\)\?r\.placeIds:\[\]/.test(html));
+}
+
 // ★ [23] の一部は非同期（handleMonthlyReport は async）。集計はその完了後に行う。
 reportTests.then(function () {
   console.log("\n================ 結果 ================");

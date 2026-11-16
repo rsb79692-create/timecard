@@ -14750,17 +14750,48 @@ function mileageAutoMonth(recs,ym,ctx,home){
 }
 
 /**
+ * ★ 2026-11-16 ユーザー指示（A）: MILEAGE_HOME_FROM 以降の手入力（例外）の日も、自宅からの差を足す。
+ *   手入力した道のりの最初の地点で行きの差、最後の地点で帰りの差を数える（自動集計と同じ決まり。マイナスは0）。
+ *   m.placeIds（地点IDの並び）と m.startName / m.endName（表示用の地点名）を使う。
+ *   差を決められない（自宅からの距離が未登録）なら missingHome に名前を入れて返す（0km にしない）。
+ */
+function mileageAutoManualHome(row,m,d,home){
+  if(!mileageAutoHomeRule(d))return;
+  var ids=(m&&Array.isArray(m.placeIds))?m.placeIds:[];
+  if(!ids.length)return;
+  var h=mileageAutoNormHome(home),miss=[],seen=mileageAutoDict();
+  function add(n){n=String(n||"");if(!seen[n]){seen[n]=true;miss.push(n);}}
+  function diff(id,name){
+    id=String(id||"");
+    if(!h||!h.base){add("基準施設");return null;}
+    if(id===h.base)return 0;
+    var a=mileageAutoHas(h.km,id)?h.km[id]:null,c=mileageAutoHas(h.km,h.base)?h.km[h.base]:null;
+    if(a==null)add(name||id);
+    if(c==null)add("基準施設");
+    if(a==null||c==null)return null;
+    var v=mileageAutoRound1(a-c);
+    return v>0?v:0;
+  }
+  var go=diff(ids[0],m.startName),back=diff(ids[ids.length-1],m.endName);
+  row.homeGo=go||0;row.homeBack=back||0;
+  row.routeText=String(row.routeText||"")+mileageAutoHomeText({homeRule:true,homeGo:row.homeGo,homeBack:row.homeBack});
+  if(miss.length){row.missingHome=miss;return;}
+  row.km=mileageAutoRound1(row.km+row.homeGo+row.homeBack);
+}
+
+/**
  * 自動集計と、例外の手入力申請・打刻修正申請の状態を突き合わせて、月の確定対象行を作る。
  *
  * ・承認済みの手入力申請がある日は、その日の自動集計より手入力を優先する（例外運用の趣旨）
  * ・未処理の手入力申請がある日は確定できない（pending_request）
  * ・移動がある日に未処理の打刻修正申請があると確定できない（pending_correction）
  * ・却下された手入力申請は無効。自動集計の値へ戻す
+ * ・MILEAGE_HOME_FROM 以降の手入力の日は自宅からの差を足す（home。mileageAutoManualHome）
  *
  * 戻り値 { rows:[...], totalKm, blockers:[{date,status}] }
  *   rows[].status: "auto"|"manual"|"no_origin"|"missing_leg"|"missing_home"|"pending_correction"|"pending_request"
  */
-function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
+function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates,home){
   var seen=mileageAutoDict(),list=[],k;
   for(k in autoDays)if(!seen[k]){seen[k]=1;list.push(k);}
   for(k in manualByDate)if(mileageAutoSafeKey(k)&&!seen[k]){seen[k]=1;list.push(k);}
@@ -14781,9 +14812,15 @@ function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
     if(m&&mSt==="pending"){
       row.source="manual";row.status="pending_request";row.km=mileageAutoRound1(m.totalKm);
       row.routeText=String(m.routeText||row.routeText);
+      row.homeGo=0;row.homeBack=0;row.missingHome=[];
+      mileageAutoManualHome(row,m,d,home);
     }else if(m&&mSt==="approved"){
       row.source="manual";row.status="manual";row.km=mileageAutoRound1(m.totalKm);
       row.routeText=String(m.routeText||row.routeText);
+      row.homeGo=0;row.homeBack=0;row.missingHome=[];
+      mileageAutoManualHome(row,m,d,home);
+      // 自宅からの距離が未登録で差を決められない日は確定しない（0km にしない）
+      if(row.missingHome.length){row.status="missing_home";row.km=0;}
     }else{
       if(m&&mSt==="rejected")row.manualRejected=true;
       if(!a||a.status==="none")continue;
@@ -14910,7 +14947,11 @@ function mileageAutoManualOf(list){
     if(!r||!mileageAutoSafeKey(r.date))return;
     var prev=out[r.date];
     if(prev&&rank(prev.status)>=rank(r.status))return;
-    out[r.date]={status:r.status,totalKm:mileageAutoRound1(r.totalKm),routeText:mileageRouteText(r)};
+    var lg=Array.isArray(r.legs)?r.legs:[];
+    out[r.date]={status:r.status,totalKm:mileageAutoRound1(r.totalKm),routeText:mileageRouteText(r),
+      // 2026-12-01 以降は最初と最後の地点で自宅からの差を足す（共有ブロックの mileageAutoManualHome）
+      placeIds:Array.isArray(r.placeIds)?r.placeIds:[],
+      startName:lg.length?String(lg[0].fromName||""):"",endName:lg.length?String(lg[lg.length-1].toName||""):""};
   });
   return out;
 }
@@ -14924,7 +14965,7 @@ function mileageAutoCompute(staffNm,ym,manualList,isAutoTarget,recs,ctx,corrIdx,
     ?mileageAutoMonth(recs||mileageAutoRecordsOf(staffNm,ym),ym,ctx,home||null)
     :{days:{},dates:[]};
   var corr=corrIdx?(corrIdx[staffNm]||{}):mileageAutoPendingCorr(staffNm,ym);
-  return mileageAutoMerge(auto.days,mileageAutoManualOf(manualList),corr);
+  return mileageAutoMerge(auto.days,mileageAutoManualOf(manualList),corr,home||null);
 }
 /**
  * 対象月の打刻を「氏名 → レコード」で1回だけ索引化する。
@@ -15958,6 +15999,24 @@ async function mileageHomeCsvRun(apply){
 function mileageHomeCsvApply(){mileageHomeCsvRun(true);}
 function mileageHomeCsvCancel(){mileage.homePlan=null;mileage.homeCsvRows=null;render();}
 
+/**
+ * 承認画面の手入力1件に、支給に足す自宅からの差を示す（2026-12-01 以降。計算は共有ブロックの mileageAutoManualHome）。
+ * 承認する距離と支給する距離が違って見えないようにする。
+ */
+function mileageManualHomeNote(eid,r){
+  if(!r||!mileageAutoHomeRule(r.date))return "";
+  // 却下は支給しない。読み込み前（自宅からの距離が未取得）は「未登録」と誤って出さない
+  if(r.status==="rejected"||!mileage.booted)return "";
+  var lg=Array.isArray(r.legs)?r.legs:[];
+  var m={placeIds:Array.isArray(r.placeIds)?r.placeIds:[],startName:lg.length?String(lg[0].fromName||""):"",endName:lg.length?String(lg[lg.length-1].toName||""):""};
+  var row={km:mileageAutoRound1(r.totalKm),routeText:"",homeGo:0,homeBack:0,missingHome:[]};
+  mileageAutoManualHome(row,m,r.date,(mileage.homes||{})[eid]||null);
+  if(row.missingHome.length)return '<div style="font-size:.76rem;color:#b91c1c;margin-top:2px;">自宅からの距離が未登録：'+esc(row.missingHome.join("、"))+'</div>';
+  var add=mileageAutoRound1(row.homeGo+row.homeBack);
+  if(!add)return "";
+  return '<div style="font-size:.76rem;color:#166534;margin-top:2px;font-weight:700;">支給 '+row.km+' km（基準施設より遠い分 +'+add+' km を含む）</div>';
+}
+
 /** 管理者タブ「移動距離」の中身。 */
 /**
  * 管理画面用：対象月の全職員分を手元で集計する。
@@ -16182,6 +16241,7 @@ function mileageAdminCardHtml(){
           +'<span style="font-size:.82rem;font-weight:700;color:var(--brand);margin-left:auto;">'+Number(r.totalKm)+' km</span>'
           +act+'</div>'
           +'<div style="font-size:.76rem;color:#475569;margin-top:2px;word-break:break-word;">'+esc(mileageRouteText(r))+'</div>'
+          +mileageManualHomeNote(st.employeeId,r)
           +(r.note?'<div style="font-size:.72rem;color:#8496a7;margin-top:2px;">備考：'+esc(r.note)+'</div>':"")
           +(r.status==="rejected"&&r.rejectReason?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">却下理由：'+esc(r.rejectReason)+'</div>':"")
           +'</div>';

@@ -401,17 +401,48 @@ function mileageAutoMonth(recs,ym,ctx,home){
 }
 
 /**
+ * ★ 2026-11-16 ユーザー指示（A）: MILEAGE_HOME_FROM 以降の手入力（例外）の日も、自宅からの差を足す。
+ *   手入力した道のりの最初の地点で行きの差、最後の地点で帰りの差を数える（自動集計と同じ決まり。マイナスは0）。
+ *   m.placeIds（地点IDの並び）と m.startName / m.endName（表示用の地点名）を使う。
+ *   差を決められない（自宅からの距離が未登録）なら missingHome に名前を入れて返す（0km にしない）。
+ */
+function mileageAutoManualHome(row,m,d,home){
+  if(!mileageAutoHomeRule(d))return;
+  var ids=(m&&Array.isArray(m.placeIds))?m.placeIds:[];
+  if(!ids.length)return;
+  var h=mileageAutoNormHome(home),miss=[],seen=mileageAutoDict();
+  function add(n){n=String(n||"");if(!seen[n]){seen[n]=true;miss.push(n);}}
+  function diff(id,name){
+    id=String(id||"");
+    if(!h||!h.base){add("基準施設");return null;}
+    if(id===h.base)return 0;
+    var a=mileageAutoHas(h.km,id)?h.km[id]:null,c=mileageAutoHas(h.km,h.base)?h.km[h.base]:null;
+    if(a==null)add(name||id);
+    if(c==null)add("基準施設");
+    if(a==null||c==null)return null;
+    var v=mileageAutoRound1(a-c);
+    return v>0?v:0;
+  }
+  var go=diff(ids[0],m.startName),back=diff(ids[ids.length-1],m.endName);
+  row.homeGo=go||0;row.homeBack=back||0;
+  row.routeText=String(row.routeText||"")+mileageAutoHomeText({homeRule:true,homeGo:row.homeGo,homeBack:row.homeBack});
+  if(miss.length){row.missingHome=miss;return;}
+  row.km=mileageAutoRound1(row.km+row.homeGo+row.homeBack);
+}
+
+/**
  * 自動集計と、例外の手入力申請・打刻修正申請の状態を突き合わせて、月の確定対象行を作る。
  *
  * ・承認済みの手入力申請がある日は、その日の自動集計より手入力を優先する（例外運用の趣旨）
  * ・未処理の手入力申請がある日は確定できない（pending_request）
  * ・移動がある日に未処理の打刻修正申請があると確定できない（pending_correction）
  * ・却下された手入力申請は無効。自動集計の値へ戻す
+ * ・MILEAGE_HOME_FROM 以降の手入力の日は自宅からの差を足す（home。mileageAutoManualHome）
  *
  * 戻り値 { rows:[...], totalKm, blockers:[{date,status}] }
  *   rows[].status: "auto"|"manual"|"no_origin"|"missing_leg"|"missing_home"|"pending_correction"|"pending_request"
  */
-function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
+function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates,home){
   var seen=mileageAutoDict(),list=[],k;
   for(k in autoDays)if(!seen[k]){seen[k]=1;list.push(k);}
   for(k in manualByDate)if(mileageAutoSafeKey(k)&&!seen[k]){seen[k]=1;list.push(k);}
@@ -432,9 +463,15 @@ function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
     if(m&&mSt==="pending"){
       row.source="manual";row.status="pending_request";row.km=mileageAutoRound1(m.totalKm);
       row.routeText=String(m.routeText||row.routeText);
+      row.homeGo=0;row.homeBack=0;row.missingHome=[];
+      mileageAutoManualHome(row,m,d,home);
     }else if(m&&mSt==="approved"){
       row.source="manual";row.status="manual";row.km=mileageAutoRound1(m.totalKm);
       row.routeText=String(m.routeText||row.routeText);
+      row.homeGo=0;row.homeBack=0;row.missingHome=[];
+      mileageAutoManualHome(row,m,d,home);
+      // 自宅からの距離が未登録で差を決められない日は確定しない（0km にしない）
+      if(row.missingHome.length){row.status="missing_home";row.km=0;}
     }else{
       if(m&&mSt==="rejected")row.manualRejected=true;
       if(!a||a.status==="none")continue;

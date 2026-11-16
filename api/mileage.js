@@ -886,13 +886,18 @@ function manualByDateOf(node) {
     // 万一同じ日に複数あった場合は「承認済み > 未処理 > 却下」を優先（金額の取りこぼしを防ぐ）
     const rank = function (s) { return s === "approved" ? 3 : s === "pending" ? 2 : 1; };
     if (prev && rank(prev.status) >= rank(r.status)) return;
+    const lg = r.legs || [];
     out[r.date] = {
       status: r.status,
       totalKm: M.round1(r.totalKm),
-      routeText: (r.legs || []).length
-        ? [].concat(r.legs.map(function (l) { return l.fromName; }),
-                    [r.legs[r.legs.length - 1].toName]).join(" → ")
+      routeText: lg.length
+        ? [].concat(lg.map(function (l) { return l.fromName; }),
+                    [lg[lg.length - 1].toName]).join(" → ")
         : "",
+      // 2026-12-01 以降は最初と最後の地点で自宅からの差を足す（mileage-auto の mileageAutoManualHome）
+      placeIds: r.placeIds || [],
+      startName: lg.length ? String(lg[0].fromName || "") : "",
+      endName: lg.length ? String(lg[lg.length - 1].toName || "") : "",
     };
   });
   return out;
@@ -945,7 +950,7 @@ async function computeAutoMonth(ym) {
       ? A.month(punchByName[t.staffName] || [], ym, ctx, homes[t.employeeId] || null)
       : { days: {}, dates: [] };
     const manual = manualByDateOf(reqNode && reqNode[t.employeeId]);
-    const merged = A.merge(auto.days, manual, (pendCorrByName[t.staffName] || {}));
+    const merged = A.merge(auto.days, manual, (pendCorrByName[t.staffName] || {}), homes[t.employeeId] || null);
     merged.rows.forEach(function (r) {
       (r.missingPlaces || []).forEach(function (f) { if (f) missingFacilities[f] = true; });
     });
