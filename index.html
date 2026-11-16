@@ -14069,6 +14069,11 @@ var mileage={
   enabledMap:{},          // 社員番号 → true（管理者の bootstrap で取得。正本はサーバ）
   modalEid:"",modalName:"",modalWas:false, // スタッフ管理モーダルで開いている職員と、開いた時点のON/OFF
   syncFailed:{},          // 社員番号 → true（利用設定の送信に失敗した職員。次回保存で必ず再送する）
+  homes:{},               // 社員番号 → {base,km}（自宅からの距離。管理者の bootstrap で取得。2026-12-01 以降の計算に使う）
+  homeEditEid:"",         // 「自宅からの距離」タブで編集中の職員
+  homeDraft:null,         // 保存中・保存に失敗したときに入力を残す {eid,base,km}
+  homeCsvRows:null,homePlan:null, // CSV 取り込み：読み込んだ行と、サーバが返した確認結果
+  myHome:null,            // 職員側：本人の自宅からの距離（bootstrap で本人分だけ返る）
   // 労務士側
   viewYm:"",viewData:null,viewLoading:false,viewClosedMonths:[],viewTried:false,
   busy:false
@@ -14111,6 +14116,9 @@ function mileageErrText(res){
   if(c==="route_too_long")return "1日に登録できる地点数の上限を超えています。";
   if(c==="unknown_place")return "選択された地点が見つかりません。画面を再読み込みしてください。";
   if(c==="staff_not_found")return "該当のスタッフが見つかりません。";
+  if(c==="bad_base"||c==="base_km_required")return "基準施設と、基準施設までの距離を入れてください。";
+  if(c==="unknown_employee"||c==="bad_employee")return "この職員は移動距離の対象に見つかりません。画面を再読み込みしてください。";
+  if(c==="bad_rows")return "CSVの行が読み取れませんでした（1〜300行）。";
   if(c==="identity_conflict")return "この氏名は既に別の社員番号（"+((res.data&&res.data.conflictWith)||"?")+"）へ割り当てられています。\n\n"
     +"・同じ人の社員番号を訂正する場合は、スタッフ管理の編集画面から社員番号を変更して保存してください。\n"
     +"・別人であれば、同姓同名です。氏名の登録を分けてください（同じ氏名では区別できません）。";
@@ -14150,6 +14158,7 @@ function mileageErrText(res){
       return "・"+(x.staffName||x.employeeId)+(x.date?" "+x.date:"")+"："
         +(x.status==="no_origin"?"起点未確定"
           :x.status==="missing_leg"?"距離未登録"
+          :x.status==="missing_home"?"自宅からの距離が未登録"
           :x.status==="pending_correction"?"打刻修正待ち"
           :x.status==="pending_request"?"手入力の承認待ち"
           :x.status==="broken_punch"?"打刻不整合"
@@ -14201,6 +14210,8 @@ function mileageBootApply(res){
   if(Array.isArray(d.places))mileage.places=d.places;
   if(d.legs&&typeof d.legs==="object")mileage.legs=d.legs;
   if(d.enabledMap&&typeof d.enabledMap==="object")mileage.enabledMap=d.enabledMap;   // 管理者のみ返る
+  if(d.homes&&typeof d.homes==="object")mileage.homes=d.homes;                       // 管理者のみ返る
+  if(d.role==="s")mileage.myHome=(d.home&&typeof d.home==="object")?d.home:null;     // 本人分だけ返る
 }
 
 /** 管理者・労務士の再取得用（画面から明示的に呼ぶ）。 */
@@ -14228,6 +14239,7 @@ function mileageResetSession(){
   mileage.draft={date:"",placeIds:[],note:"",editingId:""};
   mileage.formOpen=false;mileage.busy=false;
   mileage.enabledMap={};mileage.modalEid="";mileage.modalName="";mileage.modalWas=false;mileage.syncFailed={};
+  mileage.homes={};mileage.homeEditEid="";mileage.homeDraft=null;mileage.homeCsvRows=null;mileage.homePlan=null;mileage.myHome=null;
   mileage.viewYm="";mileage.viewData=null;mileage.viewTried=false;mileage.viewClosedMonths=[];
   mileage.adminYm="";mileage.adminData=null;
   mileage.autoOpen={};mileage.autoOnlyIssues=false;
@@ -14344,6 +14356,8 @@ function mileageBootForViewer(){
  */
 function mileageAdminEditing(){
   if(screen!=="admin"||adminTab!=="mileage")return false;
+  // 自宅からの距離の編集中・CSV の確認中も再描画しない（入力した値が消えるため）
+  if(mileage.homeEditEid||mileage.homeCsvRows)return true;
   var ids=["mlg-place-name","mlg-place-order","mlg-place-facility","mlg-place-aliases","mlg-leg-km","mlg-rate"];
   for(var i=0;i<ids.length;i++){
     var el=document.getElementById(ids[i]);
@@ -14399,6 +14413,17 @@ function mileageAutoDestOf(r){
   return String((r&&r.workFacility)||"");
 }
 
+/**
+ * ★ 2026-11-16 ユーザー指示: この日以降の打刻は「退勤した施設で終わり＋自宅からの差」で数える。
+ *   ・施設どうしの移動は、出勤した施設 →（施設変更の順）→ 最後の施設で終わる（起点へ戻す分は足さない）
+ *   ・行きの差＝「自宅→出勤した施設」−「自宅→基準施設」、帰りの差＝「自宅→最後の施設」−「自宅→基準施設」。
+ *     マイナスは 0（通勤手当は基準施設＝所属施設までで払っているため、それより遠い分だけを足す）
+ *   ・自宅からの距離・基準施設が未登録で差を決められない日は "missing_home"（0km にしない）
+ *   この日より前の打刻は従来どおり（最後は起点へ戻す）。確定済みの月の金額はどちらでも変わらない。
+ */
+var MILEAGE_HOME_FROM="2026-12-01";
+function mileageAutoHomeRule(date){return String(date||"")>=MILEAGE_HOME_FROM;}
+
 /** 移動距離の判定に使う打刻種別だけを残す（休憩は経路に影響しない）。 */
 function mileageAutoIsRouteType(t){
   return t==="clockIn"||t==="clockOut"||t==="facilityChange";
@@ -14411,9 +14436,10 @@ function mileageAutoIsRouteType(t){
  * ・施設変更(facilityChange)ごとに移動先を追加する
  * ・退勤(clockOut)で区間を閉じる
  * ・★ 最後は必ず起点施設へ戻す。実際の退勤打刻が応援先であっても、
- *   帰りの移動は必ず発生しているため（業務ルール）。
+ *   帰りの移動は必ず発生しているため（業務ルール）。※ MILEAGE_HOME_FROM より前の日だけ。
+ *   それ以降の日は shifts（起点へ戻さない勤務ごとの並び）を mileageAutoDayRouteHome が使う。
  *
- * 戻り値 { routes:[[施設名,...],...], hasMove, noOrigin, notes:[...] }
+ * 戻り値 { routes:[[施設名,...],...], shifts:[{origin,nodes}], hasMove, noOrigin, notes:[...] }
  */
 function mileageAutoBuildNodes(dayRecords){
   var rs=[],i;
@@ -14461,13 +14487,16 @@ function mileageAutoBuildNodes(dayRecords){
   // ★ 移動先が記録されていない施設変更があった日は、経路が1区間欠けたまま「正常」に見えてしまう。
   //   欠けた区間を推測せず、確定できない日として扱う（管理者が打刻を直す／削除する）。
   var brokenPunch=!!noteMap.empty_facility;
+  // shifts＝勤務ごとの施設の並び（移動の無い勤務も含む。起点へは戻さない）。自宅からの差の計算に使う。
+  var shifts=[];
   for(i=0;i<segs.length;i++){
     var s=segs[i];
+    shifts.push({origin:s.origin,nodes:s.nodes.slice()});
     if(s.nodes.length<2)continue;            // 施設間の移動が無い日
     hasMove=true;
     if(!s.origin){noOrigin=true;continue;}   // 起点施設が記録されていない
     var nodes=s.nodes.slice();
-    if(nodes[nodes.length-1]!==s.origin)nodes.push(s.origin);   // 最後は必ず起点へ戻す
+    if(nodes[nodes.length-1]!==s.origin)nodes.push(s.origin);   // 最後は必ず起点へ戻す（MILEAGE_HOME_FROM より前の日だけ使う）
     routes.push(nodes);
   }
   if(noteMap.orphan_change){hasMove=true;noOrigin=true;}
@@ -14476,7 +14505,99 @@ function mileageAutoBuildNodes(dayRecords){
   var notes=[];
   for(var k in noteMap)if(Object.prototype.hasOwnProperty.call(noteMap,k))notes.push(k);
   notes.sort();
-  return {routes:routes,hasMove:hasMove,noOrigin:noOrigin,brokenPunch:brokenPunch,notes:notes};
+  return {routes:routes,shifts:shifts,hasMove:hasMove,noOrigin:noOrigin,orphan:!!noteMap.orphan_change,
+          brokenPunch:brokenPunch,notes:notes};
+}
+
+/**
+ * 自宅からの距離の設定を正規化する。home = { base:地点ID, km:{地点ID:km} }。
+ * 不正な値・0 以下の km は「未登録」として捨てる（0km を距離として扱わない）。
+ */
+function mileageAutoNormHome(home){
+  if(!home||typeof home!=="object")return null;
+  var base=(typeof home.base==="string"&&mileageAutoSafeKey(home.base))?home.base:"";
+  var km=mileageAutoDict(),src=(home.km&&typeof home.km==="object")?home.km:{};
+  for(var k in src){
+    if(!Object.prototype.hasOwnProperty.call(src,k)||!mileageAutoSafeKey(k))continue;
+    var v=Number(src[k]);
+    if(isFinite(v)&&v>0&&v<1000)km[k]=mileageAutoRound1(v);
+  }
+  return {base:base,km:km};
+}
+
+/**
+ * MILEAGE_HOME_FROM 以降の1日分（退勤した施設で終わり＋自宅からの差）。
+ * 戻り値は mileageAutoDayRoute と同じ形に homeGo / homeBack / missingHome を足したもの。
+ */
+function mileageAutoDayRouteHome(b,ctx,home,out){
+  var i,j;
+  var shifts=b.shifts||[];
+  if(!b.hasMove&&!shifts.length)return out;   // 出勤の無い日（退勤だけ等）は対象外
+  var routes=[];
+  for(i=0;i<shifts.length;i++)if(shifts[i].origin)routes.push(shifts[i].nodes.slice());
+  out.routes=routes;
+  var sigParts=[];
+  for(i=0;i<routes.length;i++)sigParts.push(routes[i].join(">"));
+  out.sig=sigParts.join("|");
+  if(b.brokenPunch){out.status="broken_punch";return out;}
+  var noOrigin=b.orphan;
+  for(i=0;i<shifts.length;i++)if(!shifts[i].origin)noOrigin=true;
+  if(noOrigin){out.status="no_origin";return out;}
+
+  var legMap=(ctx&&ctx.legs)||{},pmap=(ctx&&ctx.placeByFacility)||{};
+  var h=mileageAutoNormHome(home);
+  var total=0,legs=[],missP=[],missPSeen=mileageAutoDict(),missL=[],missH=[],missHSeen=mileageAutoDict();
+  var go=0,back=0,moved=false;
+  function idOf(n){
+    var id=mileageAutoHas(pmap,n)?pmap[n]:"";
+    if(!id&&!missPSeen[n]){missPSeen[n]=true;missP.push(n);}
+    return id;
+  }
+  function missHome(n){if(!missHSeen[n]){missHSeen[n]=true;missH.push(n);}}
+  // 自宅→その施設 と 自宅→基準施設 の差（マイナスは 0）。決められなければ null。
+  function homeDiff(n,id){
+    if(!id)return null;                       // 地点マスタ未対応は missingPlaces で止める
+    if(!h||!h.base){missHome("基準施設");return null;}
+    if(id===h.base)return 0;
+    var a=mileageAutoHas(h.km,id)?h.km[id]:null,c=mileageAutoHas(h.km,h.base)?h.km[h.base]:null;
+    if(a==null)missHome(n);
+    if(c==null)missHome("基準施設");
+    if(a==null||c==null)return null;
+    var d=mileageAutoRound1(a-c);
+    return d>0?d:0;
+  }
+  for(i=0;i<routes.length;i++){
+    var nodes=routes[i];
+    if(nodes.length>1)moved=true;
+    for(j=0;j+1<nodes.length;j++){
+      var fN=nodes[j],tN=nodes[j+1];
+      var fId=idOf(fN),tId=idOf(tN);
+      var km=null;
+      if(fId&&tId){
+        var key=fId+"__"+tId;
+        km=mileageAutoHas(legMap,key)?legMap[key]:null;
+        if(km==null)missL.push({fromName:fN,toName:tN});
+      }
+      legs.push({fromName:fN,toName:tN,km:km});
+      if(km!=null)total=mileageAutoRound1(total+km);
+    }
+    var sN=nodes[0],eN=nodes[nodes.length-1];
+    var g=homeDiff(sN,idOf(sN)),bk=homeDiff(eN,idOf(eN));
+    if(g!=null)go=mileageAutoRound1(go+g);
+    if(bk!=null)back=mileageAutoRound1(back+bk);
+  }
+  out.legs=legs;
+  out.missingPlaces=missP;
+  out.missingLegs=missL;
+  out.missingHome=missH;
+  out.homeGo=go;
+  out.homeBack=back;
+  out.totalKm=mileageAutoRound1(total+go+back);
+  if(missP.length||missL.length)out.status="missing_leg";
+  else if(missH.length)out.status="missing_home";
+  else if(!moved&&go===0&&back===0)out.status="none";   // 基準施設だけで勤務した日（数える距離が無い）
+  else out.status="auto";
+  return out;
 }
 
 /**
@@ -14538,13 +14659,16 @@ function mileageAutoPlaceMap(places){
  * ★ 未登録区間・未対応施設を 0km として扱ってはならない。status で区別し、
  *   どの区間・どの施設が未登録かを返す。
  */
-function mileageAutoDayRoute(dayRecords,ctx){
+function mileageAutoDayRoute(dayRecords,ctx,home,date){
   var b=mileageAutoBuildNodes(dayRecords);
   var out={status:"none",totalKm:0,legs:[],routes:b.routes,notes:b.notes,
            sig:"",missingPlaces:[],missingLegs:[],
            // attention＝確定は止めないが管理者に見せる不審点（打刻の後編集・複数出勤・退勤漏れ）
            attention:(b.notes.indexOf("route_mismatch")>=0||b.notes.indexOf("multi_shift")>=0
                       ||b.notes.indexOf("no_clockout")>=0)};
+  // 日付は呼び出し側から受け取る（無ければ打刻の date）。MILEAGE_HOME_FROM 以降は新しい数え方。
+  var dk=String(date||(dayRecords&&dayRecords[0]&&dayRecords[0].date)||"");
+  if(mileageAutoHomeRule(dk)){out.homeRule=true;return mileageAutoDayRouteHome(b,ctx,home,out);}
   if(!b.hasMove)return out;
   var i,j;
   var sigParts=[];
@@ -14588,12 +14712,21 @@ function mileageAutoRouteText(routes){
   return out.join(" ／ ");
 }
 
+/** 自宅からの差の表示（"（基準施設より遠い分 行き+2.1km・帰り+3km）"）。差が無ければ空文字。 */
+function mileageAutoHomeText(a){
+  if(!a||!a.homeRule||(!a.homeGo&&!a.homeBack))return "";
+  var p=[];
+  if(a.homeGo)p.push("行き+"+a.homeGo+"km");
+  if(a.homeBack)p.push("帰り+"+a.homeBack+"km");
+  return "（基準施設より遠い分 "+p.join("・")+"）";
+}
+
 /**
  * 1人・1か月分の自動集計。recs は対象スタッフの打刻レコード（他スタッフを含んでいてもよいが、
  * 呼び出し側で staff 一致を必ず絞ること）。
  * 戻り値 { days:{ "YYYY-MM-DD": dayRoute }, dates:[...] }
  */
-function mileageAutoMonth(recs,ym,ctx){
+function mileageAutoMonth(recs,ym,ctx,home){
   var byDate=mileageAutoDict(),i;
   for(i=0;i<(recs||[]).length;i++){
     var r=recs[i];
@@ -14609,7 +14742,7 @@ function mileageAutoMonth(recs,ym,ctx){
   dates.sort();
   var days=mileageAutoDict(),keep=[];
   for(i=0;i<dates.length;i++){
-    var res=mileageAutoDayRoute(byDate[dates[i]],ctx);
+    var res=mileageAutoDayRoute(byDate[dates[i]],ctx,home,dates[i]);
     if(res.status==="none")continue;
     days[dates[i]]=res;keep.push(dates[i]);
   }
@@ -14625,7 +14758,7 @@ function mileageAutoMonth(recs,ym,ctx){
  * ・却下された手入力申請は無効。自動集計の値へ戻す
  *
  * 戻り値 { rows:[...], totalKm, blockers:[{date,status}] }
- *   rows[].status: "auto"|"manual"|"no_origin"|"missing_leg"|"pending_correction"|"pending_request"
+ *   rows[].status: "auto"|"manual"|"no_origin"|"missing_leg"|"missing_home"|"pending_correction"|"pending_request"
  */
 function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
   var seen=mileageAutoDict(),list=[],k;
@@ -14640,8 +14773,10 @@ function mileageAutoMerge(autoDays,manualByDate,pendingCorrectionDates){
     var mSt=m?String(m.status||""):"";
     var row={date:d,source:"auto",status:"none",km:0,sig:a?a.sig:"",
              autoKm:a?a.totalKm:0,autoStatus:a?a.status:"none",
-             routeText:a?mileageAutoRouteText(a.routes):"",
+             routeText:a?mileageAutoRouteText(a.routes)+mileageAutoHomeText(a):"",
              notes:a?a.notes:[],missingPlaces:a?a.missingPlaces:[],missingLegs:a?a.missingLegs:[],
+             missingHome:(a&&a.missingHome)?a.missingHome:[],
+             homeGo:(a&&a.homeGo)?a.homeGo:0,homeBack:(a&&a.homeBack)?a.homeBack:0,
              attention:!!(a&&a.attention)};
     if(m&&mSt==="pending"){
       row.source="manual";row.status="pending_request";row.km=mileageAutoRound1(m.totalKm);
@@ -14712,6 +14847,7 @@ var MILEAGE_AUTO_BADGE={
   name_unresolved:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">氏名未解決</span>',
   no_origin:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">起点未確定</span>',
   missing_leg:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">距離未登録</span>',
+  missing_home:'<span style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">自宅からの距離が未登録</span>',
   pending_correction:'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">打刻修正待ち</span>',
   pending_request:'<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;font-size:.68rem;font-weight:700;padding:1px 6px;border-radius:3px;">手入力の承認待ち</span>'
 };
@@ -14723,11 +14859,16 @@ var MILEAGE_AUTO_HELP={
   //   解消せず、1人1日の解消不能な要確認で月全体の確定が止まる。実際に効く復旧経路は手入力（例外）だけ。
   no_origin:"その日の出勤打刻（起点施設）が確認できません。応援打刻から起点を推測せず、距離も金額も確定しません。※打刻修正申請を承認しても解消しません（承認で作られる出勤打刻には施設が記録されないため）。職員に「打刻に無い移動の手入力（例外）」で登録してもらい、このタブの「手入力の承認」で承認してください。",
   missing_leg:"経路に距離が未登録の区間、または地点マスタに未対応の施設があります。0km では確定しません。",
+  missing_home:"自宅からの距離（基準施設・各施設）が未登録です。「自宅からの距離」タブで登録してください。0km では確定しません。",
   pending_correction:"この日の打刻修正申請が未処理です。承認・却下を済ませてから確定してください。",
   pending_request:"この日は手入力の申請が未処理です。承認・却下を済ませてから確定してください。"
 };
+// 職員画面の案内（管理者だけができる操作を職員へ案内しない）
+var MILEAGE_AUTO_HELP_STAFF={
+  missing_home:"自宅からの距離が未登録のため確定しません。管理者に登録を依頼してください。"
+};
 function mileageAutoIsBlocking(st){
-  return st==="no_origin"||st==="missing_leg"||st==="pending_correction"
+  return st==="no_origin"||st==="missing_leg"||st==="missing_home"||st==="pending_correction"
     ||st==="pending_request"||st==="broken_punch";
 }
 /** 地点マスタから「施設名→地点ID」の対応表と区間距離を束ねる。 */
@@ -14777,10 +14918,10 @@ function mileageAutoManualOf(list){
  * 1人・1か月分の集計（自動＋手入力）。isAutoTarget=false（利用OFF）なら手入力だけ。
  * recs を渡すと打刻の走査を省略する（管理画面は全職員分を1回の走査で用意する）。
  */
-function mileageAutoCompute(staffNm,ym,manualList,isAutoTarget,recs,ctx,corrIdx){
+function mileageAutoCompute(staffNm,ym,manualList,isAutoTarget,recs,ctx,corrIdx,home){
   ctx=ctx||mileageAutoCtx();
   var auto=(isAutoTarget&&staffNm)
-    ?mileageAutoMonth(recs||mileageAutoRecordsOf(staffNm,ym),ym,ctx)
+    ?mileageAutoMonth(recs||mileageAutoRecordsOf(staffNm,ym),ym,ctx,home||null)
     :{days:{},dates:[]};
   var corr=corrIdx?(corrIdx[staffNm]||{}):mileageAutoPendingCorr(staffNm,ym);
   return mileageAutoMerge(auto.days,mileageAutoManualOf(manualList),corr);
@@ -15053,7 +15194,7 @@ function mileageStaffCardHtml(){
   //   打刻レコードのキーは氏名なので、画面に出ている氏名で引く
   //   （bootstrap は氏名一致を確認したときだけ enabled にしている）。
   var myNm=staffName||mileage.staffName||"";
-  var autoRes=mileageAutoCompute(myNm,mileage.myMonth,mileage.myRequests,true);
+  var autoRes=mileageAutoCompute(myNm,mileage.myMonth,mileage.myRequests,true,null,null,null,mileage.myHome);
   var totalKm=autoRes.totalKm;
 
   var monthSel='<select onchange="mileageSetMyMonth(this.value)" style="padding:5px 8px;border:1px solid #adb5bd;border-radius:2px;font-size:.82rem;font-family:inherit;background:#fff;">'
@@ -15136,8 +15277,8 @@ function mileageStaffCardHtml(){
         +'<span style="font-size:.78rem;font-weight:700;color:'+(blocking?"#b91c1c":"var(--brand)")+';">'
         +(blocking?"—":(Number(r.km)+" km"))+'</span>'
         +'</div>'
-        +(blocking&&MILEAGE_AUTO_HELP[r.status]
-          ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;line-height:1.5;">'+esc(MILEAGE_AUTO_HELP[r.status])+'</div>':"")
+        +(blocking&&(MILEAGE_AUTO_HELP_STAFF[r.status]||MILEAGE_AUTO_HELP[r.status])
+          ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:3px;line-height:1.5;">'+esc(MILEAGE_AUTO_HELP_STAFF[r.status]||MILEAGE_AUTO_HELP[r.status])+'</div>':"")
         +'</div>';
     }).join("")
       +(autoRes.rows.length>myShown.length||mileage.myExpand&&autoRes.rows.length>MY_LIMIT
@@ -15238,7 +15379,11 @@ function mileageCsvRows(rows){
 
 // ---- 管理者側 ----
 
-function mileageAdminSetTab(t){mileage.adminTab=t;render();}
+function mileageAdminSetTab(t){
+  // 自宅からの距離の編集・CSV の確認は、別のタブへ移ったら終える（再描画の抑止を残さない）
+  if(t!=="home"){mileage.homeEditEid="";mileage.homeDraft=null;mileage.homeCsvRows=null;mileage.homePlan=null;}
+  mileage.adminTab=t;render();
+}
 
 async function mileageLoadAdmin(ym){
   var g=mileage.gen;
@@ -15636,6 +15781,183 @@ function mileageReopenMonth(){
   });
 }
 
+// ---- 自宅からの距離（2026-11-16 ユーザー指示）----
+// 基準施設＝通勤手当を払っている施設（所属施設）。2026-12-01 以降の打刻で、
+// 「自宅→出勤した施設／最後の施設」と「自宅→基準施設」の差（マイナスは0）を足す。住所は持たない。
+function mileageHomePlaces(){return (mileage.places||[]).filter(function(p){return p&&p.active!==false;});}
+function mileageHomeTargets(d){
+  var names=(d&&d.names)||{},en=(d&&d.enabledMap)||mileage.enabledMap||{};
+  return Object.keys(en).filter(function(e){return en[e]===true;})
+    .map(function(e){return {eid:e,name:names[e]||""};})
+    .sort(function(a,b){return String(a.eid).localeCompare(String(b.eid),"ja");});
+}
+// ボタンは指で押しやすい高さ（約44px）にする
+function mileageHomeBtn(label,on,bg,fg,bd){
+  return '<button type="button" onclick="'+on+'" style="background:'+bg+';color:'+fg+';border:1px solid '+bd+';border-radius:2px;padding:11px 18px;font-size:.95rem;font-weight:700;cursor:pointer;font-family:inherit;">'+label+'</button>';
+}
+function mileageHomeTab(d){
+  var places=mileageHomePlaces(),homes=mileage.homes||{},btn=mileageHomeBtn;
+  var nameOf=function(pid){var p=places.find(function(x){return x.id===pid;});return p?p.name:"";};
+  var rows=mileageHomeTargets(d).map(function(t){
+    var h=homes[t.eid]||null,ed=mileage.homeEditEid===t.eid;
+    // 保存中・保存に失敗したときは、入力した値を表示し直す
+    var dr=(mileage.homeDraft&&mileage.homeDraft.eid===t.eid)?mileage.homeDraft:null;
+    var cur=dr||h;
+    var cnt=h?places.filter(function(p){return h.km&&h.km[p.id]>0;}).length:0;
+    var st=!h||!h.base?'<span style="color:#b91c1c;font-weight:700;">未登録</span>'
+      :'基準 '+esc(nameOf(h.base)||"（不明）")+'・距離 '+cnt+'/'+places.length+'施設 入力済み';
+    var line='<div style="display:flex;align-items:center;gap:6px 10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #e2e8f0;">'
+      +'<span style="flex:1 1 140px;min-width:0;font-size:.95rem;word-break:break-word;">'+esc(t.name||t.eid)+'<span style="font-size:.78rem;color:#64748b;margin-left:6px;">'+esc(t.eid)+'</span></span>'
+      +'<span style="font-size:.9rem;color:#334155;">'+st+'</span>'
+      +(ed?'':btn("編集","mileageHomeEdit('"+escJs(t.eid)+"')","#fff","var(--brand)","#c7d2fe"))+'</div>';
+    if(!ed)return line;
+    var opt='<option value="">（選ぶ）</option>'+places.map(function(p){
+      return '<option value="'+esc(p.id)+'"'+(cur&&cur.base===p.id?' selected':'')+'>'+esc(p.name)+'</option>';}).join("");
+    var form='<div style="background:#f8fafc;border:1px solid #e2e8f0;padding:10px;margin:6px 0 10px;">'
+      +'<label style="display:block;font-size:.95rem;font-weight:700;margin-bottom:8px;">基準施設 '
+      +'<select id="mlg-home-base" style="padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:1rem;font-family:inherit;">'+opt+'</select></label>'
+      +'<div style="font-size:.95rem;font-weight:700;margin-bottom:4px;">自宅からの距離（km）</div>'
+      +places.map(function(p){
+        var v=cur&&cur.km&&cur.km[p.id]>0?cur.km[p.id]:"";
+        return '<label style="display:flex;align-items:center;gap:8px;padding:3px 0;font-size:.95rem;">'
+          +'<span style="flex:1;">'+esc(p.name)+'</span>'
+          +'<input id="mlg-home-km-'+esc(p.id)+'" type="number" inputmode="decimal" step="0.1" min="0.1" value="'+esc(String(v))+'" style="width:96px;padding:8px;border:1px solid #adb5bd;border-radius:2px;font-size:1rem;font-family:inherit;text-align:right;"> km</label>';
+      }).join("")
+      +'<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">'
+      +btn("やめる","mileageHomeEdit('')","#fff","#475569","#cbd5e1")
+      +btn("保存","mileageHomeSave('"+escJs(t.eid)+"')","var(--brand)","#fff","var(--brand)")+'</div></div>';
+    return line+form;
+  }).join("");
+  var list='<div class="admin-card"><div class="admin-title">自宅からの距離</div>'
+    +'<div style="font-size:.9rem;color:#64748b;margin-bottom:6px;">12月1日以降の打刻から使います。基準施設は通勤手当を払っている施設です。</div>'
+    +(rows||'<div style="font-size:.95rem;color:#64748b;">移動距離を使用する職員がいません。</div>')+'</div>';
+  // CSV 一括登録（ファイル選択はキーボードでも押せるボタンから開く）
+  var plan=mileage.homePlan,csv='<div class="admin-card"><div class="admin-title">CSVで一括登録</div>'
+    +'<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">'
+    +btn("ひな形をダウンロード","mileageHomeTemplate()","#fff","var(--brand)","#c7d2fe")
+    +btn("CSVを選ぶ","mileageHomeCsvOpen()","var(--brand)","#fff","var(--brand)")
+    +'<input id="mlg-home-file" type="file" accept=".csv,text/csv" onchange="mileageHomeCsvPick(this)" tabindex="-1" aria-hidden="true" style="position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;">'
+    +'</div>';
+  if(plan){
+    var c=plan.counts||{},errs=(plan.rows||[]).filter(function(r){return r.error;});
+    var ERR={unknown_employee:"社員番号が見つからない",duplicate_employee:"社員番号が重複",name_mismatch:"氏名が社員番号と一致しない",
+      name_required:"氏名が空欄",unknown_base:"基準施設が見つからない",base_km_required:"基準施設までの距離が空欄",
+      unknown_place:"施設名が見つからない",bad_km:"距離が正しくない（0.1以上の数）",too_many:"施設の列が多すぎる"};
+    var changes=(c.new||0)+(c.update||0);
+    csv+='<div style="margin-top:10px;font-size:.95rem;">新規 '+(c.new||0)+' 件・変更 '+(c.update||0)+' 件・同じ '+(c.same||0)+' 件'
+      +(errs.length?'・<span style="color:#b91c1c;font-weight:700;">誤り '+errs.length+' 件</span>':'')+'</div>';
+    if(errs.length){
+      csv+='<div style="font-size:.9rem;color:#b91c1c;margin-top:4px;">'+errs.slice(0,20).map(function(r){
+        return r.line+'行目 '+esc(r.name||r.employeeId||"")+'：'+esc(ERR[r.error]||r.error)+(r.detail?'（'+esc(r.detail)+'）':'');
+      }).join('<br>')+(errs.length>20?'<br>…ほか '+(errs.length-20)+' 件':'')+'</div>'
+      +'<div style="font-size:.9rem;color:#64748b;margin-top:4px;">誤りがあると1件も登録しません。直したCSVを選び直してください。</div>';
+    }else if(!changes){
+      csv+='<div style="font-size:.9rem;color:#64748b;margin-top:4px;">登録済みの内容と同じです。変更はありません。</div>';
+    }
+    csv+='<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px;">'
+      +btn("やめる","mileageHomeCsvCancel()","#fff","#475569","#cbd5e1")
+      +(!errs.length&&changes>0?btn("登録する","mileageHomeCsvApply()","var(--brand)","#fff","var(--brand)"):'')+'</div>';
+  }
+  csv+='</div>';
+  return list+csv;
+}
+function mileageHomeEdit(eid){mileage.homeEditEid=eid||"";mileage.homeDraft=null;render();}
+async function mileageHomeSave(eid){
+  var base=(document.getElementById("mlg-home-base")||{}).value||"",km={},bad="";
+  mileageHomePlaces().forEach(function(p){
+    var el=document.getElementById("mlg-home-km-"+p.id);if(!el)return;
+    var v=String(el.value||"").trim();if(!v)return;
+    var n=Number(v);if(!isFinite(n)||n<=0||n>=1000||!(Math.round(n*10)/10>0)){bad=p.name;return;}
+    km[p.id]=Math.round(n*10)/10;
+  });
+  if(!base){showAlert("基準施設を選んでください");return;}
+  if(bad){showAlert(bad+" の距離が正しくありません（0.1以上の数）");return;}
+  if(!(km[base]>0)){showAlert("基準施設までの距離を入れてください");return;}
+  // 保存中の再描画・保存の失敗でも、入力した値を消さない
+  mileage.homeDraft={eid:eid,base:base,km:km};
+  var ok=await mileageAdminDo("saveHome",{employeeId:eid,base:base,km:km},"保存しました",true);
+  if(ok){mileage.homeEditEid="";mileage.homeDraft=null;render();}
+}
+function mileageHomeTemplate(){
+  var d=mileage.adminData,places=mileageHomePlaces(),homes=mileage.homes||{};
+  var nameOf=function(pid){var p=places.find(function(x){return x.id===pid;});return p?p.name:"";};
+  // ★ セルは既存の mileageCsvCell（数式として動く先頭文字を無効化する）で書く
+  var rows=[["社員番号","氏名","基準施設"].concat(places.map(function(p){return p.name;}))];
+  mileageHomeTargets(d).forEach(function(t){
+    var h=homes[t.eid]||{};
+    rows.push([t.eid,t.name,nameOf(h.base)].concat(places.map(function(p){return h.km&&h.km[p.id]>0?h.km[p.id]:"";})));
+  });
+  dlCSV(mileageCsvRows(rows),"自宅からの距離.csv");
+}
+/** CSV を行×列に分ける（ダブルクォート・改行を含むセルに対応）。 */
+function mileageParseCsv(text){
+  var rows=[],row=[],cell="",q=false,i,ch;
+  text=String(text||"").replace(/^﻿/,"");
+  for(i=0;i<text.length;i++){
+    ch=text.charAt(i);
+    if(q){
+      if(ch==='"'){if(text.charAt(i+1)==='"'){cell+='"';i++;}else q=false;}
+      else cell+=ch;
+    }else if(ch==='"')q=true;
+    else if(ch===","){row.push(cell);cell="";}
+    else if(ch==="\n"||ch==="\r"){
+      if(ch==="\r"&&text.charAt(i+1)==="\n")i++;
+      row.push(cell);cell="";rows.push(row);row=[];
+    }else cell+=ch;
+  }
+  if(cell!==""||row.length){row.push(cell);rows.push(row);}
+  return rows.filter(function(r){return r.some(function(c){return String(c).trim()!=="";});});
+}
+/** CSV の表 → importHome へ送る行（1行目は見出し：社員番号,氏名,基準施設,施設名…）。形式が違えば null。 */
+function mileageHomeCsvRowsOf(t){
+  if(!t||t.length<2||String(t[0][0]).trim()!=="社員番号"||String(t[0][2]).trim()!=="基準施設")return null;
+  var head=t[0].map(function(c){return String(c).trim();});
+  return t.slice(1).map(function(r){
+    var km={};
+    for(var j=3;j<head.length;j++)if(head[j])km[head[j]]=String(r[j]==null?"":r[j]).trim();
+    return {employeeId:String(r[0]||"").trim(),name:String(r[1]||"").trim(),base:String(r[2]||"").trim(),km:km};
+  });
+}
+function mileageHomeCsvOpen(){var el=document.getElementById("mlg-home-file");if(el)el.click();}
+function mileageHomeCsvPick(input){
+  var f=input&&input.files&&input.files[0];
+  if(input)input.value="";
+  if(!f)return;
+  if(f.size>1024*1024){showAlert("ファイルが大きすぎます（1MBまで）");return;}
+  var rd=new FileReader();
+  rd.onload=function(){
+    // UTF-8 だけを受ける。Excel の「CSV（コンマ区切り）」（Shift_JIS）は文字化けさせずに断る
+    var text;
+    try{text=new TextDecoder("utf-8",{fatal:true}).decode(new Uint8Array(rd.result));}
+    catch(e){showAlert("UTF-8 の CSV として読み込めません。Excel で「CSV UTF-8（コンマ区切り）」を選んで保存し直してください");return;}
+    var rows=mileageHomeCsvRowsOf(mileageParseCsv(text));
+    if(!rows){showAlert("CSVの形式が違います。「ひな形をダウンロード」で出したファイルに入力してください。");return;}
+    if(rows.length>300){showAlert("一度に登録できるのは300行までです");return;}
+    if(mileage.busy){showAlert("ほかの処理の途中です。終わってからもう一度選んでください");return;}
+    mileage.homeCsvRows=rows;mileageHomeCsvRun(false);
+  };
+  rd.onerror=function(){showAlert("ファイルを読み込めませんでした");};
+  rd.readAsArrayBuffer(f);
+}
+async function mileageHomeCsvRun(apply){
+  if(mileage.busy||!mileage.homeCsvRows)return;
+  var g=mileage.gen;
+  mileage.busy=true;render();
+  var res=await mileageApi("importHome",{rows:mileage.homeCsvRows,apply:!!apply});
+  if(mileageStale(g))return;
+  mileage.busy=false;
+  if(!res.ok||!res.data){mileage.homePlan=null;mileage.homeCsvRows=null;showAlert(mileageErrText(res));render();return;}
+  if(apply&&res.data.applied){
+    mileage.homePlan=null;mileage.homeCsvRows=null;
+    await mileageBoot();
+    if(mileage.adminYm)await mileageLoadAdmin(mileage.adminYm);else render();
+    showAlert(res.data.written+" 人分を登録しました");return;
+  }
+  mileage.homePlan=res.data;render();
+}
+function mileageHomeCsvApply(){mileageHomeCsvRun(true);}
+function mileageHomeCsvCancel(){mileage.homePlan=null;mileage.homeCsvRows=null;render();}
+
 /** 管理者タブ「移動距離」の中身。 */
 /**
  * 管理画面用：対象月の全職員分を手元で集計する。
@@ -15662,7 +15984,7 @@ function mileageAutoAdminRows(){
   eids.forEach(function(eid){
     var nm=names[eid]||"";
     var isAuto=enMap[eid]===true;
-    var res=mileageAutoCompute(nm,mileage.adminYm,reqByEid[eid]||[],isAuto,recIdx[nm]||[],ctx,corrIdx);
+    var res=mileageAutoCompute(nm,mileage.adminYm,reqByEid[eid]||[],isAuto,recIdx[nm]||[],ctx,corrIdx,(mileage.homes||{})[eid]||null);
     mileageAutoMissingFacilities(res.rows).forEach(function(f){miss[f]=true;});
     // ★ サーバの computeAutoMonth と判定を揃える。利用ONなのに氏名が無い職員は
     //   打刻と突き合わせできず 0km になるため、要確認として数える（黙って支給漏れにしない）。
@@ -15726,7 +16048,7 @@ function mileageAdminCardHtml(){
   }
   var tabs='<div style="display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid #cbd5e1;margin-bottom:10px;">'
     +tb("auto","自動集計")+tb("requests","手入力の承認")+tb("places","地点・区間距離")+tb("settings","単価・端数")
-    +tb("close","月次確定")+tb("staff","利用職員")+'</div>';
+    +tb("home","自宅からの距離")+tb("close","月次確定")+tb("staff","利用職員")+'</div>';
 
   var d=mileage.adminData;
   var ymSel='<select onchange="mileageAdminSetYm(this.value)" style="padding:6px 10px;border:1px solid #adb5bd;border-radius:2px;font-size:.85rem;font-family:inherit;background:#fff;">'
@@ -15776,6 +16098,8 @@ function mileageAdminCardHtml(){
                   +esc(r.missingLegs.map(function(l){return l.fromName+"→"+l.toName;}).join("、"))+'</div>':"")
               +((r.missingPlaces||[]).length
                 ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">地点マスタに未対応の施設：'+esc(r.missingPlaces.join("、"))+'</div>':"")
+              +((r.missingHome||[]).length
+                ?'<div style="font-size:.72rem;color:#b91c1c;margin-top:2px;">自宅からの距離が未登録：'+esc(r.missingHome.join("、"))+'</div>':"")
               +(bl&&MILEAGE_AUTO_HELP[r.status]?'<div style="font-size:.72rem;color:#92400e;margin-top:2px;">'+esc(MILEAGE_AUTO_HELP[r.status])+'</div>':"")
               +((r.notes||[]).indexOf("multi_shift")>=0?'<div style="font-size:.72rem;color:#64748b;margin-top:2px;">同じ日に出勤が2回以上あります（勤務ごとに起点へ戻して計算）</div>':"")
               +((r.notes||[]).indexOf("route_mismatch")>=0?'<div style="font-size:.72rem;color:#64748b;margin-top:2px;">施設変更の「変更前施設」が直前の施設と一致しません（打刻の後編集の可能性）</div>':"")
@@ -16118,6 +16442,15 @@ function mileageAdminCardHtml(){
   }
 
   // ── 利用職員 ──
+  // ── 自宅からの距離（2026-11-16 ユーザー指示。2026-12-01 以降の打刻の計算に使う）──
+  if(T==="home"){
+    if(!d){
+      body='<div class="admin-card"><div class="admin-title">自宅からの距離</div><div style="font-size:.85rem;color:#64748b;">読み込み中…</div></div>';
+      return wrapAdmin(body);
+    }
+    body=mileageHomeTab(d);
+  }
+
   if(T==="staff"){
     var enabledMap=(d&&d.enabledMap)||mileage.enabledMap||{};
     var listSrc=staffList.filter(function(s){return s.status!=="退職";})

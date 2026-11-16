@@ -43,7 +43,7 @@ const READ_LIMIT_ADMIN = 120;
 const WRITE_ACTIONS = {
   saveRequest: 1, deleteRequest: 1, setEnabled: 1, savePlace: 1, deletePlace: 1,
   saveLeg: 1, deleteLeg: 1, importLegs: 1, setSettings: 1, approveRequest: 1, approveAll: 1, rejectRequest: 1,
-  reopenRequest: 1, closeMonth: 1, reopenMonth: 1,
+  reopenRequest: 1, closeMonth: 1, reopenMonth: 1, saveHome: 1, importHome: 1,
 };
 
 // action ごとの必要ロール。ここに無い action は存在しないものとして 400。
@@ -62,6 +62,8 @@ const ACTIONS = {
   deleteLeg: ["a"],
   importLegs: ["a"],
   setSettings: ["a"],
+  saveHome: ["a"],
+  importHome: ["a"],
   approveRequest: ["a"],
   approveAll: ["a"],
   rejectRequest: ["a"],
@@ -594,6 +596,152 @@ async function handleDeleteLeg(body, actor) {
   return { status: 200, ok: true };
 }
 
+// ===== 自宅からの距離（2026-11-16 ユーザー指示。2026-12-01 以降の打刻の計算に使う）=====
+// /mileage/home/{社員番号} = { base:地点ID, km:{地点ID:km}, updatedAt, updatedBy }
+// ★ 住所は持たない（距離だけ）。base は「通勤手当を払っている施設」＝所属施設を管理者が選ぶ。
+//   tc5_staff の所属施設は誰でも書けるため、支給額の計算には使わない（社員番号の扱いと同じ）。
+const HOME_MAX_ROWS = 300;
+const HOME_MAX_PLACES = 60;   // 1人あたりの施設数の上限（地点マスタの件数より十分大きい）
+
+/** 生の /mileage/home を { 社員番号: {base, km} } に正規化する（不正値は捨てる）。 */
+function normHomes(raw) {
+  const out = {};
+  if (raw && typeof raw === "object") {
+    for (const eid of Object.keys(raw)) {
+      if (!M.isEmployeeId(eid)) continue;
+      const h = A.normHome(raw[eid]);
+      if (h) out[eid] = { base: h.base, km: Object.assign({}, h.km) };
+    }
+  }
+  return out;
+}
+async function loadHomes() { return normHomes(await G.dbGet(ROOT + "/home")); }
+
+/** km の対応表（{地点ID:km}）を検証する。知らない地点・不正な距離があれば error を返す。 */
+function validateHomeKm(src, ids) {
+  const km = {};
+  if (src == null) return { km: km };
+  if (typeof src !== "object" || Array.isArray(src)) return { error: "bad_km" };
+  const keys = Object.keys(src);
+  if (keys.length > HOME_MAX_PLACES) return { error: "bad_km" };
+  for (const pid of keys) {
+    if (!M.isId(pid) || !ids[pid]) return { error: "unknown_place" };
+    if (src[pid] === null || src[pid] === "") continue;   // 空欄＝未登録
+    const v = M.normKm(src[pid]);
+    // 0 以下・丸めで 0 になる値（0.04 等）は登録しない（0km を距離として扱わない）
+    if (v == null || !(v > 0)) return { error: "bad_km" };
+    km[pid] = v;
+  }
+  return { km: km };
+}
+
+async function handleSaveHome(body, actor) {
+  const eid = H.str(body.employeeId, 32);
+  const base = H.str(body.base, 40);
+  if (!M.isEmployeeId(eid)) return { status: 400, error: "bad_employee" };
+  // ★ 基準施設は必須。空・長すぎる値を「基準施設なし」として保存しない
+  if (!base || !M.isId(base)) return { status: 400, error: "bad_base" };
+  const [places, names] = await Promise.all([M.loadPlaces(), M.loadStaffNames()]);
+  if (!Object.prototype.hasOwnProperty.call(names, eid)) return { status: 404, error: "unknown_employee" };
+  const ids = {};
+  places.forEach(function (p) { if (p.active) ids[p.id] = true; });   // 使っていない地点へは書かない
+  if (!ids[base]) return { status: 400, error: "unknown_place" };
+  const v = validateHomeKm(body.km, ids);
+  if (v.error) return { status: 400, error: v.error };
+  // 基準施設までの距離が無いと、基準施設以外の日がすべて要確認になる。保存の時点で止める
+  if (!(v.km[base] > 0)) return { status: 400, error: "base_km_required" };
+  await M.ensureMeta();
+  const rec = { base: base, km: v.km, updatedAt: M.nowIso(), updatedBy: actor };
+  await G.dbPut(ROOT + "/home/" + eid, rec);
+  // 監査には距離の一覧を残さない（自宅の位置を推し量れる情報を溜めない）。基準施設と件数だけ
+  M.audit(actor, "home.set", eid, { base: base, places: Object.keys(v.km).length });
+  return { status: 200, ok: true, home: { base: base, km: v.km } };
+}
+
+/**
+ * CSV の一括取り込み。rows = [{ employeeId, name, base:施設名, km:{施設名:km} }]。
+ * apply=false なら書かずに差分だけ返す（管理者が確認してから apply=true で登録する）。
+ * ★ 施設名は地点名または地点に対応づけた打刻の施設名と完全一致したものだけ受ける（表記ゆれを推測しない）。
+ * ★ 氏名が /mileage/staff と違う行は登録しない（社員番号の打ち間違いで他人へ書かないため）。
+ * ★ 1行でも誤りがあれば何も書かない（一部だけ登録された状態を作らない）。
+ */
+async function handleImportHome(body, actor) {
+  const apply = body.apply === true;
+  const rowsIn = Array.isArray(body.rows) ? body.rows : null;
+  if (!rowsIn || !rowsIn.length || rowsIn.length > HOME_MAX_ROWS) return { status: 400, error: "bad_rows" };
+  const [places, names, homes] = await Promise.all([M.loadPlaces(), M.loadStaffNames(), loadHomes()]);
+  const idByName = {};
+  const dupName = {};
+  places.forEach(function (p) {
+    if (!p.active) return;   // 使っていない地点の名前では受けない
+    [p.name].concat(p.facilities || []).forEach(function (n) {
+      n = String(n || "").trim();
+      if (!n) return;
+      if (idByName[n] && idByName[n] !== p.id) dupName[n] = true;
+      idByName[n] = p.id;
+    });
+  });
+  function pid(n) {
+    n = String(n || "").trim();
+    if (!n || dupName[n] || !Object.prototype.hasOwnProperty.call(idByName, n)) return "";
+    return idByName[n];
+  }
+  const out = [];
+  const seen = {};
+  let errors = 0;
+  for (let i = 0; i < rowsIn.length; i++) {
+    const r = rowsIn[i] || {};
+    const eid = H.str(r.employeeId, 32);
+    const nm = H.str(r.name, 60).replace(/\s/g, "");
+    const row = { line: i + 1, employeeId: eid, name: nm, status: "", error: "" };
+    out.push(row);
+    if (!M.isEmployeeId(eid) || !Object.prototype.hasOwnProperty.call(names, eid)) { row.error = "unknown_employee"; errors++; continue; }
+    if (seen[eid]) { row.error = "duplicate_employee"; errors++; continue; }
+    seen[eid] = true;
+    // ★ 氏名は必須。空欄を許すと、社員番号の打ち間違い（Excel が先頭の 0 を落とす等）で他人の距離を書き換える
+    if (!nm) { row.error = "name_required"; errors++; continue; }
+    if (String(names[eid]).replace(/\s/g, "") !== nm) { row.error = "name_mismatch"; errors++; continue; }
+    const base = pid(r.base);
+    if (!base) { row.error = "unknown_base"; row.detail = String(r.base || "").slice(0, 40); errors++; continue; }
+    const km = {};
+    const src = (r.km && typeof r.km === "object" && !Array.isArray(r.km)) ? r.km : {};
+    let bad = "";
+    if (Object.keys(src).length > HOME_MAX_PLACES) { row.error = "too_many"; errors++; continue; }
+    for (const fn of Object.keys(src)) {
+      const v0 = src[fn];
+      if (v0 === null || v0 === undefined || String(v0).trim() === "") continue;
+      const id = pid(fn);
+      if (!id) { bad = "unknown_place:" + String(fn).slice(0, 40); break; }
+      const v = M.normKm(v0);
+      if (v == null || !(v > 0)) { bad = "bad_km:" + String(fn).slice(0, 40); break; }
+      km[id] = v;
+    }
+    if (bad) { row.error = bad.split(":")[0]; row.detail = bad.slice(bad.indexOf(":") + 1); errors++; continue; }
+    if (!(km[base] > 0)) { row.error = "base_km_required"; errors++; continue; }
+    const prev = homes[eid] || null;
+    row.base = base;
+    row.km = km;
+    row.status = !prev ? "new" : (prev.base === base && JSON.stringify(sortKeys(prev.km)) === JSON.stringify(sortKeys(km)) ? "same" : "update");
+  }
+  const counts = { new: 0, update: 0, same: 0, error: errors };
+  out.forEach(function (r) { if (r.status) counts[r.status]++; });
+  if (!apply || errors) {
+    return { status: 200, ok: true, applied: false, rows: out, counts: counts };
+  }
+  const now = M.nowIso();
+  const patch = {};
+  out.forEach(function (r) {
+    if (r.status === "new" || r.status === "update") {
+      patch[ROOT + "/home/" + r.employeeId] = { base: r.base, km: r.km, updatedAt: now, updatedBy: actor };
+    }
+  });
+  const written = Object.keys(patch).length;
+  if (written) { await M.ensureMeta(); await G.dbPatchRoot(patch); }
+  M.audit(actor, "home.import", "csv", { written: written, new: counts.new, update: counts.update, same: counts.same });
+  return { status: 200, ok: true, applied: true, written: written, rows: out, counts: counts };
+}
+function sortKeys(o) { const r = {}; Object.keys(o || {}).sort().forEach(function (k) { r[k] = o[k]; }); return r; }
+
 async function handleSetSettings(body, actor) {
   const rate = M.normRate(body.ratePerKm);
   const mode = M.ROUND_MODES.indexOf(body.roundMode) >= 0 ? body.roundMode : null;
@@ -758,8 +906,8 @@ function manualByDateOf(node) {
  *   それを黙って落とすと支給漏れになるため、申請がある職員は手入力分だけ集計へ含める。
  */
 async function computeAutoMonth(ym) {
-  const [enabledRaw, nameByEid, places, legs, reqNode] = await Promise.all([
-    G.dbGet(ROOT + "/enabled"), M.loadStaffNames(), M.loadPlaces(), M.loadLegs(), G.dbGet(reqPath(ym)),
+  const [enabledRaw, nameByEid, places, legs, reqNode, homes] = await Promise.all([
+    G.dbGet(ROOT + "/enabled"), M.loadStaffNames(), M.loadPlaces(), M.loadLegs(), G.dbGet(reqPath(ym)), loadHomes(),
   ]);
   const enabled = {};
   if (enabledRaw && typeof enabledRaw === "object") {
@@ -794,7 +942,7 @@ async function computeAutoMonth(ym) {
   let unresolved = 0;
   for (const t of targets) {
     const auto = (t.auto && t.staffName)
-      ? A.month(punchByName[t.staffName] || [], ym, ctx)
+      ? A.month(punchByName[t.staffName] || [], ym, ctx, homes[t.employeeId] || null)
       : { days: {}, dates: [] };
     const manual = manualByDateOf(reqNode && reqNode[t.employeeId]);
     const merged = A.merge(auto.days, manual, (pendCorrByName[t.staffName] || {}));
@@ -1227,20 +1375,26 @@ module.exports = T.handler(async function handler(req, res) {
           //   取得してしまった応答を捨てる。氏名が空だと一致扱いになり照合が効かない。
           //   本人自身の氏名なので、返しても新たに漏れる情報は無い。
           if (!on) { r = { status: 200, ok: true, role: "s", enabled: false, staffName: staff.name }; break; }
-          const [places, legs] = await Promise.all([M.loadPlaces(), M.loadLegs()]);
+          const [places, legs, myHome] = await Promise.all([
+            M.loadPlaces(), M.loadLegs(), G.dbGet(ROOT + "/home/" + staff.employeeId),
+          ]);
+          // ★ 自宅からの距離は本人の分だけ返す（他人の分は返さない）
+          const h = A.normHome(myHome);
           r = { status: 200, ok: true, role: "s", enabled: true,
                 employeeId: staff.employeeId, staffName: staff.name,
                 settings: { ratePerKm: settings.ratePerKm, roundMode: settings.roundMode },
-                places: places.filter(function (p) { return p.active; }), legs: legs };
+                places: places.filter(function (p) { return p.active; }), legs: legs,
+                home: h ? { base: h.base, km: Object.assign({}, h.km) } : null };
         } else if (ident.role === "a") {
-          const [places, legs, enabledRaw] = await Promise.all([
-            M.loadPlaces(), M.loadLegs(), G.dbGet(ROOT + "/enabled"),
+          const [places, legs, enabledRaw, homes] = await Promise.all([
+            M.loadPlaces(), M.loadLegs(), G.dbGet(ROOT + "/enabled"), loadHomes(),
           ]);
           const enabled = {};
           if (enabledRaw && typeof enabledRaw === "object") {
             for (const eid of Object.keys(enabledRaw)) if (enabledRaw[eid] === true) enabled[eid] = true;
           }
-          r = { status: 200, ok: true, role: "a", settings: settings, places: places, legs: legs, enabledMap: enabled };
+          r = { status: 200, ok: true, role: "a", settings: settings, places: places, legs: legs, enabledMap: enabled,
+                homes: homes };
         } else {
           r = { status: 200, ok: true, role: "v", settings: { ratePerKm: settings.ratePerKm, roundMode: settings.roundMode } };
         }
@@ -1283,6 +1437,8 @@ module.exports = T.handler(async function handler(req, res) {
         r = T.current().legacy ? await handleImportLegs(body, actor) : { status: 400, error: "not_available" };
         break;
       case "setSettings": r = await handleSetSettings(body, actor); break;
+      case "saveHome": r = await handleSaveHome(body, actor); break;
+      case "importHome": r = await handleImportHome(body, actor); break;
       case "approveRequest": r = await handleRequestStatus(body, actor, "approved"); break;
       case "approveAll": r = await handleApproveAll(body, actor); break;
       case "rejectRequest": r = await handleRequestStatus(body, actor, "rejected"); break;

@@ -1072,6 +1072,141 @@ ok("closed:false の応答を取得失敗として扱わない（viewData へ入
 ok("未確定の月も対象月として選べる（当月を候補へ入れる）",
   /if\(months\.indexOf\(curYm\)<0\)months\.push\(curYm\);/.test(html));
 
+console.log("\n[24] 2026-12-01 以降：退勤した施設で終わり＋自宅からの差（2026-11-16 ユーザー指示）");
+{
+  const D = "2026-12-03";
+  const p = function (type, hhmm, extra) {
+    return Object.assign({ staff: "山田 太郎", date: D, type: type, time: hhmm,
+      timestamp: D + "T" + hhmm + ":00.000+09:00" }, extra || {});
+  };
+  // 自宅→ナナイロ 4km（基準）、自宅→ハルイロ 7km、自宅→ミュゲ春木 2km
+  const HOME = { base: "p_nana", km: { p_nana: 4, p_haru: 7, p_myu: 2 } };
+  eq("適用開始日は 2026-12-01", AU.HOME_FROM, "2026-12-01");
+  ok("11/30 までは従来の数え方・12/1 から新しい数え方", AU.homeRule("2026-12-01") && !AU.homeRule("2026-11-30"));
+
+  // 応援先で退勤：ナナイロ→ハルイロで終わり、帰りの差 7-4=3
+  const d1 = [p("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    p("facilityChange", "13:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+    p("clockOut", "17:00", { facilityName: "ハルイロ" })];
+  const r1 = AU.dayRoute(d1, ACTX, HOME, D);
+  eq("応援先で退勤した日は起点へ戻さない", AU.routeText(r1.routes), "ナナイロ → ハルイロ");
+  eq("出勤が基準施設なら行きの差は0", r1.homeGo, 0);
+  eq("帰りの差＝自宅→退勤した施設 − 自宅→基準施設", r1.homeBack, 3);
+  eq("合計＝施設間 5.0 ＋ 帰りの差 3", r1.totalKm, 8);
+  eq("正常な日は自動計算済み", r1.status, "auto");
+  eq("経路の指紋は戻りを含まない", r1.sig, "ナナイロ>ハルイロ");
+  const old = AU.dayRoute(d1.map(function (r) { return Object.assign({}, r, { date: "2026-11-30" }); }), ACTX, HOME, "2026-11-30");
+  eq("11/30 の同じ打刻は従来どおり起点へ戻す（5.0+6.0）", old.totalKm, 11);
+
+  // 直行・直帰（施設変更なし）：ハルイロだけで勤務 → 行き3＋帰り3
+  const d2 = [p("clockIn", "08:00", { workFacility: "ハルイロ" }), p("clockOut", "17:00")];
+  const r2 = AU.dayRoute(d2, ACTX, HOME, D);
+  eq("直行・直帰の日も差を数える（行き3＋帰り3）", r2.totalKm, 6);
+  eq("直行・直帰の日は自動計算済み", r2.status, "auto");
+  const m2 = AU.merge({ [D]: r2 }, {}, {});
+  eq("経路の表示に自宅との差を添える", m2.rows[0].routeText, "ハルイロ（基準施設より遠い分 行き+3km・帰り+3km）");
+  eq("月合計に差が入る", m2.totalKm, 6);
+
+  // 応援先のほうが自宅に近い（差がマイナス）は 0
+  const r3 = AU.dayRoute([p("clockIn", "08:00", { workFacility: "ミュゲ春木" }), p("clockOut", "17:00")], ACTX, HOME, D);
+  eq("差がマイナスなら0（数える距離が無い日は行を作らない）", r3.status, "none");
+  eq("差がマイナスなら0km", r3.totalKm, 0);
+
+  // 基準施設だけで勤務した日
+  const r4 = AU.dayRoute([p("clockIn", "08:00", { workFacility: "ナナイロ" }), p("clockOut", "17:00")], ACTX, HOME, D);
+  eq("基準施設だけの日は対象外", r4.status, "none");
+
+  // 施設変更で基準施設へ戻った日は、戻りも施設間の移動として数え、差は0
+  const r5 = AU.dayRoute([p("clockIn", "08:00", { workFacility: "ナナイロ" }),
+    p("facilityChange", "10:00", { fromFacility: "ナナイロ", workFacility: "ハルイロ" }),
+    p("facilityChange", "14:00", { fromFacility: "ハルイロ", workFacility: "ナナイロ" }),
+    p("clockOut", "17:00")], ACTX, HOME, D);
+  eq("施設変更で戻った日は戻りも数える（5.0+6.0）", r5.totalKm, 11);
+  eq("基準施設で始まり基準施設で終われば差は0", r5.homeGo + r5.homeBack, 0);
+
+  // 自宅からの距離が未登録
+  const r6 = AU.dayRoute(d4base(), ACTX, null, D);
+  function d4base() { return [p("clockIn", "08:00", { workFacility: "ナナイロ" }), p("clockOut", "17:00")]; }
+  eq("自宅からの距離が未登録なら基準施設だけの日も要確認（推測しない）", r6.status, "missing_home");
+  const r7 = AU.dayRoute(d1, ACTX, { base: "p_nana", km: { p_nana: 4 } }, D);
+  eq("退勤した施設までの距離が未登録なら要確認", r7.status, "missing_home");
+  eq("未登録の施設名を返す", r7.missingHome.join(","), "ハルイロ");
+  eq("未登録の日は差を合計へ入れない", r7.totalKm, 5);
+  const r8 = AU.dayRoute(d2, ACTX, { base: "p_nana", km: { p_nana: 4, p_haru: 0 } }, D);
+  eq("0km は距離として扱わない（未登録＝要確認）", r8.status, "missing_home");
+  const r9 = AU.dayRoute(d2, ACTX, { base: "p_nana", km: { p_haru: 7 } }, D);
+  eq("基準施設までの距離が未登録なら要確認", r9.status, "missing_home");
+  const mb = AU.merge({ [D]: r7 }, {}, {});
+  eq("要確認は確定を止める（blockers）", mb.blockers.length === 1 && mb.blockers[0].status, "missing_home");
+
+  // 1日に2回勤務：勤務ごとに差を数える
+  const r10 = AU.dayRoute([p("clockIn", "06:00", { workFacility: "ハルイロ" }), p("clockOut", "09:00"),
+    p("clockIn", "15:00", { workFacility: "ハルイロ" }), p("clockOut", "19:00")], ACTX, HOME, D);
+  eq("1日2回の勤務は勤務ごとに差を数える（(3+3)×2）", r10.totalKm, 12);
+
+  // 起点未確定・打刻不整合は従来どおり
+  eq("出勤が無い日は起点未確定", AU.dayRoute([p("facilityChange", "13:00", { workFacility: "ハルイロ" }), p("clockOut", "17:00")], ACTX, HOME, D).status, "no_origin");
+  eq("出勤施設が無い日は起点未確定", AU.dayRoute([p("clockIn", "08:00", {}), p("clockOut", "17:00")], ACTX, HOME, D).status, "no_origin");
+  eq("移動先の無い施設変更は打刻不整合", AU.dayRoute([p("clockIn", "08:00", { workFacility: "ナナイロ" }), p("facilityChange", "13:00", {}), p("clockOut", "17:00")], ACTX, HOME, D).status, "broken_punch");
+  eq("地点マスタに無い施設で勤務した日は距離未登録", AU.dayRoute([p("clockIn", "08:00", { workFacility: "貝塚" }), p("clockOut", "17:00")], ACTX, HOME, D).status, "missing_leg");
+
+  // 月の集計：11月と12月が混ざっても日付ごとに数え方を切り替える
+  const mon = AU.month(d1.concat([p("clockIn", "08:00", { workFacility: "ナナイロ" })].map(function (r) { return r; })), "2026-12", ACTX, HOME);
+  ok("月の集計に自宅からの距離が渡る", mon.days[D] && mon.days[D].homeBack === 3);
+  const nov = AU.month(d1.map(function (r) { return Object.assign({}, r, { date: "2026-11-30" }); }), "2026-11", ACTX, HOME);
+  eq("11月分は従来どおり", nov.days["2026-11-30"].totalKm, 11);
+
+  // サーバ：権限・保存先
+  ok("saveHome / importHome は管理者だけ", /saveHome: \["a"\]/.test(apiSrc) && /importHome: \["a"\]/.test(apiSrc));
+  ok("saveHome / importHome は書込系（上限の対象）", /saveHome: 1, importHome: 1/.test(apiSrc));
+  ok("職員には本人の自宅からの距離だけ返す", /G\.dbGet\(ROOT \+ "\/home\/" \+ staff\.employeeId\)/.test(apiSrc));
+  ok("確定・確認の集計に職員ごとの自宅からの距離を渡す", /A\.month\(punchByName\[t\.staffName\] \|\| \[\], ym, ctx, homes\[t\.employeeId\] \|\| null\)/.test(apiSrc));
+  ok("CSV 取り込みは誤りが1行でもあれば書かない", /if \(!apply \|\| errors\) \{/.test(apiSrc));
+  ok("CSV 取り込みは氏名が社員番号と違う行を拒否する", /row\.error = "name_mismatch"/.test(apiSrc));
+  ok("自宅からの距離に tc5_staff を使わない", extractFn(apiSrc, "async function handleImportHome(body, actor) {").indexOf("tc5_staff") < 0);
+
+  // 画面：要確認の扱いと CSV の読み取り
+  ok("自宅からの距離が未登録は確定を止める表示", /st==="missing_home"/.test(html) && /missing_home:"自宅からの距離/.test(html));
+  ok("職員画面の集計に本人の自宅からの距離を渡す", /mileageAutoCompute\(myNm,mileage\.myMonth,mileage\.myRequests,true,null,null,null,mileage\.myHome\)/.test(html));
+  ok("管理画面の集計に職員ごとの自宅からの距離を渡す", /ctx,corrIdx,\(mileage\.homes\|\|\{\}\)\[eid\]\|\|null\)/.test(html));
+  ok("スタッフ切替で自宅からの距離を捨てる", /mileage\.homes=\{\};mileage\.homeEditEid="";mileage\.homeDraft=null;mileage\.homeCsvRows=null;mileage\.homePlan=null;mileage\.myHome=null;/.test(html));
+  const parseSrc = extractFn(html, "function mileageParseCsv(text){");
+  const rowsSrc = extractFn(html, "function mileageHomeCsvRowsOf(t){");
+  ok("CSV 読み取り関数がある", !!parseSrc && !!rowsSrc);
+  if (parseSrc && rowsSrc) {
+    const fns = new Function(parseSrc + "\n" + rowsSrc + "\nreturn {parse:mileageParseCsv,rows:mileageHomeCsvRowsOf};")();
+    const t = fns.parse("﻿社員番号,氏名,基準施設,ナナイロ,ハルイロ\r\n100001,山田 太郎,ナナイロ,4,7.5\r\n\r\n100002,\"佐藤, 花子\",ハルイロ,,3\r\n");
+    const rows = fns.rows(t);
+    eq("CSV の行数（空行は無視）", rows.length, 2);
+    eq("CSV の距離を施設名で受け取る", JSON.stringify(rows[0].km), JSON.stringify({ "ナナイロ": "4", "ハルイロ": "7.5" }));
+    eq("カンマを含む氏名を読める", rows[1].name, "佐藤, 花子");
+    eq("見出しが違う CSV は受け付けない", fns.rows(fns.parse("氏名,社員番号\nA,1\n")), null);
+  }
+}
+
+console.log("\n[25] 自宅からの距離：点検の指摘への対処");
+{
+  ok("CSV のセル関数は1つだけ（数式の無効化を上書きしない）", (html.match(/function mileageCsvCell\(/g) || []).length === 1);
+  const cellSrc = extractFn(html, "function mileageCsvCell(v){");
+  const cell = cellSrc ? new Function(cellSrc + "\nreturn mileageCsvCell;")() : null;
+  ok("先頭が = のセルは数式として動かない", !!cell && cell("=1+1") === "\"'=1+1\"");
+  ok("ひな形は既存の CSV 関数で書く", /dlCSV\(mileageCsvRows\(rows\),"自宅からの距離\.csv"\)/.test(html));
+  ok("CSV は UTF-8 だけを受け、Shift_JIS は断る", /TextDecoder\("utf-8",\{fatal:true\}\)\.decode\(new Uint8Array\(rd\.result\)\)/.test(html));
+  ok("CSV の取り込みは氏名を必須にする", /if \(!nm\) \{ row\.error = "name_required"/.test(apiSrc));
+  ok("CSV の取り込みは基準施設までの距離を必須にする", /if \(!\(km\[base\] > 0\)\) \{ row\.error = "base_km_required"/.test(apiSrc));
+  ok("CSV の取り込みは列が多すぎる行を誤りにする（黙って捨てない）", /row\.error = "too_many"/.test(apiSrc));
+  ok("1人ずつの保存も基準施設と基準施設までの距離を必須にする",
+    /error: "bad_base"/.test(apiSrc) && /error: "base_km_required"/.test(apiSrc));
+  ok("監査に距離の一覧を残さない", /M\.audit\(actor, "home\.set", eid, \{ base: base, places: Object\.keys\(v\.km\)\.length \}\)/.test(apiSrc));
+  ok("職員画面には職員向けの案内を出す（管理者のタブへ誘導しない）",
+    /MILEAGE_AUTO_HELP_STAFF\[r\.status\]\|\|MILEAGE_AUTO_HELP\[r\.status\]/.test(html) && /管理者に登録を依頼してください/.test(html));
+  ok("管理画面の日別に、未登録の自宅からの距離を示す", /自宅からの距離が未登録：'\+esc\(r\.missingHome\.join/.test(html));
+  ok("別のタブへ移ったら編集・CSV の確認を終える（再描画の抑止を残さない）",
+    /if\(t!=="home"\)\{mileage\.homeEditEid="";mileage\.homeDraft=null;mileage\.homeCsvRows=null;mileage\.homePlan=null;\}/.test(html));
+  ok("保存に失敗しても入力した値を残す", /mileage\.homeDraft=\{eid:eid,base:base,km:km\};/.test(html));
+  ok("CSV の選択はボタンから開く（キーボードでも操作できる）", /function mileageHomeCsvOpen\(\)/.test(html) && !/mileageHomeCsvPick\(this\)" style="display:none;"/.test(html));
+}
+
 // ★ [23] の一部は非同期（handleMonthlyReport は async）。集計はその完了後に行う。
 reportTests.then(function () {
   console.log("\n================ 結果 ================");
