@@ -732,6 +732,22 @@ console.log("■ 穂乃味以外・テスト画面では何もしない（判定
       check("未登録の朝からの人の勤務中は従来どおり押し忘れとみなし、閉めの人に聞く", p3 && p3.slot === 2 && p3.hozon === true);
     }
     {
+      // 2026-11-16 ユーザー指示（ミュゲ貝塚 11/14・11/15）: 全区分が登録済みの朝からの人が自分のスマホで退勤し、
+      // 施設端末に届いていなくても、17時以降の閉めの人の退勤では夕方の温度と保存食を聞く
+      const all = ["open", "day", "close", "full", "split"];
+      const st3 = staff.concat([ST("全部", all)]);
+      const c = mk([r("全部", "clockIn", 5), r("閉め", "clockIn", 14)], st3);
+      const p = c.mdocPlan("clockOut", "閉め", FAC, at(DK, 18));
+      check("登録済み（閉め・通しあり）の朝からの人の勤務中も17時以降は押し忘れとみなし、閉めの人に聞く", p && p.slot === 2 && p.hozon === true);
+      check("17時より前は従来どおり: 日中の入った朝からの人が勤務中なら閉めの人には何も聞かない", c.mdocPlan("clockOut", "閉め", FAC, at(DK, 16, 30)) === null);
+      check("午後から出勤した登録済みの閉めの人の勤務中は従来どおり数える", mk([r("閉め2", "clockIn", 13), r("閉め", "clockIn", 14)], st3).mdocPlan("clockOut", "閉め", FAC, at(DK, 18)) === null);
+      // 朝から最後まで残る日: 先に帰った閉めの人の「はい」の後も、本人の退勤で保存食を聞く（夕方の温度は記録済み）
+      const c2 = mk([r("全部", "clockIn", 5), r("閉め", "clockIn", 14),
+        r("閉め", "clockOut", 18, { mdoc: { f: FAC, hozon: { a: "yes" }, temp: { s: 2, d: [] } } })], st3);
+      const p2 = c2.mdocPlan("clockOut", "全部", FAC, at(DK, 19));
+      check("朝から最後まで残った登録済みの人の退勤でも保存食を聞く", p2 && p2.hozon === true && p2.slot !== 2);
+    }
+    {
       const c = mk([r("通し", "clockIn", 6)], staff);
       const p = c.mdocPlan("clockOut", "通し", FAC, at(DK, 19));
       check("通しの人が最後に退勤: 夕方の温度と保存食", p && p.slot === 2 && p.hozon === true);
