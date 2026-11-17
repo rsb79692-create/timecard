@@ -3115,8 +3115,11 @@ function ensureRecordsOldest(){
       _recOldestRestored=true;
       _recOldestChecked=true;
       _lsSet("tc5_records_oldest",JSON.stringify(d));
-      if(d!==_prev||d!==_recOldestDate){
-        _recOldestDate=d;
+      var _oldestChanged=(d!==_prev||d!==_recOldestDate);
+      _recOldestDate=d;
+      // 全期間の取得が最古日の確認より先に終わっていた場合も、ここで古い端末保存を捨てる。
+      var _droppedStale=_recFull&&_recDropBeforeOldest();
+      if(_oldestChanged||_droppedStale){
         if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
       }
     }).catch(function(){_recOldestPromise=null;});
@@ -3365,6 +3368,21 @@ function _recHistFetch(ym){
   }).catch(function(){done();_recHistRetryAt=Date.now()+_LAZY_RETRY_MS;});
   return true;
 }
+// サーバで確認した最古の打刻日より前の打刻は、サーバに存在しない（削除済みの打刻が端末保存に残ったもの）。
+// ★ 全期間の取得は運用開始月より前を取りに行かないため、ここで捨てないと永久に残り、
+//   月別出勤日数で取込値を隠し、承認漏れの件数を増やす（2026-11-17 マンテール10月テスト打刻の削除で発生）。
+// ★ 最古日がこのページでサーバから確認できたとき（_recOldestChecked）だけ捨てる。端末保存の最古日では捨てない。
+// 未送信の打刻は punchOutboxMergeInto で戻す（消さない）。
+function _recDropBeforeOldest(){
+  if(!_recOldestChecked||!_recOldestDate)return false;
+  var lim=_recOldestDate,n=records.length;
+  var kept=records.filter(function(r){return !(r&&r.date&&r.date<lim);});
+  if(kept.length===n)return false;
+  records=kept;
+  punchOutboxMergeInto(records);
+  _lsSet("tc5_records",JSON.stringify(records));
+  return true;
+}
 function _recHistoryStep(){
   if(_recFull||!_recHistoryWant)return;
   // 管理画面を離れたら追いかけない（打刻画面の通信を奪わない）
@@ -3387,6 +3405,7 @@ function _recHistoryStep(){
   if(pending)return;
   // 運用開始月〜当月をすべて取得済み
   _recFull=true;monthRecordsReady=true;_recHistoryPumping=false;
+  _recDropBeforeOldest();
   setTimeout(function(){
     if(!document.querySelector('.time-edit-wrap')&&!showPaidLeaveForm&&!mileageBlocksRerender()&&!devWatchEditing()&&!_paidLeaveRenderGuard&&!monthlyDaysEditing)render();
   },0);
@@ -3465,6 +3484,9 @@ function refreshRecordsIfDayChanged(){
   //   前日に立った _recFull が翌日も真のまま残り、当日分しか取っていない新しい月を
   //   「全期間取得済み」と誤認する（賄いの出勤日全選択・有給の付与日数が壊れる）。
   _recIvs=[];_recFull=false;monthRecordsReady=false;_recHistoryStartedAt=0;
+  // ★ 最古日も確認し直す。前日に確認した最古日のままだと、その後サーバへ増えた
+  //   より古い日付の打刻を _recDropBeforeOldest() が端末から捨ててしまう。
+  _recOldestChecked=false;_recOldestLastTry=0;
   // ★ 取得の成否に関わらず、まず描き直す。日付が変わった瞬間に画面が
   //   前日の打刻状態（例: 退勤だけ押せる）を表示したままになるのを防ぐ。
   render();

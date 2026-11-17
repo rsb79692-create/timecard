@@ -517,6 +517,103 @@ section("5. 全期間の分割取得（承認漏れ・有給付与）");
   check("スタッフテスト画面（sandbox）では本番を取りに行かない", t.net.calls.length === 0);
 }
 
+section("5-B. サーバの最古日より前の端末保存を捨てる（削除済みの打刻が残らない）");
+{
+  // 2026-11-17 マンテール: サーバから10月の打刻を削除した後も、端末保存の10月の打刻が
+  // 全期間取得（運用開始月=11月より前は取りに行かない）で上書きされず、月別出勤日数の取込値を隠した。
+  const today = new Date();
+  const ym = today.getFullYear() + "-" + String(today.getMonth() + 1).padStart(2, "0");
+  const oldest = ym + "-01";
+  const prevYm = (() => { const d = new Date(today.getFullYear(), today.getMonth() - 1, 15); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0"); })();
+  const cur = { id: "cur", date: oldest, staff: "A", type: "clockIn" };
+  const stale = [{ id: "s1", date: prevYm + "-10", staff: "A", type: "clockIn" }, { id: "s2", date: prevYm + "-28", staff: "B", type: "clockIn" }];
+  const noDate = { id: "nd", staff: "C" };
+  const mk = (lsOldest) => {
+    let outboxCalls = 0;
+    const t = makeCtx({
+      screen: "admin",
+      records: stale.concat([cur, noDate]),
+      ls: lsOldest ? { tc5_records_oldest: lsOldest } : {},
+      handler: (url) => {
+        if (/limitToFirst/.test(url)) return { cur: cur };
+        if (/startAt=%22/.test(url)) return { cur: cur };
+        return {};
+      }
+    });
+    t.ctx.punchOutboxMergeInto = () => { outboxCalls++; };
+    t.outbox = () => outboxCalls;
+    return t;
+  };
+  const ids = (c) => c.records.map((r) => r.id).sort().join(",");
+
+  // A: 最古日をサーバで確認した後に全期間が確定する
+  asyncChecks.push((async () => {
+    const t = mk(oldest), c = t.ctx;
+    c.ensureRecordsOldest();
+    for (let i = 0; i < 6; i++) await tick();
+    c._recHistoryWant = true;
+    c._recHistoryStep();
+    for (let i = 0; i < 10; i++) await tick();
+    c._recHistoryStep();
+    check("A: 全期間が確定する", c.recordsHistoryReady() === true);
+    check("★ A: 最古日より前の端末保存（削除済みの打刻）を捨てる", ids(c) === "cur,nd");
+    check("A: 未送信の打刻を戻す処理を通す", t.outbox() > 0);
+  })());
+
+  // B: 全期間の確定が最古日の確認より先（端末保存の最古日で走った）→ 確認時に捨てる
+  asyncChecks.push((async () => {
+    const t = mk(oldest), c = t.ctx;
+    c._recHistoryWant = true;
+    c._recHistoryStep();
+    for (let i = 0; i < 10; i++) await tick();
+    c._recHistoryStep();
+    check("B: 全期間が確定する（最古日は端末保存のまま）", c.recordsHistoryReady() === true);
+    check("★ B: サーバで確認する前は捨てない（端末保存の最古日を根拠にしない）", ids(c) === "cur,nd,s1,s2");
+    c.ensureRecordsOldest();
+    for (let i = 0; i < 6; i++) await tick();
+    check("★ B: サーバで最古日を確認した時点で捨てる", ids(c) === "cur,nd");
+  })());
+
+  // D: 境界値（最古日と同じ日は残す・1日前は捨てる）と、最古日より前の未送信打刻を残す
+  asyncChecks.push((async () => {
+    const dayBefore = (() => { const d = new Date(today.getFullYear(), today.getMonth(), 0); return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"); })();
+    const unsent = { id: "", eventId: "ob1", date: prevYm + "-05", staff: "D", type: "clockIn" };
+    const t = makeCtx({
+      screen: "admin",
+      records: [{ id: "edge", date: dayBefore, staff: "E" }, { id: "same", date: oldest, staff: "F" }, cur],
+      ls: { tc5_records_oldest: oldest },
+      handler: (url) => ({ cur: cur, same: { id: "same", date: oldest, staff: "F" } })
+    });
+    const c = t.ctx;
+    // 実装と同じ契約: 未送信（outbox）の打刻が records に無ければ戻す
+    c.punchOutboxMergeInto = (arr) => { if (!arr.some((r) => r.eventId === unsent.eventId)) arr.push(unsent); };
+    c.ensureRecordsOldest();
+    for (let i = 0; i < 6; i++) await tick();
+    c._recHistoryWant = true;
+    c._recHistoryStep();
+    for (let i = 0; i < 10; i++) await tick();
+    c._recHistoryStep();
+    const got = c.records.map((r) => r.id || r.eventId);
+    check("★ D: 最古日と同じ日の打刻は残す", got.indexOf("same") >= 0);
+    check("★ D: 最古日の1日前の打刻は捨てる", got.indexOf("edge") < 0);
+    check("★ D: 最古日より前の未送信打刻は残る（端末保存から消さない）", got.indexOf("ob1") >= 0);
+  })());
+
+  // E: 日付が変わったら最古日を確認し直す（前日の最古日で、後から増えた古い打刻を捨てない）
+  {
+    const m = /function refreshRecordsIfDayChanged\(\)\{[\s\S]{0,1200}?_recFull=false;[\s\S]{0,400}?_recOldestChecked=false;_recOldestLastTry=0;/.exec(html);
+    check("★ E: 日付の切り替えで _recOldestChecked を戻し、最古日を取り直す", !!m);
+  }
+
+  // C: 全期間が未確定なら最古日を確認しても捨てない
+  asyncChecks.push((async () => {
+    const t = mk(""), c = t.ctx;
+    c.ensureRecordsOldest();
+    for (let i = 0; i < 6; i++) await tick();
+    check("C: 全期間が未確定のあいだは捨てない", ids(c) === "cur,nd,s1,s2");
+  })());
+}
+
 section("6. 月／年セレクタの選択肢");
 {
   const t = makeCtx({ ls: { tc5_records_oldest: "2026-04-01" } });
