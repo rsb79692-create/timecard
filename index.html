@@ -2188,7 +2188,7 @@ function punchOutboxInstallTriggers(){
  */
 
 // 撮影オーバーレイを出しておく上限（ms）。
-// ★ 打刻後の画面遷移（punchTimer＝1500ms）より短くする。長いとホーム（スタッフ一覧）の上に
+// ★ 打刻後の画面遷移（端末キューの打刻は PUNCH_AUTO_HOME_MS＝5000ms、テスト画面は punchTimer＝1500ms）より短くする。長いとホーム（スタッフ一覧）の上に
 //   オーバーレイが残り、`pointer-events:none` のため「見えていないスタッフ名を押せる」状態になる。
 //   画面遷移側からも faceCamClose() を呼ぶ（二重の保険）。
 var FACECAM_SHOW_MS=1300;
@@ -6527,6 +6527,7 @@ function _renderInner(){
   }
   if(screen==="punch"){
     punchOutboxFlush("punchScreen"); // 打刻画面表示は再送の契機のひとつ
+    punchHomeWatch(); // 打刻後・放置時に一覧へ戻す（PUNCH-AUTO-HOME）
     var dk=fmtDateKey(now);
     var tr=records.filter(function(r){return r.staff===staffName&&r.date===dk&&!r.deleted;})
       .sort(function(a,b){return new Date(a.timestamp)-new Date(b.timestamp);});
@@ -6840,6 +6841,8 @@ function _renderInner(){
       +'<div class="history">'
       +'<div class="hist-header"><span class="hist-label">本日の打刻履歴</span></div>'
       +histHTML+'</div>'
+      // ★ 打刻完了の表示中は下の申請・カード類を出さない（PUNCH-AUTO-HOME。表示中に次の人が前の人の申請を開いて自動復帰を止めないように）
+      +(punchMsg?"":(""
       /* CAMERA_UPLOAD_DISABLED_START: スタッフ書類アップロードエリア非表示 */
       /* +'<div style="margin-top:8px;background:#fff;border-radius:2px;padding:10px;border:1px solid #adb5bd;">'
       +'<div style="font-weight:700;font-size:.8rem;margin-bottom:8px;">📎 書類をアップロード</div>'
@@ -6990,6 +6993,7 @@ function _renderInner(){
       +(MEAL_PUNCH_CARD_VISIBLE&&tenantFeature("meals")?_mealConfHtml+_mealHtml:"") // 非表示（MEAL_PUNCH_CARD_VISIBLE）。賄いは退勤時に聞く
       +_mileageHtml
       +_monthHtml
+      ))
       +'</div>';
     if(showPaidLeaveForm){
       var plSubmitBtn=document.getElementById("btn-pl-submit");
@@ -10982,9 +10986,96 @@ function goHome(){
   faceCamClose();   // ★ 打刻直後に「もどる」を押しても、スタッフ一覧の上に表示を残さない
   if(staffDemoMode){openStaffDemoPicker();return;} // サンドボックス中は選択画面へ戻る
   staffName=null;staffUploadFile=null;staffUploadMsg=null;selectedWorkFacility=null;workFacilityPicked=false;facilityChangeTo=null;_fcModalOpen=false;showPaidLeaveForm=false;plFormDate="";plFormDates=[];plRangeStart="";plRangeMode=false;staffNotifOpen=false;
+  // ★ 共用端末で前の人の入力・選択・打刻結果を残さない（PUNCH-AUTO-HOME。自動で戻るときも「もどる」と同じ片付け）
+  if(punchTimer){clearTimeout(punchTimer);punchTimer=null;}
+  punchMsg=null;staffPinInput="";staffPinConfirm="";staffPinError=false;staffPinStep=1;
+  plFormMonth="";mealFormMonth="";
   mileageResetSession(); // 共有端末で前のスタッフの申請内容を残さない
+  punchHomeStop();
   screen="home";render();
 }
+// ===== PUNCH-AUTO-HOME-BEGIN =====
+// 共用の施設端末で、前の人の打刻画面を次の人が使わないように一覧画面へ戻す。
+// 2026-11-20 ミュゲ春木: 前の人が開いたままにした打刻画面で別の人が退勤を押し、前の人の退勤として記録された
+// （17時以降の退勤が無くなり、保存食・夕方の温度が誰にも聞かれなかった）。
+// ・打刻が終わったら PUNCH_AUTO_HOME_MS 後、打刻せずに開いたままなら最後の操作から PUNCH_IDLE_HOME_MS 後に戻す。
+// ・確認画面・ダイアログ・入力中・保存中は戻さず、それが終わってから数え直す。
+// ・端末キューを使う打刻（punchOutboxEnabled）だけ。スタッフテスト画面・管理者デモ・閲覧用 URL は従来どおり。
+var PUNCH_AUTO_HOME_MS=5000;
+var PUNCH_IDLE_HOME_MS=60000;
+var PUNCH_HOME_TICK_MS=500;
+var _punchHomeIv=0,_punchHomeKey="",_punchHomeSince=0;
+function punchHomeApplies(){
+  return screen==="punch"&&!!staffName&&!staffDemoMode&&!viewerMode&&punchOutboxEnabled();
+}
+// 文字を打っている途中か（入力欄にフォーカス・初期値から変えた入力欄）。選択肢（select）は数えない。
+function _punchHomeTyping(){
+  var TXT=/^(button|submit|reset|image|checkbox|radio|range|color|hidden|file)$/i;
+  var a=document.activeElement;
+  if(a&&a!==document.body){
+    if(a.isContentEditable)return true;
+    var tag=String(a.tagName||"").toUpperCase();
+    if(tag==="TEXTAREA")return true;
+    if(tag==="INPUT"&&!TXT.test(String(a.type||"")))return true;
+  }
+  var list=document.querySelectorAll("input,textarea");
+  for(var i=0;i<list.length;i++){
+    var el=list[i];
+    if(el.getClientRects&&!el.getClientRects().length)continue; // 表示されていない入力欄は数えない
+    var ty=String(el.type||"").toLowerCase();
+    if(ty==="file"){if(el.files&&el.files.length)return true;continue;}
+    if(String(el.tagName).toUpperCase()==="INPUT"&&TXT.test(ty))continue;
+    if(el.value!==el.defaultValue)return true;
+  }
+  return false;
+}
+// 戻してはいけない理由（空文字＝戻してよい）
+function punchHomeBlockReason(){
+  if(_punchSaving||_plChecking)return "punch";       // 打刻の端末保存中・有給の確認待ち
+  if(savingCount>0)return "saving";
+  if(plSubmitting||mileage.busy)return "sending";     // 有給申請・移動距離の送信中
+  if(_fcModalOpen)return "modal";                      // 施設変更の確認
+  // 有給申請・書類・移動距離の入力中。★ 打刻完了の表示中はこれらを出さない（画面に無い入力で止めない）
+  if(!punchMsg&&(showPaidLeaveForm||staffUploadFile||mileage.formOpen))return "form";
+  try{
+    if(_appOverlayOpen())return "modal";               // 月次書類の確認画面・お知らせ・確認ダイアログ
+    if(_punchHomeTyping())return "input";
+  }catch(e){}
+  return "";
+}
+// 人・打刻結果が替わったら数え直す
+function _punchHomeSync(now){
+  var key=staffName+"|"+(punchMsg||"");
+  if(key!==_punchHomeKey){_punchHomeKey=key;_punchHomeSince=now;}
+}
+function punchHomeTick(now){
+  if(!now)now=Date.now();
+  if(!punchHomeApplies()){punchHomeStop();return;}
+  _punchHomeSync(now);
+  if(punchHomeBlockReason()){_punchHomeSince=now;return;}
+  if(now-_punchHomeSince<(punchMsg?PUNCH_AUTO_HOME_MS:PUNCH_IDLE_HOME_MS))return;
+  punchHomeStop();
+  goHome();
+}
+function punchHomeWatch(){
+  if(!punchHomeApplies()){punchHomeStop();return;}
+  _punchHomeSync(Date.now());
+  if(!_punchHomeIv)_punchHomeIv=setInterval(function(){punchHomeTick(Date.now());},PUNCH_HOME_TICK_MS);
+}
+function punchHomeStop(){
+  if(_punchHomeIv){clearInterval(_punchHomeIv);_punchHomeIv=0;}
+  _punchHomeKey="";_punchHomeSince=0;
+}
+// 画面に触れる・入力するたびに放置の数え直し（打刻後の自動復帰は延ばさない）
+function punchHomeTouched(){
+  if(_punchHomeIv&&!punchMsg)_punchHomeSince=Date.now();
+}
+if(typeof document!=="undefined"&&document.addEventListener){
+  ["pointerdown","touchstart","mousedown","keydown","input","change","wheel"].forEach(function(ev){
+    document.addEventListener(ev,punchHomeTouched,{capture:true,passive:true});
+  });
+}
+// ===== PUNCH-AUTO-HOME-END =====
 // ★ 管理画面を閉じる（穂乃味・他社で共通）。閉じたら管理者の権限を解除して打刻トップへ戻る。
 //   管理者の権限を残すと、次の人の「PIN新規登録」が管理者権限で送られ、登録済みの他人のPINを上書きできてしまう。
 //   保存の通信・承認の保留書込みの途中は、解除すると書き込めなくなるため、閉じずに待ってもらう（ホームへも戻さない）。
@@ -11797,7 +11888,10 @@ async function _execPunch(type,d,meal){
   _lsSet("tc5_records",JSON.stringify(records));
   punchMsg=TYPE_LABEL[type]+"　"+fmtTimeSec(d);
   if(punchTimer)clearTimeout(punchTimer);
-  punchTimer=setTimeout(function(){
+  punchTimer=null;
+  // 端末キューを使う打刻は PUNCH-AUTO-HOME（render の punchHomeWatch）が一覧へ戻す（確認画面・保存中は待つ）。
+  // スタッフテスト画面・管理者デモ（端末キューを使わない）は従来どおり1.5秒で戻す。
+  if(!punchOutboxEnabled())punchTimer=setTimeout(function(){
     // ★ 画面がホーム（スタッフ一覧）へ戻る時点で撮影表示を必ず閉じる。
     //   残すと、見えていないスタッフ名を次の人が押せる（pointer-events:none のため）。
     faceCamClose();
