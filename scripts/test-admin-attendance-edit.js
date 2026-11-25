@@ -186,8 +186,8 @@ check("打刻が無い日は「−」を表示する", />−</.test(brkNone), br
 // 休憩の押し忘れ（2026-11-25）: 出勤がある日は休憩が0件でも休憩開始だけ入力できる
 const CIN = { id: "ci1", time: "08:30", type: "clockIn" };
 const brkAdd = renderBreak([], false, true, CIN);
-check("退勤前（勤務中）は休憩0件でも入力させない（本人の休憩打刻と重複するため）",
-  !/time-cell/.test(renderBreak([], false, true, CIN, undefined, null)));
+check("退勤前（勤務中）でも休憩開始を入力できる（2026-11-25 ユーザー指示）",
+  /data-type="breakStart"/.test(renderBreak([], false, true, CIN, undefined, null)));
 check("出勤・退勤があり休憩0件の日は休憩開始を入力できる",
   /class="time-cell"[^>]*data-type="breakStart"/.test(brkAdd) && /data-id=""/.test(brkAdd), brkAdd);
 check("休憩0件の日は休憩終了を先に入力させない（開始の後）",
@@ -200,8 +200,11 @@ check("当日より後の日は休憩0件でも入力させない",
   !/time-cell/.test(renderBreak([], false, true, CIN, "2099-01-01")));
 // 勤怠一覧（日別）の休憩を足す欄の条件を固定する
 const DAILY_BRK = slice("        var brkHtml=showBreakColumn", "        var rowBg=");
-check("勤怠一覧（日別）：休憩0件の欄は出勤・退勤あり・未承認・取得済みの日だけ入力できる",
-  DAILY_BRK.includes("((cin&&cout&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():"), DAILY_BRK.slice(0, 300));
+check("勤怠一覧（日別）：休憩0件の欄は出勤あり・未承認・取得済みの日だけ入力できる（退勤前も可）",
+  DAILY_BRK.includes("((cin&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():"), DAILY_BRK.slice(0, 300));
+// 当日の休憩に現在時刻より後を入れさせない（本人が休憩中のまま退勤できなくなるため）
+check("時刻セル：当日の休憩は現在時刻より後を保存しない",
+  html.includes('if(newTime&&(type==="breakStart"||type==="breakEnd")&&date===recToday()){var _nw=new Date();if(newTime>pad(_nw.getHours())+":"+pad(_nw.getMinutes())){showAlert(') && html.includes('の休憩は入力できません。");inp.focus();return;}}'));
 const brkOpen = renderBreak([{ start: { id: "bs1", time: "12:00" }, end: null }], false, true, CIN);
 check("休憩開始だけある日は休憩終了を入力できる",
   /data-type="breakEnd"/.test(brkOpen) && /data-id=""[^>]*data-type="breakEnd"/.test(brkOpen), brkOpen);
@@ -289,6 +292,7 @@ function runCell(opts) {
     console: { log: function () { }, error: function () { }, warn: function () { } },
     records: records,
     TYPE_LABEL: { clockIn: "出勤", clockOut: "退勤", breakStart: "休憩開始", breakEnd: "休憩終了" },
+    recToday: function () { return TEST_TODAY; },
     pad: function (n) { return (n < 10 ? "0" : "") + n; },
     parseJstDateTime: function (date, time) { return new Date(date + "T" + time + ":00+09:00"); },
     generateRecordId: function () { return "new-" + (++newIdSeq); },
@@ -710,6 +714,7 @@ function runRaceTests() {
       render: function () { },
       setTimeout: function (fn) { Promise.resolve().then(fn); },
       TYPE_LABEL: { clockIn: "出勤", clockOut: "退勤", breakStart: "休憩開始", breakEnd: "休憩終了" },
+      recToday: function () { return TEST_TODAY; },
       pad: function (n) { return (n < 10 ? "0" : "") + n; },
       parseJstDateTime: function (date, time) { return new Date(date + "T" + time + ":00+09:00"); },
       generateRecordId: function () { return "n" + (++seq); },

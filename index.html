@@ -5517,6 +5517,8 @@ function attachTimeCellHandlers(){
         var newTime=parseAdminTimeInput(inp.value);
         if(newTime===null){showAlert("時刻が正しくありません（例：08:30）");inp.focus();return;}
         if(!newTime&&!id){cancel();return;}
+        // ★ 当日の休憩に現在時刻より後を入れさせない（本人の打刻画面が休憩中のまま退勤できなくなるため）
+        if(newTime&&(type==="breakStart"||type==="breakEnd")&&date===recToday()){var _nw=new Date();if(newTime>pad(_nw.getHours())+":"+pad(_nw.getMinutes())){showAlert("今の時刻より後の休憩は入力できません。");inp.focus();return;}}
         if(newTime===""&&id){
           showConfirm(snm+"さんの "+typeName+"（"+date+"）を削除します。\nよろしいですか？",function(){
             if(apvSaveBusy(snm,date)){cancel();return;}
@@ -7191,8 +7193,8 @@ function _renderInner(){
       var brkDisplay='<div style="line-height:1.6;">'
         +(dBrkPairs.length>0
           ?'<div>'+brkPairDisp(bs,be)+'</div>'
-          // ★ 休憩の押し忘れ（2026-11-25）: 出勤・退勤がある日は休憩が0件でも休憩開始を入力できる（終了は開始の後。勤務中は出さない）
-          :((cin&&cout&&!locked2)
+          // ★ 休憩の押し忘れ（2026-11-25）: 出勤がある日は休憩が0件でも休憩開始を入力できる（終了は開始の後。勤務中も可＝同日ユーザー指示）
+          :((cin&&!locked2)
             ?'<div><span style="display:inline-flex;align-items:center;gap:1px;">'+tCell(null,"breakStart")+'<span style="font-size:.72rem;color:#c8ccd2;">〜</span><span style="font-family:monospace;font-size:.88rem;color:#c8ccd2;">−</span></span></div>'
             :'<span style="color:#c8ccd2;font-size:.85rem;">−</span>'))
         +(dBrkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:1px;">'+brkPairDisp(bs2d,be2d)+'</div>':"")
@@ -7633,8 +7635,8 @@ function _renderInner(){
             +'</div>'
             +editLine+'</div>';
         }
-        // ★ 休憩の押し忘れ（2026-11-25 ユーザー指示）: 出勤・退勤がある日は休憩が0件でも休憩開始を入力できる。
-        //   退勤前（勤務中）は出さない（後で本人が休憩を押すと休憩開始が2つになるため）。取得済みの日に限る（二重ノード防止）。
+        // ★ 休憩の押し忘れ（2026-11-25 ユーザー指示）: 出勤がある日は休憩が0件でも休憩開始を入力できる。
+        //   退勤前（勤務中）でも入力できる（同日ユーザー指示「常に編集できるように」）。取得済みの日に限る（二重ノード防止）。
         //   休憩終了は休憩開始を入れた後に入力する（開始の無い終了は getBreakPairs が拾わず画面から消えるため）。
         function brkAddCell(){
           return'<div class="break-item"><div class="break-time">'
@@ -7644,7 +7646,7 @@ function _renderInner(){
         var brkHtml=showBreakColumn
           ?(hasBreak3?'<div style="font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:1px 4px;font-weight:700;margin-bottom:3px;">休憩回数超過</div>':"")
             +'<div class="break-list">'
-            +(brkPairs.length>0?brkPairCell(bs,be,locked):((cin&&cout&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():'<span style="font-size:.85rem;color:#d1d5db;">--:-- → --:--</span>'))
+            +(brkPairs.length>0?brkPairCell(bs,be,locked):((cin&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():'<span style="font-size:.85rem;color:#d1d5db;">--:-- → --:--</span>'))
             +(brkPairs.length>1?brkPairCell(bs2,be2,locked):"")
             +'</div>'
           :"";
