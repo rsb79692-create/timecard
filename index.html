@@ -7191,7 +7191,10 @@ function _renderInner(){
       var brkDisplay='<div style="line-height:1.6;">'
         +(dBrkPairs.length>0
           ?'<div>'+brkPairDisp(bs,be)+'</div>'
-          :'<span style="color:#c8ccd2;font-size:.85rem;">−</span>')
+          // ★ 休憩の押し忘れ（2026-11-25）: 出勤・退勤がある日は休憩が0件でも休憩開始を入力できる（終了は開始の後。勤務中は出さない）
+          :((cin&&cout&&!locked2)
+            ?'<div><span style="display:inline-flex;align-items:center;gap:1px;">'+tCell(null,"breakStart")+'<span style="font-size:.72rem;color:#c8ccd2;">〜</span><span style="font-family:monospace;font-size:.88rem;color:#c8ccd2;">−</span></span></div>'
+            :'<span style="color:#c8ccd2;font-size:.85rem;">−</span>'))
         +(dBrkPairs.length>1?'<div style="border-top:1px dashed #e5e7eb;margin-top:1px;">'+brkPairDisp(bs2d,be2d)+'</div>':"")
         +(hasBreak3d?'<div style="font-size:.6rem;color:#dc2626;font-weight:700;">休憩回数超過</div>':"")
         +'</div>';
@@ -7615,7 +7618,7 @@ function _renderInner(){
           var bsPrev=bsEdited?(bsRec.editHistory&&bsRec.editHistory.length?bsRec.editHistory[0].time:bsRec.editedFrom)||"":"";
           var bePrev=beEdited?(beRec.editHistory&&beRec.editHistory.length?beRec.editHistory[0].time:beRec.editedFrom)||"":"";
           var editLine=(bsEdited||beEdited)
-            ?'<div class="break-edited">修正前 '+esc(bsPrev||"?")+'→'+esc(bePrev||"?")+'</div>'
+            ?'<div class="break-edited">修正前 '+esc(bsPrev||"未入力")+'→'+esc(bePrev||"未入力")+'</div>'
             :"";
           if(locked2){
             return'<div class="break-item">'
@@ -7630,10 +7633,18 @@ function _renderInner(){
             +'</div>'
             +editLine+'</div>';
         }
+        // ★ 休憩の押し忘れ（2026-11-25 ユーザー指示）: 出勤・退勤がある日は休憩が0件でも休憩開始を入力できる。
+        //   退勤前（勤務中）は出さない（後で本人が休憩を押すと休憩開始が2つになるため）。取得済みの日に限る（二重ノード防止）。
+        //   休憩終了は休憩開始を入れた後に入力する（開始の無い終了は getBreakPairs が拾わず画面から消えるため）。
+        function brkAddCell(){
+          return'<div class="break-item"><div class="break-time">'
+            +'<span class="time-cell" data-id="" data-nm="'+esc(nm)+'" data-type="breakStart" data-date="'+selDate+'" style="color:#c8ccd2;cursor:pointer;border-bottom:1px solid #adb5bd;">--:--</span>'
+            +' → <span style="color:#d1d5db;">--:--</span></div></div>';
+        }
         var brkHtml=showBreakColumn
           ?(hasBreak3?'<div style="font-size:.6rem;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:2px;padding:1px 4px;font-weight:700;margin-bottom:3px;">休憩回数超過</div>':"")
             +'<div class="break-list">'
-            +(brkPairs.length>0?brkPairCell(bs,be,locked):'<span style="font-size:.85rem;color:#d1d5db;">--:-- → --:--</span>')
+            +(brkPairs.length>0?brkPairCell(bs,be,locked):((cin&&cout&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():'<span style="font-size:.85rem;color:#d1d5db;">--:-- → --:--</span>'))
             +(brkPairs.length>1?brkPairCell(bs2,be2,locked):"")
             +'</div>'
           :"";

@@ -160,12 +160,14 @@ check("退勤セルが hasData で条件分岐していない",
 // 従来どおり非編集の「−」になる）。将来ここへ編集セルを足したときに、
 // 打刻ゼロの日まで編集可になったことを検知できるよう固定しておく。
 const BRK_CODE = slice("      function brkPairDisp(bsR,beR){", "      var approveBtn=", detailStart);
-function renderBreak(pairs, locked2, monthKnown) {
+function renderBreak(pairs, locked2, monthKnown, cin, dk, cout) {
   const ctx = {
     locked2: !!locked2,
+    cin: cin || null,
+    cout: cout === undefined ? (cin ? { id: "co1", time: "17:30", type: "clockOut" } : null) : cout,
     monthKnown: monthKnown === undefined ? true : !!monthKnown,
     recToday: function () { return TEST_TODAY; },
-    nm: "山田 太郎", dk: "2026-09-01",
+    nm: "山田 太郎", dk: dk || "2026-09-01",
     dBrkPairs: pairs,
     bs: pairs[0] ? pairs[0].start : null, be: pairs[0] ? pairs[0].end : null,
     bs2d: pairs[1] ? pairs[1].start : null, be2d: pairs[1] ? pairs[1].end : null,
@@ -178,9 +180,31 @@ function renderBreak(pairs, locked2, monthKnown) {
   return ctx.out;
 }
 const brkNone = renderBreak([]);
-check("休憩打刻が無い日は休憩セルが編集可にならない（hasData 除去は no-op）",
+check("打刻が無い日は休憩セルが編集可にならない",
   !/time-cell/.test(brkNone), brkNone);
-check("休憩打刻が無い日は「−」を表示する", />−</.test(brkNone), brkNone);
+check("打刻が無い日は「−」を表示する", />−</.test(brkNone), brkNone);
+// 休憩の押し忘れ（2026-11-25）: 出勤がある日は休憩が0件でも休憩開始だけ入力できる
+const CIN = { id: "ci1", time: "08:30", type: "clockIn" };
+const brkAdd = renderBreak([], false, true, CIN);
+check("退勤前（勤務中）は休憩0件でも入力させない（本人の休憩打刻と重複するため）",
+  !/time-cell/.test(renderBreak([], false, true, CIN, undefined, null)));
+check("出勤・退勤があり休憩0件の日は休憩開始を入力できる",
+  /class="time-cell"[^>]*data-type="breakStart"/.test(brkAdd) && /data-id=""/.test(brkAdd), brkAdd);
+check("休憩0件の日は休憩終了を先に入力させない（開始の後）",
+  !/data-type="breakEnd"/.test(brkAdd), brkAdd);
+check("承認済みの日は休憩0件でも入力させない",
+  !/time-cell/.test(renderBreak([], true, true, CIN)));
+check("未取得の月は休憩0件でも入力させない",
+  !/time-cell/.test(renderBreak([], false, false, CIN)));
+check("当日より後の日は休憩0件でも入力させない",
+  !/time-cell/.test(renderBreak([], false, true, CIN, "2099-01-01")));
+// 勤怠一覧（日別）の休憩を足す欄の条件を固定する
+const DAILY_BRK = slice("        var brkHtml=showBreakColumn", "        var rowBg=");
+check("勤怠一覧（日別）：休憩0件の欄は出勤・退勤あり・未承認・取得済みの日だけ入力できる",
+  DAILY_BRK.includes("((cin&&cout&&!locked&&recordsRangeCovers(selDate,selDate))?brkAddCell():"), DAILY_BRK.slice(0, 300));
+const brkOpen = renderBreak([{ start: { id: "bs1", time: "12:00" }, end: null }], false, true, CIN);
+check("休憩開始だけある日は休憩終了を入力できる",
+  /data-type="breakEnd"/.test(brkOpen) && /data-id=""[^>]*data-type="breakEnd"/.test(brkOpen), brkOpen);
 const brkOne = renderBreak([{ start: { id: "bs1", time: "12:00" }, end: { id: "be1", time: "13:00" } }]);
 check("休憩打刻がある日は従来どおり編集できる",
   /class="time-cell"/.test(brkOne) && /data-type="breakStart"/.test(brkOne) && /data-type="breakEnd"/.test(brkOne), brkOne);
