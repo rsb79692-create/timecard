@@ -204,7 +204,7 @@ Content-Type: application/json
 
 **なぜ別エンドポイントにしないか**
 
-1. Vercel の Serverless Function は Hobby プランで **12本が上限**で、現在 **11本**ある。
+1. Vercel の Serverless Function は Hobby プランで **12本が上限**で、現在 **11本**ある。（2026-11-25 追記: チームは Pro プランで12本の上限は掛からない〔`vercel teams ls`・`vercel project inspect timecard` で確認〕。`api/review-status.js` を足して現在13本）
    endpoint を1本増やすと上限に張り付き、次の機能追加で deploy そのものが落ちる。
 2. 外部スケジューラは `Origin` を送らないため、`api/_lib/http.js` の `guard`（Origin 必須）は使えない。
    `api/device-report.js` の `guardApp`（Origin を見ない・CORS を返さない）がそのまま要件に合う。
@@ -550,6 +550,7 @@ len=<バイト長> head=<brace|bracket|percent|quote|word|bom|other|empty|unread
 11. ⚠ **Vercel の Serverless Function が 11 本になった**（`api/` 配下の `.js`。直下5本＋`api/auth/`6本。2026-09-12 時点）。
    Hobby プランの上限は 12 本である。**次にエンドポイントを増やすときは、プランの実際の上限を
    確認してから足すこと。** 上限を超えると deploy そのものが失敗する。
+   （2026-11-25 追記: チームは Pro プランで12本の上限は掛からない〔`vercel teams ls`・`vercel project inspect timecard` で確認〕。`api/review-status.js` を足して現在13本）
 
 ### 専用アプリ（`devicewatch/`）
 

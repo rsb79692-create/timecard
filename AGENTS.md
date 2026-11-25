@@ -67,6 +67,7 @@
 | 管理者URLトークン・管理者PINの設定状態 | [`qa-tests.md`](docs/features/qa-tests.md) | `node scripts/test-admin-token-state.js` |
 | 打刻と月次書類の連携（穂乃味専用） | [`monthly-docs.md`](docs/features/monthly-docs.md) | `node scripts/test-monthly-docs.js` |
 | 管理者による労務士画面の見え方の確認 | [`records-range.md`](docs/features/records-range.md) | `node scripts/test-viewer-preview.js` |
+| 月次精査完了の状態 API（`GET /api/review-status`・自動送信タスク用） | [`review-status-api.md`](docs/features/review-status-api.md) | `node scripts/test-review-status.js` |
 
 テストはすべて依存パッケージなし・送信なし・本番データ非アクセス。**テスト件数は増減するため固定値を規範にしない。**
 各テストの対象範囲と実行条件の詳細は [`docs/features/qa-tests.md`](docs/features/qa-tests.md)。
@@ -128,7 +129,7 @@
 - 状態の既定値を `inside` にしない。判定できていない端末を「監視中」と表示しない。持ち出し検知は送信成功後に確定を書く（取り逃しより重複を選ぶ）。確定には範囲外の観測2回（`MIN_OUTSIDE_HITS`）を要し、範囲外は誤差を全部差し引いても外のときだけ（1回の位置の飛びで通知しない）。
 - 端末 API（`api/device-report.js`）は CORS 応答ヘッダを返さず Cookie を使わない。管理 API（`api/device.js`）と1本にまとめない。レート制限のキーを本文の `deviceId` にしない（IP 単位）。`devicewatch/App.js` を JSX にしない。
 - 定期実行 `action:"sweep"` の鍵照合はレート制限より前に置き、鍵は32文字以上を強制する。判定は `runSweep` だけに置く。保険の経路（端末報告時・管理画面表示時）を外さない。不正な本文は 500 でなく 400 `bad_json` とし、指紋に本文の内容を含めない。
-- Vercel の Serverless Function は 12 本（Hobby の上限 12。2026-10-07 `api/monthly-docs.js` で上限に到達）。これ以上足せない。
+- Vercel の Serverless Function は 13 本（2026-11-25 `api/review-status.js` を追加。チームは Pro プランで Hobby の12本の上限は掛からない。2026-11-25 `vercel teams ls`・`vercel project inspect timecard` で確認）。
 
 **打刻と月次書類の連携（`monthly-docs.md`）**
 - 穂乃味（会社ID `honomi` かつ機能フラグ `monthlyDocs`）専用。画面・API 入口・月次書類 DB の3層で判定し、他社の打刻経路では通信も判定もしない。
